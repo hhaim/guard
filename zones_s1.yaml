@@ -1,0 +1,113 @@
+# zones_mixed_patterns.yaml — schema v2 (mixed rotating / full_day / windowed_slots).
+#
+# - shift_hours: hours per calendar block (must tile 24 h); set in this file or override with --shift-hours.
+# - locations reference slots_types by id (pattern: rotating | full_day | windowed_slots).
+# - Fill order in sim: full_day → windowed_slots → rotating.
+
+schema_version: 2
+shift_hours: 4  # 2 | 3 | 4 — grid for day alignment / table rows / rest padding
+
+slots_types:
+  - id: rotating_slot
+    name: Rotating Guard
+    pattern: rotating
+
+  - id: windowed_hamal
+    name: Window hamal
+    pattern: windowed_slots
+    full_day_shift: 1
+    config:
+      slots:
+        - name: w1-09
+          start: "00:00"
+          end: "12:00"
+          weight_multiplier: 0.9
+        - name: w2-21
+          start: "12:00"
+          end: "24:00"
+          weight_multiplier: 1.1
+
+  - id: windowed_bet_valero
+    name: Window bet valero
+    pattern: windowed_slots
+    full_day_shift: 1
+    config:
+      slots:
+        - name: w1
+          start: "07:00"
+          end: "13:00"
+          weight_multiplier: 0.9
+        - name: w2
+          start: "13:00"
+          end: "20:00"
+          weight_multiplier: 0.9
+
+  - id: full_day_kitchen
+    name: Full Day Duty in Kitchen
+    pattern: full_day
+    config:
+      start: "06:00"
+      end: "22:00"
+      rest_after_hours: 6
+      weight_multiplier: 1.1
+
+  - id: full_day_rasar
+    name: Full Day Duty in Rasar
+    pattern: full_day
+    config:
+      start: "06:00"
+      end: "22:00"
+      rest_after_hours: 6
+      weight_multiplier: 1.1
+
+# One row per concurrent slot (1..Y). location_id must match locations[].id
+slots:
+  - location_id: loc_gate
+    name: g1
+  - location_id: loc_gate
+    name: g2
+  - location_id: loc_gate
+    name: g3
+  - location_id: loc_gate
+    name: g4
+
+locations:
+  - id: loc_gate
+    type: rotating_slot
+    name: G
+    weight: 1.0
+  - id: loc_kitchen
+    type: full_day_kitchen
+    name: K
+    weight: 1.0
+  - id: loc_rasar
+    type: full_day_rasar
+    name: R
+    weight: 1.0
+  - id: bet_valero
+    type: windowed_bet_valero
+    name: V
+    weight: 1.0
+  - id: hamal
+    type: windowed_hamal
+    name: H
+    weight: 1.0
+
+# Used for piecewise fairness (active hours × time_zone weight × pattern multiplier).
+# Hours must cover 0..23; from_hour and to_hour are inclusive per existing sim convention.
+time_zones:
+  - id: zt_night
+    name: Night
+    weight: 1.5
+    from_hour: 0
+    to_hour: 5
+  - id: zt_morning
+    name: Morning
+    weight: 0.9
+    from_hour: 6
+    to_hour: 11
+  - id: zt_day
+    name: Day
+    weight: 1.0
+    from_hour: 12
+    to_hour: 23
