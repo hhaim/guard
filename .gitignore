@@ -1,0 +1,12 @@
+# Local Python environments (never commit)
+.venv-test/
+.venv-verify/
+
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Frontend build + deps
+web/node_modules/
+web/dist/

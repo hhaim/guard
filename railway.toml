@@ -1,0 +1,12 @@
+# Railway: connect Postgres plugin, set DATABASE_URL, optional API_KEY.
+# Use Dockerfile builder; enable "serverless" / sleep if available in project settings.
+# Health check path: /health
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
