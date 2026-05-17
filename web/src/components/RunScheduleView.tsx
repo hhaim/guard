@@ -1,8 +1,11 @@
 import { Copy } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { callApi } from "../api";
+import { useZonesDocument } from "../context/ZonesDocumentContext";
+import type { ScheduleAssignment } from "../lib/scheduleReport";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
+import { ScheduleResultsReport } from "./ScheduleResultsReport";
 
 export type ScheduleRunParams = {
   anchor_date: string;
@@ -20,7 +23,7 @@ export type ScheduleRunResult = {
   days: number;
   anchor_date: string;
   shift_hours: number;
-  assignments: Record<string, unknown>[];
+  assignments: ScheduleAssignment[];
   count: number;
   meta?: Record<string, unknown>;
   error?: string;
@@ -47,6 +50,7 @@ function Field({
 }
 
 export function RunScheduleView() {
+  const { doc: zonesDoc } = useZonesDocument();
   const [anchor, setAnchor] = useState(() => new Date().toISOString().slice(0, 10));
   const [days, setDays] = useState(1);
   const [shiftHours, setShiftHours] = useState<number | "">("");
@@ -100,15 +104,10 @@ export function RunScheduleView() {
     },
   });
 
-  const resultText = useMemo(() => {
-    if (!result) return "";
-    return JSON.stringify(result, null, 2);
-  }, [result]);
-
   const copyResult = async () => {
-    if (!resultText) return;
+    if (!result) return;
     try {
-      await navigator.clipboard.writeText(resultText);
+      await navigator.clipboard.writeText(JSON.stringify(result, null, 2));
     } catch {
       /* ignore */
     }
@@ -121,7 +120,7 @@ export function RunScheduleView() {
           Run schedule
         </h2>
         <p className="contacts-hint" style={{ margin: "0 0 0.75rem", padding: "0 1.1rem" }}>
-          Same flags as the CLI sim. Results are persisted to the database and shown below as JSON.
+          Same flags as the CLI sim. Results are saved to the database and shown below as tables and charts.
         </p>
 
         <div className="run-form-grid">
@@ -227,14 +226,28 @@ export function RunScheduleView() {
               {result.ok ? `${result.count} assignments` : "Error"}
             </span>
           )}
-          <button type="button" className="btn btn-tinted" disabled={!resultText} onClick={() => void copyResult()} aria-label="Copy JSON">
+          <button type="button" className="btn btn-tinted" disabled={!result} onClick={() => void copyResult()} aria-label="Copy JSON">
             <Copy size={16} />
             Copy
           </button>
         </header>
         <div className="run-results-body">
-          {!result && <p className="contacts-empty">Run the scheduler to see assignment JSON here.</p>}
-          {result && <pre className="raw-response run-results-json">{resultText}</pre>}
+          {!result && <p className="contacts-empty">Run the scheduler to see the schedule matrix and timelines here.</p>}
+          {result?.ok && zonesDoc && result.assignments.length > 0 && (
+            <ScheduleResultsReport
+              assignments={result.assignments}
+              days={result.days}
+              shiftHours={result.shift_hours}
+              zones={zonesDoc}
+              meta={result.meta}
+            />
+          )}
+          {result && !result.ok && (
+            <p className="msg-err">{result.error ?? "Schedule run failed"}</p>
+          )}
+          {result?.ok && result.assignments.length === 0 && (
+            <p className="contacts-empty">No assignments returned.</p>
+          )}
         </div>
       </section>
     </div>
