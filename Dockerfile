@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # Build API
-FROM golang:1.22-alpine AS api
+FROM golang:1.23-alpine AS api
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
