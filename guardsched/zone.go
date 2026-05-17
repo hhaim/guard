@@ -29,7 +29,11 @@ func LoadZoneAllRotating(path string, slotsPerBlock int, shiftHoursOverride *flo
 		pat := strings.TrimSpace(fmt.Sprint(m["pattern"]))
 		typeMap[id] = pat
 	}
-	locs := data["locations"].([]any)
+	locsRaw := zoneLocYAMLList(data)
+	locs, ok := locsRaw.([]any)
+	if !ok || len(locs) == 0 {
+		return nil, fmt.Errorf("go loader: zone_loc list required")
+	}
 	typeByLocIdx := make([]string, len(locs))
 	locWeights := make([]float64, len(locs))
 	for i, row := range locs {
@@ -85,7 +89,9 @@ func LoadZoneAllRotating(path string, slotsPerBlock int, shiftHoursOverride *flo
 	if shiftHoursOverride != nil {
 		sh = *shiftHoursOverride
 	}
-	calendarBlocksPerDay(sh)
+	if _, err := CalendarBlocksPerDaySafe(sh); err != nil {
+		return nil, err
+	}
 	return &Zone{
 		ShiftHours:      sh,
 		LocWeights:      locWeights,

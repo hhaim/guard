@@ -22,12 +22,13 @@ type WindowSpec struct {
 	WeightMult float64
 }
 
-// ZoneLocation is one row from YAML `locations` (schema v2).
+// ZoneLocation is one row from YAML `zone_loc` (schema v2).
 type ZoneLocation struct {
-	ID     string
-	Name   string
-	Weight float64
-	TypeID string // slots_types id for this location
+	ID       string
+	Name     string // short label (YAML `name`)
+	FullName string // optional detail (YAML `full_name`)
+	Weight   float64
+	TypeID   string // slots_types id for this location
 }
 
 // ZoneTimeBand is one row from YAML `time_zones`.
@@ -42,7 +43,7 @@ type ZoneTimeBand struct {
 // ZoneSlot is one concurrent slot row from YAML `slots` (order = slot index).
 type ZoneSlot struct {
 	LocationIndex int    // index into Locations
-	DisplayName   string // optional display name from YAML
+	DisplayName   string // slot label: full_name or name from YAML
 	Pattern       string // rotating | full_day | windowed_slots (from location type)
 }
 
@@ -189,35 +190,36 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		}
 	}
 
-	locsRaw := data["locations"]
-	if locsRaw == nil {
-		locsRaw = data["location_zones"]
-	}
+	locsRaw := zoneLocYAMLList(data)
 	locs, ok := locsRaw.([]any)
 	if !ok || len(locs) == 0 {
-		return nil, fmt.Errorf("zones: locations list required")
+		return nil, fmt.Errorf("zones: zone_loc list required")
 	}
 	var locations []ZoneLocation
 	locIDToIdx := map[string]int{}
 	for i, row := range locs {
 		m, ok := row.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("locations[%d]: expected mapping", i)
+			return nil, fmt.Errorf("zone_loc[%d]: expected mapping", i)
 		}
 		zid := strings.TrimSpace(fmt.Sprint(m["id"]))
 		name := strings.TrimSpace(fmt.Sprint(m["name"]))
 		if name == "" {
 			name = zid
 		}
+		fullName := strings.TrimSpace(fmt.Sprint(m["full_name"]))
+		if fullName == "" {
+			fullName = name
+		}
 		lt := strings.TrimSpace(fmt.Sprint(m["type"]))
 		if zid == "" || lt == "" {
-			return nil, fmt.Errorf("locations[%d]: id and type required", i)
+			return nil, fmt.Errorf("zone_loc[%d]: id and type required", i)
 		}
 		if _, ok := typePattern[lt]; !ok {
-			return nil, fmt.Errorf("locations[%d]: unknown type %q", i, lt)
+			return nil, fmt.Errorf("zone_loc[%d]: unknown type %q", i, lt)
 		}
 		w := floatFromAny(m["weight"])
-		locations = append(locations, ZoneLocation{ID: zid, Name: name, Weight: w, TypeID: lt})
+		locations = append(locations, ZoneLocation{ID: zid, Name: name, FullName: fullName, Weight: w, TypeID: lt})
 		locIDToIdx[zid] = i
 	}
 
@@ -235,12 +237,12 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		}
 	}
 
-	shYaml := 8.0
+	shYaml := 3.0
 	if v, ok := data["shift_hours"]; ok {
 		shYaml = floatFromAny(v)
 	}
 	if shYaml <= 0 {
-		shYaml = 8.0
+		shYaml = 3.0
 	}
 	shEff := shYaml
 	if shiftHoursOverride != nil {
@@ -296,6 +298,17 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 	return zc, nil
 }
 
+// zoneLocYAMLList returns zone_loc entries, with legacy keys locations / location_zones.
+func zoneLocYAMLList(data map[string]any) any {
+	if v, ok := data["zone_loc"]; ok {
+		return v
+	}
+	if v, ok := data["locations"]; ok {
+		return v
+	}
+	return data["location_zones"]
+}
+
 func parseSlotLocationIndices(data map[string]any, slotsPerBlock int, locIDToIdx map[string]int) ([]int, []string, error) {
 	raw := data["slots"]
 	if raw == nil {
@@ -320,7 +333,10 @@ func parseSlotLocationIndices(data map[string]any, slotsPerBlock int, locIDToIdx
 			if lid == "" {
 				lid = strings.TrimSpace(fmt.Sprint(e["id"]))
 			}
-			disp = strings.TrimSpace(fmt.Sprint(e["name"]))
+			disp = strings.TrimSpace(fmt.Sprint(e["full_name"]))
+			if disp == "" {
+				disp = strings.TrimSpace(fmt.Sprint(e["name"]))
+			}
 		default:
 			return nil, nil, fmt.Errorf("slots[%d]: string or mapping", i)
 		}
@@ -394,8 +410,24 @@ func windowHalfOpenHours(startS, endS string) (int, int, error) {
 	return h0, h1, nil
 }
 
+// AllowedShiftHours are the only valid calendar block sizes (hours).
+var AllowedShiftHours = []float64{2, 3, 4}
+
+// ValidateShiftHours reports whether blockHours is 2, 3, or 4.
+func ValidateShiftHours(blockHours float64) error {
+	for _, h := range AllowedShiftHours {
+		if math.Abs(blockHours-h) < 1e-5 {
+			return nil
+		}
+	}
+	return fmt.Errorf("shift_hours must be 2, 3, or 4 (got %v)", blockHours)
+}
+
 // CalendarBlocksPerDaySafe returns 24/shift_hours if it divides evenly.
 func CalendarBlocksPerDaySafe(blockHours float64) (int, error) {
+	if err := ValidateShiftHours(blockHours); err != nil {
+		return 0, err
+	}
 	if blockHours <= 0 {
 		return 0, fmt.Errorf("block_hours must be positive")
 	}

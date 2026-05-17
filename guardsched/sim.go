@@ -448,14 +448,15 @@ func dfsRotatingOnlyMask(
 				}
 			}
 		}
-		ok := false
 		if !bad {
-			ok = dfsRotatingOnlyMask(draftRot, busy, soldiers, L+1, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool, nodes)
+			if dfsRotatingOnlyMask(draftRot, busy, soldiers, L+1, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool, nodes) {
+				return true
+			}
 		}
 		for _, s := range comb {
 			draftRot[day][s.Idx][b] = false
 		}
-		return ok
+		return false
 	})
 }
 

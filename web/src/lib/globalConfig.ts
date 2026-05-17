@@ -1,0 +1,55 @@
+export type GlobalFormData = {
+  history_days: number;
+  number_of_iteration: number;
+  random_seed: number;
+  [key: string]: unknown;
+};
+
+export const DEFAULT_GLOBAL: GlobalFormData = {
+  history_days: 14,
+  number_of_iteration: 1,
+  random_seed: 42,
+};
+
+const KNOWN_KEYS = ["history_days", "number_of_iteration", "random_seed"] as const;
+
+function asInt(v: unknown, fallback: number): number {
+  if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v);
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return Math.trunc(n);
+  }
+  return fallback;
+}
+
+export function deriveJsonFromForm(form: GlobalFormData): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...form };
+  for (const k of KNOWN_KEYS) {
+    out[k] = form[k];
+  }
+  return out;
+}
+
+export function parseFormFromJson(raw: unknown): GlobalFormData {
+  const base = { ...DEFAULT_GLOBAL };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return base;
+  }
+  const o = raw as Record<string, unknown>;
+  const form: GlobalFormData = {
+    ...base,
+    history_days: asInt(o.history_days, base.history_days),
+    number_of_iteration: asInt(o.number_of_iteration, base.number_of_iteration),
+    random_seed: asInt(o.random_seed, base.random_seed),
+  };
+  for (const [k, v] of Object.entries(o)) {
+    if (!(KNOWN_KEYS as readonly string[]).includes(k)) {
+      form[k] = v;
+    }
+  }
+  return form;
+}
+
+export function formFromServerValue(value: unknown): GlobalFormData {
+  return parseFormFromJson(value ?? DEFAULT_GLOBAL);
+}

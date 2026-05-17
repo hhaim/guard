@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
+    "lucide-react": "^0.511.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "recharts": "^2.15.0"
+    "recharts": "^2.15.0",
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

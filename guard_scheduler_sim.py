@@ -96,7 +96,8 @@ def _get_matplotlib() -> Tuple[Any, Any, Any]:
     return _mpl_bundle
 
 
-BLOCK_HOURS_DEFAULT = 8.0
+BLOCK_HOURS_DEFAULT = 3.0
+ALLOWED_SHIFT_HOURS = frozenset({2.0, 3.0, 4.0})
 BAND_RELATIVE_DEFAULT = 0.2
 LEGACY_ROT_TYPE_ID = "rot_auto"
 # Each soldier needs this many consecutive **off-duty** hours within every 24 h day.
@@ -424,7 +425,7 @@ def validate_schedule_rest(
 
 @dataclass
 class ZoneConfig:
-    """Loaded from zones YAML (schema v2: locations, time_zones, slots_types, per-location ``type``)."""
+    """Loaded from zones YAML (schema v2: zone_loc, time_zones, slots_types, per-location ``type``)."""
 
     loc_ids: Tuple[str, ...]
     loc_names: Tuple[str, ...]
@@ -443,8 +444,9 @@ class ZoneConfig:
     # Per-slot pattern (same length as slot_location_indices): rotating | full_day | windowed_slots
     slot_patterns: Tuple[str, ...] = ()
     slot_display_names: Tuple[str, ...] = ()
-    # Parallel to locations: slots_types id for each location row
+    # Parallel to zone_loc: slots_types id for each location row
     location_type_ids: Tuple[str, ...] = ()
+    loc_full_names: Tuple[str, ...] = ()
     full_day_specs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     windowed_specs: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     windowed_rest_hours: Dict[str, float] = field(default_factory=dict)
@@ -934,8 +936,18 @@ def expected_assignment_count(
     return int(days * (n_fd + n_wd + n_rot * blocks_pd))
 
 
+def validate_shift_hours(block_hours: float) -> float:
+    """Return block_hours if it is one of the allowed calendar block sizes (2, 3, or 4)."""
+    h = float(block_hours)
+    if h not in ALLOWED_SHIFT_HOURS:
+        allowed = ", ".join(str(int(x)) for x in sorted(ALLOWED_SHIFT_HOURS))
+        raise ValueError(f"shift_hours must be {allowed} (got {block_hours!r})")
+    return h
+
+
 def calendar_blocks_per_day(block_hours: float) -> int:
     """Number of consecutive shifts that tile a 24 h day."""
+    validate_shift_hours(block_hours)
     if block_hours <= 0:
         raise ValueError("block_hours must be positive")
     q = 24.0 / block_hours
@@ -1029,7 +1041,9 @@ def parse_slot_location_indices(
             disp = ""
         elif isinstance(entry, dict):
             lid = str(entry.get("location_id", entry.get("id", ""))).strip()
-            disp = str(entry.get("name", "")).strip()
+            disp = str(entry.get("full_name", "")).strip()
+            if not disp:
+                disp = str(entry.get("name", "")).strip()
         else:
             raise ValueError(f"slots[{i}] must be a string or a mapping with location_id")
         if not lid:
@@ -1091,7 +1105,12 @@ def _migrate_legacy_zone_yaml_to_v2(
         out["slots_types"] = [
             {"id": LEGACY_ROT_TYPE_ID, "name": "Rotating", "pattern": "rotating"}
         ]
-    loc_key = "locations" if out.get("locations") is not None else "location_zones"
+    if out.get("zone_loc") is not None:
+        loc_key = "zone_loc"
+    elif out.get("locations") is not None:
+        loc_key = "locations"
+    else:
+        loc_key = "location_zones"
     locs = out.get(loc_key)
     if isinstance(locs, list):
         new_locs: List[Any] = []
@@ -1105,24 +1124,28 @@ def _migrate_legacy_zone_yaml_to_v2(
                 new_locs.append(row)
         out[loc_key] = new_locs
     if shift_hours_override is not None:
-        sh = float(shift_hours_override)
+        sh = validate_shift_hours(float(shift_hours_override))
     else:
-        sh = float(out.get("shift_hours", default_shift_hours))
+        sh = validate_shift_hours(float(out.get("shift_hours", default_shift_hours)))
     out["schema_version"] = 2
     out["shift_hours"] = sh
     return out
 
 
+def _zone_loc_list(data: Dict[str, Any]) -> Any:
+    return data.get("zone_loc") or data.get("locations") or data.get("location_zones")
+
+
 def _load_zone_config(
     data: Dict[str, Any], slots_per_block: int, shift_hours_override: Optional[float]
 ) -> ZoneConfig:
-    locs = data.get("locations") or data.get("location_zones")
+    locs = _zone_loc_list(data)
     tzs = data.get("time_zones")
     stypes = data.get("slots_types")
     if locs is None or tzs is None:
-        raise ValueError("YAML must contain 'locations' and 'time_zones' lists")
+        raise ValueError("YAML must contain 'zone_loc' (or legacy 'locations') and 'time_zones' lists")
     if not isinstance(locs, list) or not locs:
-        raise ValueError("locations must be a non-empty list")
+        raise ValueError("zone_loc must be a non-empty list")
     if not isinstance(tzs, list) or not tzs:
         raise ValueError("time_zones must be a non-empty list")
     if not isinstance(stypes, list) or not stypes:
@@ -1178,40 +1201,38 @@ def _load_zone_config(
             windowed_rest[tid] = float(row.get("rest_after_hours", row.get("rest_after", 6.0)))
         # rotating: no extra specs
 
-    def parse_zone_row_typed(row: Any, kind: str) -> Tuple[str, str, float, str]:
+    def parse_zone_row_typed(row: Any, kind: str) -> Tuple[str, str, str, float, str]:
         if not isinstance(row, dict):
             raise ValueError(f"Each {kind} entry must be a mapping")
         zid = str(row.get("id", "")).strip()
-        name = str(row.get("name", zid)).strip()
+        short = str(row.get("name", zid)).strip()
+        full = str(row.get("full_name", short)).strip() or short
         w = float(row["weight"])
         if not zid:
             raise ValueError(f"{kind} entry missing id")
         lt = str(row.get("type", "")).strip()
         if not lt:
-            raise ValueError(f"location {zid!r}: missing 'type' (slots_types id)")
+            raise ValueError(f"zone_loc {zid!r}: missing 'type' (slots_types id)")
         if lt not in type_map:
-            raise ValueError(f"location {zid!r}: unknown type {lt!r}")
-        return zid, name, w, lt
+            raise ValueError(f"zone_loc {zid!r}: unknown type {lt!r}")
+        return zid, short, full, w, lt
 
-    lp = [parse_zone_row_typed(locs[i], "location") for i in range(len(locs))]
+    lp = [parse_zone_row_typed(locs[i], "zone_loc") for i in range(len(locs))]
     loc_id_to_idx = {lp[i][0]: i for i in range(len(lp))}
     slot_loc, slot_names = parse_slot_location_indices(data, slots_per_block, loc_id_to_idx)
 
     slot_patterns: List[str] = []
     for sidx in range(slots_per_block):
         li = slot_loc[sidx]
-        ltid = lp[li][3]
+        ltid = lp[li][4]
         slot_patterns.append(str(type_map[ltid]["pattern"]))
 
     sh_yaml = float(data.get("shift_hours", BLOCK_HOURS_DEFAULT))
     if shift_hours_override is not None:
-        sh_eff = float(shift_hours_override)
+        sh_eff = validate_shift_hours(float(shift_hours_override))
     else:
-        sh_eff = sh_yaml
-    try:
-        calendar_blocks_per_day(sh_eff)
-    except ValueError as e:
-        raise ValueError(f"shift_hours invalid: {e}") from e
+        sh_eff = validate_shift_hours(sh_yaml)
+    calendar_blocks_per_day(sh_eff)
 
     default_from = (0, 6, 12)
     default_to = (5, 11, 23)
@@ -1238,7 +1259,8 @@ def _load_zone_config(
     return ZoneConfig(
         loc_ids=tuple(x[0] for x in lp),
         loc_names=tuple(x[1] for x in lp),
-        loc_weights=tuple(x[2] for x in lp),
+        loc_full_names=tuple(x[2] for x in lp),
+        loc_weights=tuple(x[3] for x in lp),
         time_ids=tuple(tp_ids),
         time_names=tuple(tp_names),
         time_weights=tuple(tp_w),
@@ -1249,7 +1271,7 @@ def _load_zone_config(
         shift_hours=sh_eff,
         slot_patterns=tuple(slot_patterns),
         slot_display_names=slot_names,
-        location_type_ids=tuple(x[3] for x in lp),
+        location_type_ids=tuple(x[4] for x in lp),
         full_day_specs=full_day_specs,
         windowed_specs=windowed_specs,
         windowed_rest_hours=windowed_rest,
@@ -3596,7 +3618,7 @@ def main() -> None:
         default=None,
         metavar="H",
         help=(
-            "Calendar block length in hours for this run (24 must divide evenly by H). "
+            "Calendar block length in hours for this run (must be 2, 3, or 4). "
             "Overrides zones YAML ``shift_hours``. Omit to use the zones file value; legacy v1 "
             f"zones without ``shift_hours`` default to {BLOCK_HOURS_DEFAULT:g} h when upgrading."
         ),

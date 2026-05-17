@@ -23,6 +23,23 @@ func TestRunSimulationZoneConfig_allRotatingZonesS1(t *testing.T) {
 	}
 }
 
+func TestRunSimulationZoneConfig_twelveSoldiersFourRotatingSlots(t *testing.T) {
+	root := findRepoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "zones_s1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	z, err := LoadZoneConfigYAML(raw, 4, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewPyRandom(1)
+	_, _, err = RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunSimulationZoneConfig_mixedPatternsFile(t *testing.T) {
 	root := findRepoRoot(t)
 	raw, err := os.ReadFile(filepath.Join(root, "zones_mixed_patterns.yaml"))

@@ -115,9 +115,14 @@ func (s *Server) handlePutCfg(w http.ResponseWriter, r *http.Request) {
 }
 
 type scheduleRunBody struct {
-	AnchorDate string `json:"anchor_date"` // YYYY-MM-DD
-	Days       int    `json:"days"`
-	Seed       *int64 `json:"seed"`
+	AnchorDate              string   `json:"anchor_date"` // YYYY-MM-DD
+	Days                    int      `json:"days"`
+	Seed                    *int64   `json:"seed"`
+	ShiftHours              *float64 `json:"shift_hours"`
+	MinConsecutiveFreeHours *float64 `json:"min_consecutive_free_hours"`
+	MinFreeShiftsAfterDuty  *int     `json:"min_free_shifts_after_duty"`
+	BandRelative            *float64 `json:"band_relative"`
+	SimTrials               *int     `json:"sim_trials"`
 }
 
 func (s *Server) handleScheduleRun(w http.ResponseWriter, r *http.Request) {
@@ -125,9 +130,12 @@ func (s *Server) handleScheduleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body scheduleRunBody
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON body"}`, http.StatusBadRequest)
+		return
+	}
 	if body.Days <= 0 {
-		body.Days = 7
+		body.Days = 1
 	}
 	anchor, err := time.Parse("2006-01-02", strings.TrimSpace(body.AnchorDate))
 	if err != nil || strings.TrimSpace(body.AnchorDate) == "" {
@@ -166,9 +174,36 @@ func (s *Server) handleScheduleRun(w http.ResponseWriter, r *http.Request) {
 	if global.HistoryDays > 0 && body.Days > global.HistoryDays {
 		body.Days = global.HistoryDays
 	}
-	seed := global.RandomSeed
+	var seedPtr *int64
 	if body.Seed != nil {
-		seed = *body.Seed
+		seedPtr = body.Seed
+	} else if global.RandomSeed != 0 {
+		s := global.RandomSeed
+		seedPtr = &s
+	}
+
+	trials := 1
+	if body.SimTrials != nil && *body.SimTrials > 0 {
+		trials = *body.SimTrials
+	}
+	if trials > 1 && seedPtr == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "sim_trials > 1 requires seed"})
+		return
+	}
+
+	minFreeH := 6.0
+	if body.MinConsecutiveFreeHours != nil {
+		minFreeH = *body.MinConsecutiveFreeHours
+	}
+	minCool := 2
+	if body.MinFreeShiftsAfterDuty != nil {
+		minCool = *body.MinFreeShiftsAfterDuty
+	}
+	bandRel := 0.2
+	if body.BandRelative != nil {
+		bandRel = *body.BandRelative
 	}
 
 	var slotsDoc struct {
@@ -231,13 +266,18 @@ func (s *Server) handleScheduleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zc, err := guardsched.LoadZoneConfigYAML(yamlBytes, slotsPerBlock, nil)
+	zc, err := guardsched.LoadZoneConfigYAML(yamlBytes, slotsPerBlock, body.ShiftHours)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
-	rng := guardsched.NewPyRandom(seed)
-	recs, stats, err := guardsched.RunSimulationZoneConfig(zc, len(keys), body.Days, rng, 8, true, 0, 2, 0, 0.2)
+
+	recs, stats, trialMeta, err := guardsched.RunSimulationBestOfZoneConfig(
+		zc, len(keys), body.Days, trials, seedPtr,
+		minFreeH, true, 0, 2, minCool, bandRel,
+	)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -283,8 +323,25 @@ func (s *Server) handleScheduleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	assignJSON := guardsched.AssignmentRecordsToJSON(recs, keys)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "assignments": len(recs), "days": body.Days})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":          true,
+		"days":        body.Days,
+		"anchor_date": anchor.Format("2006-01-02"),
+		"shift_hours": zc.ShiftHours,
+		"assignments": assignJSON,
+		"count":       len(assignJSON),
+		"meta": map[string]any{
+			"sim_trials":                     trials,
+			"trial":                          trialMeta,
+			"min_consecutive_free_hours":     minFreeH,
+			"min_free_shifts_after_duty":     minCool,
+			"band_relative":                  bandRel,
+			"shift_cooldown_exclusions":      stats.ShiftCooldownExclusions,
+			"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
+		},
+	})
 }
 
 func countYAMLSlots(raw []byte) int {

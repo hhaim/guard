@@ -10,34 +10,81 @@ usage() {
 Usage: ./b <command> [options]
 
 Commands:
-  build       Build Go binaries and Docker images (docker compose build)
-  test        Run Go unit tests and Python pytest suite
-  run         Start the stack (docker compose up)
-  help        Show this help (--help, -h)
+  build-ui      Build React UI (web/ → web/dist)
+  build-docker  Build Docker images (docker compose build)
+  build         Build Go backend (go build ./...)
+  build-sim     Build guardsim CLI (bin/guardsim)
+  build-all     Build UI, backend, and Docker images
+  sim           Run guardsim CLI (pass args after sim)
+  test          Run Go unit tests and Python pytest suite
+  run           Start the stack (docker compose up)
+  help          Show this help (--help, -h)
 
 Examples:
+  ./b build-ui
   ./b build
+  ./b build-docker
+  ./b build-all
   ./b test
   ./b run
   ./b run --build          # pass extra args to docker compose up
 EOF
 }
 
-cmd_build() {
-  echo "==> go build ./..."
-  go build ./...
-
-  if [[ -f web/package.json ]]; then
-    if command -v npm >/dev/null 2>&1; then
-      echo "==> npm run build (web/)"
-      (cd web && npm ci && npm run build)
-    else
-      echo "==> skip web npm build (npm not installed; Docker build will compile UI)"
-    fi
+cmd_build_ui() {
+  if [[ ! -f web/package.json ]]; then
+    echo "==> skip web build (no web/package.json)" >&2
+    return 0
   fi
 
+  if command -v npm >/dev/null 2>&1; then
+    echo "==> npm run build (web/)"
+    (cd web && npm ci && npm run build)
+    return 0
+  fi
+
+  if command -v docker >/dev/null 2>&1; then
+    echo "==> npm not found; building UI with node:22-alpine via Docker"
+    docker run --rm \
+      -v "$ROOT/web:/src" \
+      -w /src \
+      node:22-alpine \
+      sh -c "npm ci && npm run build"
+    return 0
+  fi
+
+  echo "error: need npm or docker to build web/" >&2
+  exit 1
+}
+
+cmd_build_backend() {
+  echo "==> go build ./..."
+  go build ./...
+}
+
+cmd_build_sim() {
+  echo "==> go build -o bin/guardsim ./cmd/guardsim"
+  mkdir -p bin
+  go build -o bin/guardsim ./cmd/guardsim
+}
+
+cmd_sim() {
+  if [[ -x "$ROOT/bin/guardsim" ]]; then
+    exec "$ROOT/bin/guardsim" "$@"
+  fi
+  echo "==> go run ./cmd/guardsim $*"
+  go run ./cmd/guardsim "$@"
+}
+
+cmd_build_docker() {
   echo "==> docker compose build"
   docker compose build "$@"
+}
+
+cmd_build_all() {
+  cmd_build_ui
+  cmd_build_backend
+  cmd_build_docker "$@"
 }
 
 cmd_test() {
@@ -62,9 +109,14 @@ main() {
   shift || true
 
   case "$cmd" in
-    build) cmd_build "$@" ;;
-    test)  cmd_test "$@" ;;
-    run)   cmd_run "$@" ;;
+    build-ui)     cmd_build_ui "$@" ;;
+    build-docker) cmd_build_docker "$@" ;;
+    build)        cmd_build_backend "$@" ;;
+    build-sim)    cmd_build_sim "$@" ;;
+    build-all)    cmd_build_all "$@" ;;
+    sim)          cmd_sim "$@" ;;
+    test)         cmd_test "$@" ;;
+    run)          cmd_run "$@" ;;
     help|--help|-h)
       usage
       ;;

@@ -6,7 +6,7 @@
 # - time_zones: categories for fairness; each block’s start hour maps to one band.
 
 schema_version: 2
-shift_hours: 8
+shift_hours: 4
 
 slots_types:
   - id: t_rot
@@ -18,7 +18,7 @@ slots:
   - location_id: loc_tower
   - location_id: loc_yard
 
-locations:
+zone_loc:
   - id: loc_gate
     type: t_rot
     name: Main gate

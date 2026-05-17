@@ -1,7 +1,7 @@
 # zones_mixed_patterns.yaml — schema v2 (mixed rotating / full_day / windowed_slots).
 #
 # - shift_hours: hours per calendar block (must tile 24 h); set in this file or override with --shift-hours.
-# - locations reference slots_types by id (pattern: rotating | full_day | windowed_slots).
+# - zone_loc reference slots_types by id (pattern: rotating | full_day | windowed_slots).
 # - Fill order in sim: full_day → windowed_slots → rotating.
 
 schema_version: 2
@@ -60,10 +60,11 @@ slots_types:
       rest_after_hours: 6
       weight_multiplier: 1.1
 
-# One row per concurrent slot (1..Y). location_id must match locations[].id
+# One row per concurrent slot (1..Y). location_id must match zone_loc[].id
 slots:
   - location_id: loc_gate
     name: g1
+    full_name: abssss
   - location_id: loc_gate
     name: g2
   - location_id: loc_gate
@@ -93,26 +94,31 @@ slots:
   - location_id: hamal
     name: h2
 
-locations:
+zone_loc:
   - id: loc_gate
     type: rotating_slot
     name: G
+    full_name: Main gate
     weight: 1.0
   - id: loc_kitchen
     type: full_day_kitchen
     name: K
+    full_name: Kitchen duty post
     weight: 1.0
   - id: loc_rasar
     type: full_day_rasar
     name: R
+    full_name: Rasar duty post
     weight: 1.0
   - id: bet_valero
     type: windowed_bet_valero
     name: V
+    full_name: Bet Valero
     weight: 1.0
   - id: hamal
     type: windowed_hamal
     name: H
+    full_name: Hamal
     weight: 1.0
 
 # Used for piecewise fairness (active hours × time_zone weight × pattern multiplier).
