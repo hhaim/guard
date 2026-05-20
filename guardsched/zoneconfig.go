@@ -329,14 +329,8 @@ func parseSlotLocationIndices(data map[string]any, slotsPerBlock int, locIDToIdx
 		case string:
 			lid = strings.TrimSpace(e)
 		case map[string]any:
-			lid = strings.TrimSpace(fmt.Sprint(e["location_id"]))
-			if lid == "" {
-				lid = strings.TrimSpace(fmt.Sprint(e["id"]))
-			}
-			disp = strings.TrimSpace(fmt.Sprint(e["full_name"]))
-			if disp == "" {
-				disp = strings.TrimSpace(fmt.Sprint(e["name"]))
-			}
+			lid = yamlStrField(e, "location_id", "id")
+			disp = yamlStrField(e, "full_name", "name")
 		default:
 			return nil, nil, fmt.Errorf("slots[%d]: string or mapping", i)
 		}
@@ -351,6 +345,21 @@ func parseSlotLocationIndices(data map[string]any, slotsPerBlock int, locIDToIdx
 		names[i] = disp
 	}
 	return out, names, nil
+}
+
+// yamlStrField returns the first non-empty string field from a YAML mapping (ignores null / "<nil>").
+func yamlStrField(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		v, ok := m[k]
+		if !ok || v == nil {
+			continue
+		}
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s != "" && s != "<nil>" {
+			return s
+		}
+	}
+	return ""
 }
 
 func parseHHMMClock(s string) (int, error) {

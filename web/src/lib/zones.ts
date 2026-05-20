@@ -2,6 +2,42 @@ import YAML from "yaml";
 
 export type SlotTypePattern = "rotating" | "full_day" | "windowed_slots";
 
+export type FullDayConfig = {
+  start: string;
+  end: string;
+  rest_after_hours: number;
+  weight_multiplier: number;
+};
+
+export type WindowedWindow = {
+  name: string;
+  start: string;
+  end: string;
+  weight_multiplier: number;
+};
+
+export type WindowedSlotsConfig = {
+  slots: WindowedWindow[];
+};
+
+export const DEFAULT_FULL_DAY_CONFIG: FullDayConfig = {
+  start: "06:00",
+  end: "22:00",
+  rest_after_hours: 6,
+  weight_multiplier: 1,
+};
+
+export const DEFAULT_WINDOWED_WINDOW: WindowedWindow = {
+  name: "w1",
+  start: "00:00",
+  end: "12:00",
+  weight_multiplier: 1,
+};
+
+export const DEFAULT_WINDOWED_SLOTS_CONFIG: WindowedSlotsConfig = {
+  slots: [DEFAULT_WINDOWED_WINDOW],
+};
+
 export type SlotType = {
   id: string;
   name: string;
@@ -10,6 +46,69 @@ export type SlotType = {
   rest_after_hours?: number;
   config?: Record<string, unknown>;
 };
+
+function asConfigNum(v: unknown, fallback: number): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return fallback;
+}
+
+function asConfigTime(v: unknown, fallback: string): string {
+  const s = v == null ? "" : String(v).trim();
+  return s || fallback;
+}
+
+export function parseFullDayConfig(config: Record<string, unknown> | undefined): FullDayConfig {
+  const c = config ?? {};
+  return {
+    start: asConfigTime(c.start, DEFAULT_FULL_DAY_CONFIG.start),
+    end: asConfigTime(c.end, DEFAULT_FULL_DAY_CONFIG.end),
+    rest_after_hours: asConfigNum(c.rest_after_hours ?? c.rest_after, DEFAULT_FULL_DAY_CONFIG.rest_after_hours),
+    weight_multiplier: asConfigNum(
+      c.weight_multiplier ?? c.weight_mult ?? c.w_mult,
+      DEFAULT_FULL_DAY_CONFIG.weight_multiplier
+    ),
+  };
+}
+
+export function fullDayConfigToRecord(cfg: FullDayConfig): Record<string, unknown> {
+  return {
+    start: cfg.start,
+    end: cfg.end,
+    rest_after_hours: cfg.rest_after_hours,
+    weight_multiplier: cfg.weight_multiplier,
+  };
+}
+
+export function parseWindowedSlotsConfig(config: Record<string, unknown> | undefined): WindowedSlotsConfig {
+  const raw = config?.slots;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return structuredClone(DEFAULT_WINDOWED_SLOTS_CONFIG);
+  }
+  const slots = raw
+    .filter((x): x is Record<string, unknown> => x != null && typeof x === "object" && !Array.isArray(x))
+    .map((w, i) => ({
+      name: asConfigTime(w.name, `w${i + 1}`),
+      start: asConfigTime(w.start, DEFAULT_WINDOWED_WINDOW.start),
+      end: asConfigTime(w.end, DEFAULT_WINDOWED_WINDOW.end),
+      weight_multiplier: asConfigNum(w.weight_multiplier ?? w.weight_mult, DEFAULT_WINDOWED_WINDOW.weight_multiplier),
+    }));
+  return { slots: slots.length > 0 ? slots : structuredClone(DEFAULT_WINDOWED_SLOTS_CONFIG.slots) };
+}
+
+export function windowedSlotsConfigToRecord(cfg: WindowedSlotsConfig): Record<string, unknown> {
+  return {
+    slots: cfg.slots.map((w) => ({
+      name: w.name,
+      start: w.start,
+      end: w.end,
+      weight_multiplier: w.weight_multiplier,
+    })),
+  };
+}
 
 /** Zone location row (YAML `zone_loc`). */
 export type ZoneLoc = {

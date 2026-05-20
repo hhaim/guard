@@ -1,51 +1,24 @@
-import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { apiGet } from "./api";
+import { useState } from "react";
 import { GlobalConfigView } from "./components/GlobalConfigView";
-import { RunScheduleView } from "./components/RunScheduleView";
+import { PlanView } from "./components/PlanView";
+import { StatsView } from "./components/StatsView";
 import { SlotsView } from "./components/SlotsView";
 import { SoldiersView } from "./components/SoldiersView";
 import { TimeZonesView } from "./components/TimeZonesView";
 import { ZonesDocumentProvider } from "./context/ZonesDocumentContext";
 
-type Tab = "soldiers" | "slots" | "global" | "time_zones" | "run" | "reports";
+type Tab = "soldiers" | "slots" | "global" | "time_zones" | "plan" | "stats";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("soldiers");
-
-  const [repFrom, setRepFrom] = useState(() => new Date().toISOString().slice(0, 10));
-  const [repTo, setRepTo] = useState(() => new Date().toISOString().slice(0, 10));
-  const blocksQ = useQuery({
-    queryKey: ["reports", "blocks", repFrom, repTo],
-    queryFn: () =>
-      apiGet<{ soldier_id: string; ts_date: string; blocks: number }[]>(
-        `/api/reports/blocks?from=${encodeURIComponent(repFrom)}&to=${encodeURIComponent(repTo)}`
-      ),
-    enabled: tab === "reports",
-  });
-
-  const chartData = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const r of blocksQ.data ?? []) {
-      m.set(r.soldier_id, (m.get(r.soldier_id) ?? 0) + Number(r.blocks));
-    }
-    return [...m.entries()].map(([soldier_id, blocks]) => ({ soldier_id, blocks }));
-  }, [blocksQ.data]);
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <h1>Guard scheduler</h1>
-        <p className="sub">Stateless API + Postgres. Configure soldiers and zones YAML, then run scheduling.</p>
+        <p className="sub">
+          Configure soldiers and zones, plan proposals, apply to the verified schedule, and review stats.
+        </p>
       </header>
       <nav className="tab-bar" aria-label="Main navigation">
         {(
@@ -54,8 +27,8 @@ export default function App() {
             ["slots", "Slots / zones"],
             ["global", "Global"],
             ["time_zones", "Time zones"],
-            ["run", "Run schedule"],
-            ["reports", "Reports"],
+            ["plan", "Plan"],
+            ["stats", "Stats"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -77,58 +50,11 @@ export default function App() {
       <ZonesDocumentProvider>
         {tab === "slots" && <SlotsView />}
         {tab === "time_zones" && <TimeZonesView />}
+        {tab === "plan" && <PlanView />}
+        {tab === "stats" && <StatsView />}
       </ZonesDocumentProvider>
 
       {tab === "global" && <GlobalConfigView />}
-
-      {tab === "run" && <RunScheduleView />}
-
-      {tab === "reports" && (
-        <div className="panel">
-          <div className="row">
-            <label>
-              From <input type="text" value={repFrom} onChange={(e) => setRepFrom(e.target.value)} />
-            </label>
-            <label>
-              To <input type="text" value={repTo} onChange={(e) => setRepTo(e.target.value)} />
-            </label>
-          </div>
-          <p className="sub">Block counts per soldier (aggregated across selected dates).</p>
-          {blocksQ.isLoading && <p>Loading…</p>}
-          {blocksQ.isError && <div className="err">{(blocksQ.error as Error).message}</div>}
-          {chartData.length > 0 && (
-            <div style={{ width: "100%", height: 320 }}>
-              <ResponsiveContainer>
-                <BarChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="soldier_id" angle={-25} textAnchor="end" height={80} interval={0} />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="blocks" fill="#0ea5e9" name="Blocks" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-          <table>
-            <thead>
-              <tr>
-                <th>Soldier</th>
-                <th>Date</th>
-                <th>Blocks</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(blocksQ.data ?? []).map((r, i) => (
-                <tr key={i}>
-                  <td>{r.soldier_id}</td>
-                  <td>{r.ts_date}</td>
-                  <td>{r.blocks}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }

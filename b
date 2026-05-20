@@ -14,8 +14,10 @@ Commands:
   build-docker  Build Docker images (docker compose build)
   build         Build Go backend (go build ./...)
   build-sim     Build guardsim CLI (bin/guardsim)
+  build-cli     Build guardcli DB tool (bin/guardcli)
   build-all     Build UI, backend, and Docker images
   sim           Run guardsim CLI (pass args after sim)
+  cli           Run guardcli (pass args after cli)
   test          Run Go unit tests and Python pytest suite
   run           Start the stack (docker compose up)
   help          Show this help (--help, -h)
@@ -68,6 +70,20 @@ cmd_build_sim() {
   go build -o bin/guardsim ./cmd/guardsim
 }
 
+cmd_build_cli() {
+  echo "==> go build -o bin/guardcli ./cmd/guardcli"
+  mkdir -p bin
+  go build -o bin/guardcli ./cmd/guardcli
+}
+
+cmd_cli() {
+  if [[ -x "$ROOT/bin/guardcli" ]]; then
+    exec "$ROOT/bin/guardcli" "$@"
+  fi
+  echo "==> go run ./cmd/guardcli $*"
+  go run ./cmd/guardcli "$@"
+}
+
 cmd_sim() {
   if [[ -x "$ROOT/bin/guardsim" ]]; then
     exec "$ROOT/bin/guardsim" "$@"
@@ -84,6 +100,7 @@ cmd_build_docker() {
 cmd_build_all() {
   cmd_build_ui
   cmd_build_backend
+  cmd_build_cli
   cmd_build_docker "$@"
 }
 
@@ -113,8 +130,10 @@ main() {
     build-docker) cmd_build_docker "$@" ;;
     build)        cmd_build_backend "$@" ;;
     build-sim)    cmd_build_sim "$@" ;;
+    build-cli)    cmd_build_cli "$@" ;;
     build-all)    cmd_build_all "$@" ;;
     sim)          cmd_sim "$@" ;;
+    cli)          cmd_cli "$@" ;;
     test)         cmd_test "$@" ;;
     run)          cmd_run "$@" ;;
     help|--help|-h)

@@ -1,11 +1,13 @@
 import { Copy } from "lucide-react";
-import { useMutation } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
-import { callApi } from "../api";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { apiGet, callApi } from "../api";
+import { fetchPlanContext, type PlanContext } from "../api/plan";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
+import { planDebugDayOffsetFromValue } from "../lib/globalConfig";
 import type { ScheduleAssignment } from "../lib/scheduleReport";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
-import { ScheduleResultsReport } from "./ScheduleResultsReport";
+import { ScheduleResultsReport, soldiersFromCfg } from "./ScheduleResultsReport";
 
 export type ScheduleRunParams = {
   anchor_date: string;
@@ -50,8 +52,40 @@ function Field({
 }
 
 export function RunScheduleView() {
-  const { doc: zonesDoc } = useZonesDocument();
-  const [anchor, setAnchor] = useState(() => new Date().toISOString().slice(0, 10));
+  const { doc: zonesDoc, slotsQ, loadError: zonesLoadError } = useZonesDocument();
+  const zonesLoading = slotsQ.isLoading;
+  const globalQ = useQuery({
+    queryKey: ["cfg", "global"],
+    queryFn: () => apiGet<{ value: unknown }>("/api/cfg/global"),
+  });
+  const debugDayOffset = planDebugDayOffsetFromValue(globalQ.data?.value);
+  const planCtxQ = useQuery({
+    queryKey: ["plan", "context", debugDayOffset],
+    queryFn: () => fetchPlanContext(debugDayOffset > 0 ? debugDayOffset : undefined),
+  });
+  const soldiersQ = useQuery({
+    queryKey: ["cfg", "soldiers"],
+    queryFn: () =>
+      apiGet<{ value: { soldiers?: { id?: string; key?: string; state?: string }[] } }>(
+        "/api/cfg/soldiers"
+      ),
+  });
+  const soldierIds = useMemo(() => {
+    const list = soldiersQ.data?.value?.soldiers ?? [];
+    return list
+      .map((s) => s.id || s.key || "")
+      .filter((id) => {
+        if (!id) return false;
+        const st = (list.find((x) => (x.id || x.key) === id)?.state ?? "").toLowerCase();
+        return !st || st === "base";
+      });
+  }, [soldiersQ.data]);
+  const soldiers = useMemo(
+    () => soldiersFromCfg(soldiersQ.data?.value),
+    [soldiersQ.data]
+  );
+  const planCtx: PlanContext | undefined = planCtxQ.data;
+  const [anchor, setAnchor] = useState("");
   const [days, setDays] = useState(1);
   const [shiftHours, setShiftHours] = useState<number | "">("");
   const [minFreeHours, setMinFreeHours] = useState(6);
@@ -60,6 +94,11 @@ export function RunScheduleView() {
   const [simTrials, setSimTrials] = useState(1);
   const [seed, setSeed] = useState("");
   const [result, setResult] = useState<ScheduleRunResult | null>(null);
+
+  useEffect(() => {
+    if (!planCtx?.plan_anchor) return;
+    setAnchor(planCtx.plan_anchor);
+  }, [planCtx?.plan_anchor]);
 
   const runM = useMutation({
     mutationFn: async () => {
@@ -120,12 +159,21 @@ export function RunScheduleView() {
           Run schedule
         </h2>
         <p className="contacts-hint" style={{ margin: "0 0 0.75rem", padding: "0 1.1rem" }}>
-          Same flags as the CLI sim. Results are saved to the database and shown below as tables and charts.
+          Same flags as the CLI sim. Planning anchor is the next day after effective today (UTC). Results are saved
+          to the database and shown below as tables and charts.
         </p>
 
+        {planCtx && (
+          <p className="contacts-hint" style={{ margin: "0 0 0.75rem", padding: "0 1.1rem" }}>
+            Effective today: <strong>{planCtx.effective_today}</strong> · plan anchor:{" "}
+            <strong>{planCtx.plan_anchor}</strong>
+            {planCtx.debug_day_offset > 0 ? ` (+${planCtx.debug_day_offset}d debug)` : null}
+          </p>
+        )}
+
         <div className="run-form-grid">
-          <Field label="Anchor date" hint="YYYY-MM-DD">
-            <input className="settings-input settings-input-wide" type="text" value={anchor} onChange={(e) => setAnchor(e.target.value)} />
+          <Field label="Anchor date" hint="Next planning day (UTC); set in Global → Planning (debug)">
+            <input className="settings-input settings-input-wide" type="text" value={anchor} readOnly />
           </Field>
 
           <Field label="Days" hint="default 1">
@@ -212,7 +260,12 @@ export function RunScheduleView() {
         </div>
 
         <div className="run-form-actions">
-          <button type="button" className="btn btn-filled" disabled={runM.isPending} onClick={() => runM.mutate()}>
+          <button
+            type="button"
+            className="btn btn-filled"
+            disabled={runM.isPending || !anchor || planCtxQ.isLoading}
+            onClick={() => runM.mutate()}
+          >
             {runM.isPending ? "Running…" : "Run schedule"}
           </button>
         </div>
@@ -233,20 +286,28 @@ export function RunScheduleView() {
         </header>
         <div className="run-results-body">
           {!result && <p className="contacts-empty">Run the scheduler to see the schedule matrix and timelines here.</p>}
-          {result?.ok && zonesDoc && result.assignments.length > 0 && (
+          {result?.ok && zonesLoading && (
+            <p className="contacts-empty">Loading zones configuration…</p>
+          )}
+          {result?.ok && !zonesLoading && zonesLoadError && (
+            <p className="msg-err">Cannot render schedule tables: {zonesLoadError}</p>
+          )}
+          {result?.ok && !zonesLoading && zonesDoc && result.assignments.length > 0 && (
             <ScheduleResultsReport
               assignments={result.assignments}
               days={result.days}
               shiftHours={result.shift_hours}
               zones={zonesDoc}
               meta={result.meta}
+              soldierIds={soldierIds}
+              soldiers={soldiers}
             />
+          )}
+          {result?.ok && !zonesLoading && zonesDoc && result.assignments.length === 0 && (
+            <p className="contacts-empty">No assignments returned.</p>
           )}
           {result && !result.ok && (
             <p className="msg-err">{result.error ?? "Schedule run failed"}</p>
-          )}
-          {result?.ok && result.assignments.length === 0 && (
-            <p className="contacts-empty">No assignments returned.</p>
           )}
         </div>
       </section>

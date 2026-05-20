@@ -1,25 +1,28 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
-	"guard/guardsched"
 	"guard/internal/db"
 	"guard/internal/repo"
-	"guard/internal/schedule"
 )
 
 // Server wires HTTP routes to the database pool.
 type Server struct {
 	Pool   *db.Pool
 	APIKey string // optional; if set, require X-API-Key header match
+
+	// PlanDebugDayOffset shifts "effective today" forward for planning (debug/testing).
+	PlanDebugDayOffset int
+	// AllowDebugOffset enables per-request debug_day_offset on plan/schedule APIs.
+	AllowDebugOffset bool
 }
 
 func (s *Server) auth(w http.ResponseWriter, r *http.Request) bool {
@@ -42,6 +45,13 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/time-zones/{id}", s.handleTimeZonesPatch)
 	mux.HandleFunc("DELETE /api/time-zones/{id}", s.handleTimeZonesDelete)
 	mux.HandleFunc("POST /api/schedule/run", s.handleScheduleRun)
+	mux.HandleFunc("GET /api/plan/context", s.handlePlanContext)
+	mux.HandleFunc("GET /api/plan/proposals", s.handlePlanListProposals)
+	mux.HandleFunc("GET /api/plan/proposals/{slot}", s.handlePlanGetProposal)
+	mux.HandleFunc("POST /api/plan/generate", s.handlePlanGenerate)
+	mux.HandleFunc("PUT /api/plan/proposals/{slot}", s.handlePlanPutProposal)
+	mux.HandleFunc("DELETE /api/plan/proposals/{slot}", s.handlePlanDeleteProposal)
+	mux.HandleFunc("POST /api/plan/apply", s.handlePlanApply)
 	mux.HandleFunc("GET /api/reports/schedule", s.handleReportSchedule)
 	mux.HandleFunc("GET /api/reports/blocks", s.handleReportBlocks)
 }
@@ -114,17 +124,7 @@ func (s *Server) handlePutCfg(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"key": row.Key, "version": row.Version, "updated_at": row.UpdatedAt})
 }
 
-type scheduleRunBody struct {
-	AnchorDate              string   `json:"anchor_date"` // YYYY-MM-DD
-	Days                    int      `json:"days"`
-	Seed                    *int64   `json:"seed"`
-	ShiftHours              *float64 `json:"shift_hours"`
-	MinConsecutiveFreeHours *float64 `json:"min_consecutive_free_hours"`
-	MinFreeShiftsAfterDuty  *int     `json:"min_free_shifts_after_duty"`
-	BandRelative            *float64 `json:"band_relative"`
-	SimTrials               *int     `json:"sim_trials"`
-}
-
+// handleScheduleRun is a compatibility alias for POST /api/plan/generate (slot 01, cfg only).
 func (s *Server) handleScheduleRun(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
@@ -134,214 +134,11 @@ func (s *Server) handleScheduleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid JSON body"}`, http.StatusBadRequest)
 		return
 	}
-	if body.Days <= 0 {
-		body.Days = 1
-	}
-	anchor, err := time.Parse("2006-01-02", strings.TrimSpace(body.AnchorDate))
-	if err != nil || strings.TrimSpace(body.AnchorDate) == "" {
-		anchor = time.Now().UTC().Truncate(24 * time.Hour)
-	}
-
-	ctx := r.Context()
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	slotsRow, err := repo.GetCfg(ctx, s.Pool, "slots")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	soldiersRow, err := repo.GetCfg(ctx, s.Pool, "soldiers")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	globalRow, err := repo.GetCfg(ctx, s.Pool, "global")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var global struct {
-		HistoryDays int   `json:"history_days"`
-		RandomSeed  int64 `json:"random_seed"`
-	}
-	_ = json.Unmarshal(globalRow.Value, &global)
-	if global.HistoryDays > 0 && body.Days > global.HistoryDays {
-		body.Days = global.HistoryDays
-	}
-	var seedPtr *int64
-	if body.Seed != nil {
-		seedPtr = body.Seed
-	} else if global.RandomSeed != 0 {
-		s := global.RandomSeed
-		seedPtr = &s
-	}
-
-	trials := 1
-	if body.SimTrials != nil && *body.SimTrials > 0 {
-		trials = *body.SimTrials
-	}
-	if trials > 1 && seedPtr == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "sim_trials > 1 requires seed"})
-		return
-	}
-
-	minFreeH := 6.0
-	if body.MinConsecutiveFreeHours != nil {
-		minFreeH = *body.MinConsecutiveFreeHours
-	}
-	minCool := 2
-	if body.MinFreeShiftsAfterDuty != nil {
-		minCool = *body.MinFreeShiftsAfterDuty
-	}
-	bandRel := 0.2
-	if body.BandRelative != nil {
-		bandRel = *body.BandRelative
-	}
-
-	var slotsDoc struct {
-		ZonesYAML string `json:"zones_yaml"`
-	}
-	_ = json.Unmarshal(slotsRow.Value, &slotsDoc)
-	yamlBytes := []byte(strings.TrimSpace(slotsDoc.ZonesYAML))
-	if len(yamlBytes) == 0 {
-		var raw any
-		if err := json.Unmarshal(slotsRow.Value, &raw); err == nil {
-			if s, ok := raw.(string); ok {
-				yamlBytes = []byte(strings.TrimSpace(s))
-			}
-		}
-	}
-	if len(yamlBytes) == 0 {
-		http.Error(w, `{"error":"slots must include zones_yaml string or be a raw YAML string"}`, http.StatusBadRequest)
-		return
-	}
-
-	var soldiersDoc struct {
-		Soldiers []struct {
-			ID       string `json:"id"`
-			Key      string `json:"key"`
-			FullName string `json:"full_name"`
-			State    string `json:"state"`
-		} `json:"soldiers"`
-	}
-	if err := json.Unmarshal(soldiersRow.Value, &soldiersDoc); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	var keys []string
-	for _, s := range soldiersDoc.Soldiers {
-		id := s.ID
-		if id == "" {
-			id = s.Key
-		}
-		if id == "" {
-			continue
-		}
-		st := strings.ToLower(strings.TrimSpace(s.State))
-		if st != "" && st != "base" {
-			continue
-		}
-		keys = append(keys, id)
-	}
-	if len(keys) < 1 {
-		http.Error(w, `{"error":"need at least one base soldier"}`, http.StatusBadRequest)
-		return
-	}
-
-	slotsPerBlock := countYAMLSlots(yamlBytes)
-	if slotsPerBlock < 1 {
-		http.Error(w, `{"error":"could not determine slots count from YAML"}`, http.StatusBadRequest)
-		return
-	}
-	if len(keys) < slotsPerBlock {
-		http.Error(w, fmt.Sprintf(`{"error":"need at least %d base soldiers"}`, slotsPerBlock), http.StatusBadRequest)
-		return
-	}
-
-	zc, err := guardsched.LoadZoneConfigYAML(yamlBytes, slotsPerBlock, body.ShiftHours)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-
-	recs, stats, trialMeta, err := guardsched.RunSimulationBestOfZoneConfig(
-		zc, len(keys), body.Days, trials, seedPtr,
-		minFreeH, true, 0, 2, minCool, bandRel,
-	)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-
-	slotLabels := make([]string, len(zc.Slots))
-	for i, sl := range zc.Slots {
-		slotLabels[i] = sl.DisplayName
-	}
-
-	bp, _ := guardsched.CalendarBlocksPerDaySafe(zc.ShiftHours)
-	rows, err := schedule.ToScheduleRows(schedule.PersistInput{
-		AnchorDate: anchor, BlockHours: zc.ShiftHours, BlocksPerDay: bp,
-		SoldierKeys: keys, SlotLabels: slotLabels, Records: recs,
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	endDate := anchor.AddDate(0, 0, body.Days-1)
-	if err := repo.DeleteScheduleRange(ctx, tx, anchor, endDate); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := repo.InsertScheduleRows(ctx, tx, rows); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	summary, _ := json.Marshal(map[string]any{
-		"shift_cooldown_exclusions": stats.ShiftCooldownExclusions,
-		"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
-		"assignments": len(recs),
-	})
-	if err := repo.UpsertCfg(ctx, tx, "last_run_summary", summary); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	assignJSON := guardsched.AssignmentRecordsToJSON(recs, keys)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":          true,
-		"days":        body.Days,
-		"anchor_date": anchor.Format("2006-01-02"),
-		"shift_hours": zc.ShiftHours,
-		"assignments": assignJSON,
-		"count":       len(assignJSON),
-		"meta": map[string]any{
-			"sim_trials":                     trials,
-			"trial":                          trialMeta,
-			"min_consecutive_free_hours":     minFreeH,
-			"min_free_shifts_after_duty":     minCool,
-			"band_relative":                  bandRel,
-			"shift_cooldown_exclusions":      stats.ShiftCooldownExclusions,
-			"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
-		},
-	})
+	genBody, _ := json.Marshal(planGenerateBody{scheduleRunBody: body, Slot: "01"})
+	r2 := r.Clone(r.Context())
+	r2.Body = io.NopCloser(bytes.NewReader(genBody))
+	r2.ContentLength = int64(len(genBody))
+	s.handlePlanGenerate(w, r2)
 }
 
 func countYAMLSlots(raw []byte) int {

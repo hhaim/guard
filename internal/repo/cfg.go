@@ -140,6 +140,50 @@ type ScheduleReportRow struct {
 	Blocks    int64     `json:"blocks"`
 }
 
+// GetProposalKey returns the cfg key for a planning slot (slot must be "01".."04").
+func GetProposalKey(anchor time.Time, slot string) string {
+	return fmt.Sprintf("proposal-%s-%s", anchor.Format("2006-01-02"), slot)
+}
+
+// ListCfgKeys returns cfg keys with the given prefix.
+func ListCfgKeys(ctx context.Context, pool *db.Pool, prefix string) ([]string, error) {
+	rows, err := pool.Query(ctx, `SELECT key FROM cfg WHERE key LIKE $1 ORDER BY key`, prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
+}
+
+// DeleteCfgByPrefix removes all cfg rows whose key starts with prefix.
+func DeleteCfgByPrefix(ctx context.Context, tx pgx.Tx, prefix string) error {
+	_, err := tx.Exec(ctx, `DELETE FROM cfg WHERE key LIKE $1`, prefix+"%")
+	return err
+}
+
+// DeleteCfgKey removes a single cfg row (no-op if missing).
+func DeleteCfgKey(ctx context.Context, tx pgx.Tx, key string) error {
+	_, err := tx.Exec(ctx, `DELETE FROM cfg WHERE key = $1`, key)
+	return err
+}
+
+// DeleteAllSchedule removes every row from the schedule table.
+func DeleteAllSchedule(ctx context.Context, pool *db.Pool) (int64, error) {
+	tag, err := pool.Exec(ctx, `DELETE FROM schedule`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func ReportBlocksBySoldierDate(ctx context.Context, pool *db.Pool, from, to time.Time) ([]ScheduleReportRow, error) {
 	rows, err := pool.Query(ctx,
 		`SELECT soldier_id, ts_date, COUNT(*)::bigint

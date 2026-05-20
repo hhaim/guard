@@ -1,4 +1,4 @@
-import { Braces, ChevronRight, Plus } from "lucide-react";
+import { Braces, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useDevPanel } from "../context/AppStateContext";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
@@ -14,9 +14,19 @@ import {
   validateShiftHours,
   zoneLocDisplayLabel,
   zonesDocToYamlObject,
+  DEFAULT_FULL_DAY_CONFIG,
+  DEFAULT_WINDOWED_SLOTS_CONFIG,
+  DEFAULT_WINDOWED_WINDOW,
   SLOT_PATTERNS,
+  fullDayConfigToRecord,
+  parseFullDayConfig,
+  parseWindowedSlotsConfig,
+  windowedSlotsConfigToRecord,
+  type FullDayConfig,
   type SlotType,
   type SlotTypePattern,
+  type WindowedSlotsConfig,
+  type WindowedWindow,
   type ZoneLoc,
   type ZoneSlot,
   type ZonesDoc,
@@ -486,12 +496,13 @@ function SlotTypeSheet({
               const pattern = e.target.value as SlotTypePattern;
               const next = { ...d, pattern };
               if (pattern === "full_day" && !next.config) {
-                next.config = { start: "06:00", end: "22:00", rest_after_hours: 6, weight_multiplier: 1 };
+                next.config = fullDayConfigToRecord(DEFAULT_FULL_DAY_CONFIG);
               }
-              if (pattern === "windowed_slots" && !next.config) {
-                next.config = {
-                  slots: [{ name: "w1", start: "00:00", end: "12:00", weight_multiplier: 1 }],
-                };
+              if (pattern === "windowed_slots") {
+                if (!next.config) {
+                  next.config = windowedSlotsConfigToRecord(DEFAULT_WINDOWED_SLOTS_CONFIG);
+                }
+                if (next.rest_after_hours == null) next.rest_after_hours = 6;
               }
               onChange(next);
             }}
@@ -503,22 +514,21 @@ function SlotTypeSheet({
             ))}
           </select>
         </div>
-        {(d.pattern === "full_day" || d.pattern === "windowed_slots") && (
-          <div className="settings-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
-            <span className="settings-row-label title">Config (JSON)</span>
-            <textarea
-              className="dev-json-editor"
-              style={{ minHeight: 120, width: "100%" }}
-              value={JSON.stringify(d.config ?? {}, null, 2)}
-              onChange={(e) => {
-                try {
-                  onChange({ ...d, config: JSON.parse(e.target.value) as Record<string, unknown> });
-                } catch {
-                  /* keep typing */
-                }
-              }}
-            />
-          </div>
+        {d.pattern === "full_day" && (
+          <FullDayConfigFields
+            config={parseFullDayConfig(d.config)}
+            onChange={(cfg) => onChange({ ...d, config: fullDayConfigToRecord(cfg) })}
+          />
+        )}
+        {d.pattern === "windowed_slots" && (
+          <WindowedSlotsConfigFields
+            config={parseWindowedSlotsConfig(d.config)}
+            restAfterHours={d.rest_after_hours ?? 6}
+            fullDayShift={d.full_day_shift ?? 1}
+            onChange={(cfg) => onChange({ ...d, config: windowedSlotsConfigToRecord(cfg) })}
+            onRestAfterHours={(rest_after_hours) => onChange({ ...d, rest_after_hours })}
+            onFullDayShift={(full_day_shift) => onChange({ ...d, full_day_shift })}
+          />
         )}
       </section>
     </ZoneEditSheet>
@@ -647,6 +657,129 @@ function SlotSheet({
         </div>
       </section>
     </ZoneEditSheet>
+  );
+}
+
+function FullDayConfigFields({
+  config,
+  onChange,
+}: {
+  config: FullDayConfig;
+  onChange: (cfg: FullDayConfig) => void;
+}) {
+  return (
+    <>
+      <Field label="Start" value={config.start} autoCapitalize="none" onChange={(start) => onChange({ ...config, start })} />
+      <Field label="End" value={config.end} autoCapitalize="none" onChange={(end) => onChange({ ...config, end })} />
+      <NumField
+        label="Rest after (hours)"
+        value={config.rest_after_hours}
+        onChange={(rest_after_hours) => onChange({ ...config, rest_after_hours })}
+      />
+      <NumField
+        label="Weight multiplier"
+        value={config.weight_multiplier}
+        onChange={(weight_multiplier) => onChange({ ...config, weight_multiplier })}
+      />
+    </>
+  );
+}
+
+function WindowedSlotsConfigFields({
+  config,
+  restAfterHours,
+  fullDayShift,
+  onChange,
+  onRestAfterHours,
+  onFullDayShift,
+}: {
+  config: WindowedSlotsConfig;
+  restAfterHours: number;
+  fullDayShift: number;
+  onChange: (cfg: WindowedSlotsConfig) => void;
+  onRestAfterHours: (h: number) => void;
+  onFullDayShift: (n: number) => void;
+}) {
+  const updateWindow = (index: number, patch: Partial<WindowedWindow>) => {
+    const slots = config.slots.map((w, i) => (i === index ? { ...w, ...patch } : w));
+    onChange({ slots });
+  };
+
+  const removeWindow = (index: number) => {
+    if (config.slots.length <= 1) return;
+    onChange({ slots: config.slots.filter((_, i) => i !== index) });
+  };
+
+  const addWindow = () => {
+    const n = config.slots.length + 1;
+    onChange({
+      slots: [
+        ...config.slots,
+        { ...DEFAULT_WINDOWED_WINDOW, name: `w${n}`, start: "00:00", end: "12:00" },
+      ],
+    });
+  };
+
+  return (
+    <>
+      <NumField label="Rest after (hours)" value={restAfterHours} onChange={onRestAfterHours} />
+      <NumField label="Full day shift" value={fullDayShift} onChange={onFullDayShift} />
+      <div className="slot-type-windows">
+        <div className="slot-type-windows-header">
+          <span className="settings-row-label title">Windows</span>
+          <button type="button" className="btn btn-tinted slot-type-add-window" onPointerDown={() => addWindow()}>
+            Add window
+          </button>
+        </div>
+        {config.slots.map((w, index) => (
+          <div key={index} className="slot-type-window-card">
+            <div className="slot-type-window-card-header">
+              <span className="slot-type-window-card-title">Window {index + 1}</span>
+              {config.slots.length > 1 && (
+                <button
+                  type="button"
+                  className="slot-type-remove-window"
+                  aria-label={`Remove window ${index + 1}`}
+                  onPointerDown={() => removeWindow(index)}
+                >
+                  <Trash2 size={18} strokeWidth={2} />
+                </button>
+              )}
+            </div>
+            <Field label="Name" value={w.name} autoCapitalize="none" onChange={(name) => updateWindow(index, { name })} />
+            <Field label="Start" value={w.start} autoCapitalize="none" onChange={(start) => updateWindow(index, { start })} />
+            <Field label="End" value={w.end} autoCapitalize="none" onChange={(end) => updateWindow(index, { end })} />
+            <NumField
+              label="Weight multiplier"
+              value={w.weight_multiplier}
+              onChange={(weight_multiplier) => updateWindow(index, { weight_multiplier })}
+            />
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function NumField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <Field
+      label={label}
+      value={String(value)}
+      inputMode="decimal"
+      onChange={(v) => {
+        const n = Number(v);
+        if (Number.isFinite(n)) onChange(n);
+      }}
+    />
   );
 }
 

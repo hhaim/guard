@@ -2,11 +2,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPut } from "../api";
+import { fetchPlanContext } from "../api/plan";
 import { useDevPanel } from "../context/AppStateContext";
 import {
+  clampPlanDebugDayOffset,
   DEFAULT_GLOBAL,
   deriveJsonFromForm,
   formFromServerValue,
+  MAX_PLAN_DEBUG_DAY_OFFSET,
   parseFormFromJson,
   type GlobalFormData,
 } from "../lib/globalConfig";
@@ -130,10 +133,19 @@ export function GlobalConfigView() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["cfg", "global"] });
+      qc.invalidateQueries({ queryKey: ["plan", "context"] });
       setDirty(false);
       setJsonOverride(null);
     },
   });
+
+  const previewOffset = clampPlanDebugDayOffset(formData.plan_debug_day_offset);
+  const planPreviewQ = useQuery({
+    queryKey: ["plan", "context", "preview", previewOffset, dirty],
+    queryFn: () =>
+      fetchPlanContext(dirty || previewOffset > 0 ? previewOffset : undefined),
+  });
+  const planPreview = planPreviewQ.data;
 
   return (
     <>
@@ -162,6 +174,24 @@ export function GlobalConfigView() {
             value={formData.random_seed}
             onChange={(n) => updateField("random_seed", n)}
           />
+        </section>
+
+        <section className="glass-card" aria-label="Planning debug">
+          <h2 className="settings-section-header">Planning (debug)</h2>
+          <NumberField
+            label="Days forward"
+            hint={`Simulate effective today +N (0–${MAX_PLAN_DEBUG_DAY_OFFSET}). Testing only; save to apply.`}
+            value={formData.plan_debug_day_offset}
+            onChange={(n) => updateField("plan_debug_day_offset", clampPlanDebugDayOffset(n))}
+          />
+          {planPreview && (
+            <p className="meta-line" style={{ marginTop: "0.75rem" }}>
+              Effective today: <strong>{planPreview.effective_today}</strong> · plan anchor:{" "}
+              <strong>{planPreview.plan_anchor}</strong>
+              {previewOffset > 0 ? ` (+${previewOffset}d)` : null}
+              {!dirty && previewOffset > 0 ? " · saved" : dirty ? " · preview (unsaved)" : null}
+            </p>
+          )}
         </section>
       </div>
 

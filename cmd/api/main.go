@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,7 +31,27 @@ func main() {
 	}
 	defer pool.Close()
 
-	api := &httpapi.Server{Pool: pool, APIKey: os.Getenv("API_KEY")}
+	planDebugOffset := 0
+	if v := strings.TrimSpace(os.Getenv("PLAN_DEBUG_DAY_OFFSET")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			log.Fatalf("invalid PLAN_DEBUG_DAY_OFFSET: %q", v)
+		}
+		planDebugOffset = n
+	}
+	allowDebugOffset := true
+	if v := strings.TrimSpace(os.Getenv("PLAN_ALLOW_DEBUG_OFFSET")); v != "" {
+		allowDebugOffset = v == "1" || strings.EqualFold(v, "true")
+	}
+	api := &httpapi.Server{
+		Pool:               pool,
+		APIKey:             os.Getenv("API_KEY"),
+		PlanDebugDayOffset: planDebugOffset,
+		AllowDebugOffset:   allowDebugOffset,
+	}
+	if planDebugOffset > 0 {
+		log.Printf("plan debug: effective today +%d days (set PLAN_ALLOW_DEBUG_OFFSET=1 to tune per request)", planDebugOffset)
+	}
 	apiMux := http.NewServeMux()
 	api.Register(apiMux)
 
