@@ -4,6 +4,7 @@ import { useState } from "react";
 import { apiGet } from "./api";
 import { AdminUsersView } from "./components/AdminUsersView";
 import { GlobalConfigView } from "./components/GlobalConfigView";
+import { HelpView } from "./components/HelpView";
 import { PlanView } from "./components/PlanView";
 import { StatsView } from "./components/StatsView";
 import { SlotsView } from "./components/SlotsView";
@@ -12,7 +13,7 @@ import { TimeZonesView } from "./components/TimeZonesView";
 import { ZonesDocumentProvider } from "./context/ZonesDocumentContext";
 import { useApiClient } from "./hooks/useApiClient";
 
-type Tab = "soldiers" | "slots" | "global" | "time_zones" | "plan" | "stats" | "users";
+type Tab = "soldiers" | "slots" | "global" | "time_zones" | "plan" | "stats" | "help" | "users";
 
 type MeResponse = { role: string; email: string };
 
@@ -23,12 +24,14 @@ const ADMIN_TABS: { id: Tab; label: string }[] = [
   { id: "time_zones", label: "Time zones" },
   { id: "plan", label: "Plan" },
   { id: "stats", label: "Stats" },
+  { id: "help", label: "Help" },
   { id: "users", label: "Users" },
 ];
 
 const READONLY_TABS: { id: Tab; label: string }[] = [
   { id: "plan", label: "Plan" },
   { id: "stats", label: "Stats" },
+  { id: "help", label: "Help" },
 ];
 
 function SignedInApp() {
@@ -44,6 +47,12 @@ function SignedInApp() {
   const isReadonly = role === "readonly";
   const tabs = isAdmin ? ADMIN_TABS : isReadonly ? READONLY_TABS : [];
   const [tab, setTab] = useState<Tab>(isReadonly ? "plan" : "soldiers");
+  const [helpSection, setHelpSection] = useState<string | null>(null);
+
+  const openHelp = (sectionId?: string) => {
+    if (sectionId) setHelpSection(sectionId);
+    setTab("help");
+  };
 
   if (meQ.isLoading) {
     return <p className="sub">Loading your account…</p>;
@@ -83,10 +92,16 @@ function SignedInApp() {
       <ZonesDocumentProvider>
         {tab === "slots" && <SlotsView />}
         {tab === "time_zones" && <TimeZonesView />}
-        {tab === "plan" && <PlanView readOnly={isReadonly} />}
+        {tab === "plan" && <PlanView readOnly={isReadonly} onOpenHelp={openHelp} />}
         {tab === "stats" && <StatsView />}
       </ZonesDocumentProvider>
       {tab === "global" && <GlobalConfigView />}
+      {tab === "help" && (
+        <HelpView
+          scrollToSection={helpSection}
+          onScrolledToSection={() => setHelpSection(null)}
+        />
+      )}
       {tab === "users" && isAdmin && <AdminUsersView />}
     </>
   );

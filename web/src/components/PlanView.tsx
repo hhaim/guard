@@ -41,7 +41,13 @@ function Field({
   );
 }
 
-export function PlanView({ readOnly = false }: { readOnly?: boolean }) {
+export function PlanView({
+  readOnly = false,
+  onOpenHelp,
+}: {
+  readOnly?: boolean;
+  onOpenHelp?: (sectionId?: string) => void;
+}) {
   const qc = useQueryClient();
   const { doc: zonesDoc, slotsQ, loadError: zonesLoadError } = useZonesDocument();
   const zonesLoading = slotsQ.isLoading;
@@ -326,9 +332,29 @@ export function PlanView({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <div className="run-schedule-layout">
       <section className="glass-card run-form-card">
-        <h2 className="contacts-title" style={{ padding: "0.85rem 1.1rem 0.25rem", margin: 0 }}>
-          Plan schedule
-        </h2>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: "0.5rem",
+            padding: "0.85rem 1.1rem 0.25rem",
+          }}
+        >
+          <h2 className="contacts-title" style={{ margin: 0 }}>
+            Plan schedule
+          </h2>
+          {onOpenHelp ? (
+            <button
+              type="button"
+              className="btn btn-tinted help-plan-link"
+              onClick={() => onOpenHelp("plan-workflow")}
+              title="Open Help: Plan workflow"
+            >
+              ?
+            </button>
+          ) : null}
+        </div>
         <p className="contacts-hint" style={{ margin: "0 0 0.75rem", padding: "0 1.1rem" }}>
           Up to four draft proposals for the next planning day. Pick a slot, generate or edit, save, then apply one
           to the verified schedule.
