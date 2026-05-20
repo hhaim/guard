@@ -68,6 +68,7 @@ type Props = {
   zones: ZonesDoc;
   soldiers: string[];
   onChange: (next: ProposalDoc) => void;
+  readOnly?: boolean;
 };
 
 function ChangeField({
@@ -85,7 +86,7 @@ function ChangeField({
   );
 }
 
-export function PlanChangeTable({ proposal, zones, soldiers, onChange }: Props) {
+export function PlanChangeTable({ proposal, zones, soldiers, onChange, readOnly = false }: Props) {
   const dates = datesInRange(proposal.anchor_date, proposal.days);
   const slots = slotLabels(zones);
   const changes = proposal.changes ?? [];
@@ -164,10 +165,12 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange }: Props) 
             the toolbar stores everything.
           </p>
         </div>
-        <button type="button" className="btn btn-tinted" onClick={addRow}>
-          <Plus size={16} />
-          Add swap
-        </button>
+        {!readOnly ? (
+          <button type="button" className="btn btn-tinted" onClick={addRow}>
+            <Plus size={16} />
+            Add swap
+          </button>
+        ) : null}
       </header>
       {changes.length === 0 ? (
         <p className="contacts-hint" style={{ padding: "0 1rem 1rem" }}>
@@ -202,6 +205,7 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange }: Props) 
                     <select
                       className="settings-input plan-change-input"
                       value={ch.ts_date}
+                      disabled={readOnly}
                       onChange={(e) => updateRow(i, { ts_date: e.target.value })}
                     >
                       {dates.map((d) => (
@@ -216,6 +220,7 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange }: Props) 
                     <select
                       className="settings-input plan-change-input"
                       value={ch.slot}
+                      disabled={readOnly}
                       onChange={(e) => updateRow(i, { slot: e.target.value })}
                     >
                       {slots.map((s) => (
@@ -230,6 +235,7 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange }: Props) 
                     <select
                       className="settings-input plan-change-input"
                       value={ch.shift_index}
+                      disabled={readOnly}
                       onChange={(e) => {
                         const si = Number(e.target.value);
                         const opt = shiftOpts.find((o) => o.shift_index === si);
@@ -255,6 +261,7 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange }: Props) 
                     <select
                       className="settings-input plan-change-input"
                       value={ch.new_soldier_id}
+                      disabled={readOnly}
                       onChange={(e) => updateRow(i, { new_soldier_id: e.target.value })}
                     >
                       {soldiers.map((id) => (
@@ -266,20 +273,22 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange }: Props) 
                   </ChangeField>
                 </div>
 
-                <div className="plan-change-row-actions">
-                  <button type="button" className="btn btn-filled" onClick={() => applyRow(i)}>
-                    Apply swap
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-tinted"
-                    aria-label="Remove swap"
-                    onClick={() => removeRow(i)}
-                  >
-                    <Trash2 size={16} />
-                    Remove
-                  </button>
-                </div>
+                {!readOnly ? (
+                  <div className="plan-change-row-actions">
+                    <button type="button" className="btn btn-filled" onClick={() => applyRow(i)}>
+                      Apply swap
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-tinted"
+                      aria-label="Remove swap"
+                      onClick={() => removeRow(i)}
+                    >
+                      <Trash2 size={16} />
+                      Remove
+                    </button>
+                  </div>
+                ) : null}
               </article>
             );
           })}

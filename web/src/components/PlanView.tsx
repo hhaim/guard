@@ -41,7 +41,7 @@ function Field({
   );
 }
 
-export function PlanView() {
+export function PlanView({ readOnly = false }: { readOnly?: boolean }) {
   const qc = useQueryClient();
   const { doc: zonesDoc, slotsQ, loadError: zonesLoadError } = useZonesDocument();
   const zonesLoading = slotsQ.isLoading;
@@ -368,57 +368,63 @@ export function PlanView() {
             {dirty ? <span className="plan-unsaved-badge">unsaved edits</span> : proposal ? <span className="plan-saved-badge">saved</span> : null}
           </div>
 
-          <div className="plan-actions-group">
-            <span className="run-field-label title">2. Proposal actions</span>
-            <div className="plan-actions-row">
-              <button
-                type="button"
-                className="btn btn-filled"
-                disabled={generateM.isPending || !anchor || planCtxQ.isLoading}
-                onClick={handleGenerate}
-              >
-                {generateM.isPending ? "Generating…" : slotFilled ? "Regenerate" : "Generate new"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-tinted"
-                disabled={!proposal || saveM.isPending}
-                onClick={() => saveM.mutate()}
-              >
-                {saveM.isPending ? "Saving…" : "Save proposal"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-tinted"
-                disabled={!slotFilled || clearM.isPending}
-                onClick={handleClear}
-              >
-                {clearM.isPending ? "Clearing…" : "Clear proposal"}
-              </button>
-            </div>
-            <p className="contacts-hint plan-action-hint">
-              <strong>Generate</strong> runs the simulator into the selected slot. <strong>Save</strong> stores
-              edits (swaps below). <strong>Clear</strong> removes this slot only.
-            </p>
-          </div>
+          {!readOnly ? (
+            <>
+              <div className="plan-actions-group">
+                <span className="run-field-label title">2. Proposal actions</span>
+                <div className="plan-actions-row">
+                  <button
+                    type="button"
+                    className="btn btn-filled"
+                    disabled={generateM.isPending || !anchor || planCtxQ.isLoading}
+                    onClick={handleGenerate}
+                  >
+                    {generateM.isPending ? "Generating…" : slotFilled ? "Regenerate" : "Generate new"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-tinted"
+                    disabled={!proposal || saveM.isPending}
+                    onClick={() => saveM.mutate()}
+                  >
+                    {saveM.isPending ? "Saving…" : "Save proposal"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-tinted"
+                    disabled={!slotFilled || clearM.isPending}
+                    onClick={handleClear}
+                  >
+                    {clearM.isPending ? "Clearing…" : "Clear proposal"}
+                  </button>
+                </div>
+                <p className="contacts-hint plan-action-hint">
+                  <strong>Generate</strong> runs the simulator into the selected slot. <strong>Save</strong> stores
+                  edits (swaps below). <strong>Clear</strong> removes this slot only.
+                </p>
+              </div>
 
-          <div className="plan-actions-group plan-apply-group">
-            <span className="run-field-label title">3. Publish to verified schedule</span>
-            <button
-              type="button"
-              className="btn btn-filled plan-apply-btn"
-              disabled={!proposal || applyM.isPending}
-              onClick={handleApply}
-            >
-              {applyM.isPending
-                ? "Applying…"
-                : `Apply proposal ${selectedSlot} to verified schedule`}
-            </button>
-            <p className="contacts-hint plan-action-hint">
-              Applies <strong>proposal {selectedSlot}</strong> for anchor <strong>{anchor || "…"}</strong> only.
-              Confirms before writing; clears all four proposal slots afterward.
-            </p>
-          </div>
+              <div className="plan-actions-group plan-apply-group">
+                <span className="run-field-label title">3. Publish to verified schedule</span>
+                <button
+                  type="button"
+                  className="btn btn-filled plan-apply-btn"
+                  disabled={!proposal || applyM.isPending}
+                  onClick={handleApply}
+                >
+                  {applyM.isPending
+                    ? "Applying…"
+                    : `Apply proposal ${selectedSlot} to verified schedule`}
+                </button>
+                <p className="contacts-hint plan-action-hint">
+                  Applies <strong>proposal {selectedSlot}</strong> for anchor <strong>{anchor || "…"}</strong> only.
+                  Confirms before writing; clears all four proposal slots afterward.
+                </p>
+              </div>
+            </>
+          ) : (
+            <p className="contacts-hint plan-action-hint">Read-only: you can view proposals and stats but cannot generate, save, or apply.</p>
+          )}
         </div>
 
         <details className="plan-sim-details">
@@ -580,6 +586,7 @@ export function PlanView() {
                 zones={zonesDoc}
                 soldiers={soldierIds}
                 onChange={onProposalChange}
+                readOnly={readOnly}
               />
               {proposal.assignments.length > 0 ? (
                 <ScheduleResultsReport

@@ -34,10 +34,22 @@ function uuid(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function headers(): Record<string, string> {
+type TokenGetter = () => Promise<string | null>;
+let tokenGetter: TokenGetter | null = null;
+
+export function setApiTokenGetter(fn: TokenGetter | null) {
+  tokenGetter = fn;
+}
+
+async function buildHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+  const h: Record<string, string> = { "Content-Type": "application/json", ...extra };
+  if (tokenGetter) {
+    const token = await tokenGetter();
+    if (token) h.Authorization = `Bearer ${token}`;
+  }
   const k = import.meta.env.VITE_API_KEY as string | undefined;
-  if (k) return { "X-API-Key": k };
-  return {};
+  if (k) h["X-API-Key"] = k;
+  return h;
 }
 
 function emitLog(entry: ApiLogEntry, phase: "start" | "update") {
@@ -80,13 +92,10 @@ export async function callApi<T = unknown>(
   };
 
   try {
+    const hdrs = await buildHeaders(options.headers as Record<string, string> | undefined);
     const r = await fetch(`${base}${endpoint}`, {
       ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...headers(),
-        ...(options.headers as Record<string, string> | undefined),
-      },
+      headers: hdrs,
     });
 
     const text = await r.text();

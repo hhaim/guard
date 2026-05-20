@@ -4,6 +4,9 @@ primary_region = "iad"
 
 [build]
   dockerfile = "Dockerfile"
+  # Set publishable key at deploy time, e.g. fly deploy --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_live_...
+  # [build.args]
+  #   VITE_CLERK_PUBLISHABLE_KEY = "pk_live_..."
 
 [http_service]
   internal_port = 8080

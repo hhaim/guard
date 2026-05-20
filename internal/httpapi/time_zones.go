@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"guard/internal/auth"
 	"guard/internal/repo"
 	"guard/internal/timezones"
 )
@@ -120,7 +121,7 @@ func (s *Server) handleTimeZonesCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := repo.AppendAudit(r.Context(), tx, timezones.CfgKey, raw); err != nil {
+	if err := repo.AppendAudit(r.Context(), tx, timezones.CfgKey, raw, auth.Actor(r.Context())); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -222,7 +223,7 @@ func (s *Server) handleTimeZonesPatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := repo.AppendAudit(r.Context(), tx, timezones.CfgKey, raw); err != nil {
+	if err := repo.AppendAudit(r.Context(), tx, timezones.CfgKey, raw, auth.Actor(r.Context())); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -307,7 +308,7 @@ func (s *Server) handleTimeZonesDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := repo.AppendAudit(r.Context(), tx, timezones.CfgKey, raw); err != nil {
+	if err := repo.AppendAudit(r.Context(), tx, timezones.CfgKey, raw, auth.Actor(r.Context())); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

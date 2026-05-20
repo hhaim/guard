@@ -7,6 +7,14 @@ npx neonctl@latest init
 fly.io - using google 
 check 
 
+--- Phase 1 local (Clerk + Postgres RBAC) ---
+1. cp .env.example .env
+2. Fill CLERK_SECRET_KEY, BOOTSTRAP_ADMIN_EMAIL (your Google email), VITE_CLERK_PUBLISHABLE_KEY
+3. Clerk Dashboard: allowed origins http://localhost:8080 and http://localhost:5173; Google sign-in; invitations-only sign-up
+4. docker compose up --build  -> http://localhost:8080
+5. Sign in as bootstrap email -> admin; use Users tab to invite readonly/admin
+Native dev: same .env + go run ./cmd/api ; cd web && cp .env.example to .env.local with VITE_CLERK_PUBLISHABLE_KEY && npm run dev
+
 
 # Add Clerk to React (Vite)
 

@@ -10,3 +10,8 @@ __pycache__/
 # Frontend build + deps
 web/node_modules/
 web/dist/
+
+# Local secrets (Clerk, DB, etc.)
+.env
+web/.env.local
+.git-filter-replace.txt

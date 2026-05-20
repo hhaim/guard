@@ -104,9 +104,13 @@ func UpsertCfg(ctx context.Context, tx pgx.Tx, key string, value json.RawMessage
 	return err
 }
 
-func AppendAudit(ctx context.Context, tx pgx.Tx, key string, newCfg json.RawMessage) error {
+func AppendAudit(ctx context.Context, tx pgx.Tx, key string, newCfg json.RawMessage, actor string) error {
+	var actorVal any
+	if actor != "" {
+		actorVal = actor
+	}
 	_, err := tx.Exec(ctx,
-		`INSERT INTO audit (key, new_cfg) VALUES ($1, $2)`, key, newCfg)
+		`INSERT INTO audit (key, new_cfg, actor) VALUES ($1, $2, $3)`, key, newCfg, actorVal)
 	return err
 }
 

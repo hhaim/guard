@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/clerk/clerk-sdk-go/v2"
+
+	"guard/internal/auth"
 	"guard/internal/db"
 	"guard/internal/httpapi"
 )
@@ -43,23 +46,35 @@ func main() {
 	if v := strings.TrimSpace(os.Getenv("PLAN_ALLOW_DEBUG_OFFSET")); v != "" {
 		allowDebugOffset = v == "1" || strings.EqualFold(v, "true")
 	}
+	clerkSecret := strings.TrimSpace(os.Getenv("CLERK_SECRET_KEY"))
+	var authSvc *auth.Service
+	if clerkSecret != "" {
+		clerk.SetKey(clerkSecret)
+		authSvc = &auth.Service{
+			Pool:                pool,
+			BootstrapAdminEmail: strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_EMAIL")),
+		}
+		log.Print("auth: Clerk JWT enabled on /api/*")
+	} else {
+		log.Print("auth: legacy mode (API_KEY optional); set CLERK_SECRET_KEY for Clerk")
+	}
+
 	api := &httpapi.Server{
 		Pool:               pool,
 		APIKey:             os.Getenv("API_KEY"),
+		Auth:               authSvc,
 		PlanDebugDayOffset: planDebugOffset,
 		AllowDebugOffset:   allowDebugOffset,
 	}
 	if planDebugOffset > 0 {
 		log.Printf("plan debug: effective today +%d days (set PLAN_ALLOW_DEBUG_OFFSET=1 to tune per request)", planDebugOffset)
 	}
-	apiMux := http.NewServeMux()
-	api.Register(apiMux)
 
 	staticDir := os.Getenv("STATIC_DIR")
 	if staticDir == "" {
 		staticDir = "web/dist"
 	}
-	handler := withStatic(apiMux, staticDir)
+	handler := withStatic(api.Handler(), staticDir)
 	handler = corsMiddleware(handler, os.Getenv("CORS_ORIGIN"))
 
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -103,7 +118,7 @@ func corsMiddleware(next http.Handler, origin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

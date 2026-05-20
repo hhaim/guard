@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"guard/internal/auth"
 	"guard/internal/db"
 	"guard/internal/repo"
 )
@@ -17,7 +18,8 @@ import (
 // Server wires HTTP routes to the database pool.
 type Server struct {
 	Pool   *db.Pool
-	APIKey string // optional; if set, require X-API-Key header match
+	APIKey string // legacy: X-API-Key when Clerk auth is disabled
+	Auth   *auth.Service
 
 	// PlanDebugDayOffset shifts "effective today" forward for planning (debug/testing).
 	PlanDebugDayOffset int
@@ -25,7 +27,14 @@ type Server struct {
 	AllowDebugOffset bool
 }
 
+func (s *Server) clerkEnabled() bool {
+	return s.Auth != nil
+}
+
 func (s *Server) auth(w http.ResponseWriter, r *http.Request) bool {
+	if s.clerkEnabled() {
+		return true
+	}
 	if s.APIKey == "" {
 		return true
 	}
@@ -54,6 +63,20 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/plan/apply", s.handlePlanApply)
 	mux.HandleFunc("GET /api/reports/schedule", s.handleReportSchedule)
 	mux.HandleFunc("GET /api/reports/blocks", s.handleReportBlocks)
+	mux.HandleFunc("GET /api/me", s.handleMe)
+	mux.HandleFunc("GET /api/admin/invites", s.handleAdminListInvites)
+	mux.HandleFunc("POST /api/admin/invites", s.handleAdminCreateInvite)
+	mux.HandleFunc("DELETE /api/admin/invites/{id}", s.handleAdminDeleteInvite)
+}
+
+// Handler returns the API mux, wrapped with Clerk auth when configured.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	s.Register(mux)
+	if s.Auth != nil {
+		return s.Auth.Middleware(mux)
+	}
+	return mux
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +135,7 @@ func (s *Server) handlePutCfg(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := repo.AppendAudit(r.Context(), tx, key, body.Value); err != nil {
+	if err := repo.AppendAudit(r.Context(), tx, key, body.Value, auth.Actor(r.Context())); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

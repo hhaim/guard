@@ -1,5 +1,7 @@
 # Build React
 FROM node:22-alpine AS web
+ARG VITE_CLERK_PUBLISHABLE_KEY
+ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
 WORKDIR /src
 COPY web/package.json ./
 RUN npm install
@@ -7,7 +9,7 @@ COPY web/ ./
 RUN npm run build
 
 # Build API
-FROM golang:1.23-alpine AS api
+FROM golang:1.24-alpine AS api
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
