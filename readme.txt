@@ -17,6 +17,11 @@ Native dev: same .env + go run ./cmd/api ; cd web && cp .env.example to .env.loc
 Local DATABASE_URL stays docker @db:5432 (see .env.example). Neon is Fly-only via fly secrets.
 1. Neon: npx neonctl@latest init (optional; or copy pooled URL from Neon console)
 2. npx neonctl@latest connection-string --pooled  -> fly secrets set DATABASE_URL='...?sslmode=require'
+   audit + schedule use 40-day Postgres partition blocks (retain at least 30 days by default).
+   Worst case ~two blocks (~30–80 days) until the prior block is dropped; old blocks use DROP TABLE
+   on each partition (fast). Migrations create guard_retention_maintain(); the API runs it on startup.
+   Optional: enable pg_cron in Neon and migration 000004 schedules 03:15 UTC daily, or cron:
+   DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" guardcli db retention
 3. fly auth login && fly apps create guard-scheduler  (or fly launch --no-deploy)
 4. fly secrets set CLERK_SECRET_KEY BOOTSTRAP_ADMIN_EMAIL CORS_ORIGIN=https://guard-scheduler.fly.dev
    Do not set API_KEY or PLAN_ALLOW_DEBUG_OFFSET on Fly.

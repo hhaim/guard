@@ -34,6 +34,8 @@ func run() int {
 		return 2
 	}
 	switch os.Args[1] {
+	case "db":
+		return runDB(os.Args[2:])
 	case "schedule":
 		return runSchedule(os.Args[2:])
 	case "users":
@@ -52,6 +54,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `guardcli — guard scheduler DB tools
 
 Usage:
+  guardcli db retention [--days 30] [--future-days 7]
   guardcli schedule clear
   guardcli schedule export --end YYYY-MM-DD --days-back N [-o file.yaml]
   guardcli users list
@@ -63,10 +66,57 @@ Environment:
   DATABASE_URL  Postgres connection string (required; use Neon pooled URL for remote)
 
 Examples:
+  guardcli db retention
   guardcli schedule clear
   guardcli schedule export --end 2026-05-19 --days-back 10 -o verified.yaml
   DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" guardcli users invite --email they@example.com --role readonly
 `)
+}
+
+func runDB(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "error: db subcommand required (retention)")
+		return 2
+	}
+	switch args[0] {
+	case "retention":
+		return cmdDBRetention(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "error: unknown db command: %s\n", args[0])
+		return 2
+	}
+}
+
+func cmdDBRetention(args []string) int {
+	fs := flag.NewFlagSet("retention", flag.ExitOnError)
+	days := fs.Int("days", 30, "Minimum calendar days to retain (40-day partition blocks; default 30)")
+	future := fs.Int("future-days", 7, "Pre-create partitions this many days ahead of today")
+	_ = fs.Parse(args)
+	if *days < 1 {
+		fmt.Fprintln(os.Stderr, "error: --days must be >= 1")
+		return 2
+	}
+	if *future < 0 {
+		fmt.Fprintln(os.Stderr, "error: --future-days must be >= 0")
+		return 2
+	}
+
+	pool, err := openPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+
+	var dropped int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT guard_retention_maintain($1, $2)`, *days, *future,
+	).Scan(&dropped); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Printf("retention ok (keep %d days): dropped %d partition(s)\n", *days, dropped)
+	return 0
 }
 
 func runUsers(args []string) int {

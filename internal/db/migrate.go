@@ -82,5 +82,32 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return fmt.Errorf("record migration %s: %w", name, err)
 		}
 	}
+
+	if err := maintainRetention(ctx, pool); err != nil {
+		return err
+	}
+	return nil
+}
+
+// maintainRetention ensures 40-day partition blocks exist and drops blocks past 30-day retention.
+func maintainRetention(ctx context.Context, pool *pgxpool.Pool) error {
+	var hasFn bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_proc p
+			JOIN pg_namespace n ON n.oid = p.pronamespace
+			WHERE n.nspname = 'public' AND p.proname = 'guard_retention_maintain'
+		)`).Scan(&hasFn)
+	if err != nil {
+		return fmt.Errorf("check guard_retention_maintain: %w", err)
+	}
+	if !hasFn {
+		return nil
+	}
+	var dropped int
+	if err := pool.QueryRow(ctx, `SELECT guard_retention_maintain(30, 7)`).Scan(&dropped); err != nil {
+		return fmt.Errorf("guard_retention_maintain: %w", err)
+	}
 	return nil
 }
