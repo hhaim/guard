@@ -4,13 +4,20 @@
 //
 //	guardcli schedule clear
 //	guardcli schedule export --end 2026-05-19 --days-back 14 -o schedule.yaml
+//	guardcli users list
+//	guardcli users invites
+//	guardcli users debug
+//	guardcli users invite --email ADDR --role admin|readonly [--invited-by CLERK_ID] [--replace]
 package main
 
 import (
 	"context"
+	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"guard/internal/db"
@@ -29,6 +36,8 @@ func run() int {
 	switch os.Args[1] {
 	case "schedule":
 		return runSchedule(os.Args[2:])
+	case "users":
+		return runUsers(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -45,14 +54,237 @@ func printUsage() {
 Usage:
   guardcli schedule clear
   guardcli schedule export --end YYYY-MM-DD --days-back N [-o file.yaml]
+  guardcli users list
+  guardcli users invites
+  guardcli users debug
+  guardcli users invite --email ADDR --role admin|readonly [--invited-by CLERK_ID] [--replace]
 
 Environment:
-  DATABASE_URL  Postgres connection string (required)
+  DATABASE_URL  Postgres connection string (required; use Neon pooled URL for remote)
 
 Examples:
   guardcli schedule clear
   guardcli schedule export --end 2026-05-19 --days-back 10 -o verified.yaml
+  DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" guardcli users invite --email they@example.com --role readonly
 `)
+}
+
+func runUsers(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "error: users subcommand required (list|invites|debug|invite)")
+		return 2
+	}
+	switch args[0] {
+	case "list":
+		return cmdUsersList()
+	case "invites":
+		return cmdUsersInvites()
+	case "debug":
+		return cmdUsersDebug()
+	case "invite":
+		return cmdUsersInvite(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "error: unknown users command: %s\n", args[0])
+		return 2
+	}
+}
+
+func cmdUsersList() int {
+	pool, err := openPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+
+	users, err := repo.ListAppUsers(context.Background(), pool)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return writeAppUsersCSV(os.Stdout, users)
+}
+
+func cmdUsersInvites() int {
+	pool, err := openPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+
+	invites, err := repo.ListInvites(context.Background(), pool)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return writeUserInvitesCSV(os.Stdout, invites)
+}
+
+func cmdUsersDebug() int {
+	pool, err := openPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+
+	ctx := context.Background()
+	users, err := repo.ListAppUsers(ctx, pool)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	invites, err := repo.ListInvites(ctx, pool)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stderr, "=== app_users (%d) ===\n", len(users))
+	if writeAppUsersCSV(os.Stdout, users) != 0 {
+		return 1
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "=== user_invites (%d) ===\n", len(invites))
+	if writeUserInvitesCSV(os.Stdout, invites) != 0 {
+		return 1
+	}
+	return 0
+}
+
+func cmdUsersInvite(args []string) int {
+	fs := flag.NewFlagSet("invite", flag.ExitOnError)
+	email := fs.String("email", "", "Invitee email (must match Clerk sign-in)")
+	role := fs.String("role", "readonly", "Role: admin or readonly")
+	invitedBy := fs.String("invited-by", "", "Admin clerk_user_id (default: first admin in DB)")
+	replace := fs.Bool("replace", false, "Delete existing invite rows for this email first")
+	_ = fs.Parse(args)
+
+	if strings.TrimSpace(*email) == "" {
+		fmt.Fprintln(os.Stderr, "error: --email is required")
+		return 2
+	}
+	if err := repo.ValidateRole(strings.TrimSpace(*role)); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+
+	pool, err := openPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+
+	ctx := context.Background()
+	inviter := strings.TrimSpace(*invitedBy)
+	if inviter == "" {
+		inviter, err = repo.FirstAdminClerkID(ctx, pool)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error: no admin in app_users; set --invited-by")
+			return 2
+		}
+	}
+
+	if *replace {
+		n, err := repo.DeleteInvitesByEmail(ctx, pool, *email)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+		if n > 0 {
+			fmt.Fprintf(os.Stderr, "removed %d existing invite(s) for %s\n", n, strings.ToLower(strings.TrimSpace(*email)))
+		}
+	}
+
+	inv, err := repo.CreateInvite(ctx, pool, *email, *role, inviter, nil)
+	if err != nil {
+		if errors.Is(err, repo.ErrDuplicateEmail) {
+			fmt.Fprintln(os.Stderr, "error: email already has an invite (use --replace to overwrite)")
+			return 2
+		}
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stderr, "created pending invite id=%d email=%s role=%s invited_by=%s\n",
+		inv.ID, inv.Email, inv.Role, inv.InvitedBy)
+	fmt.Fprintln(os.Stderr, "invitee must sign in with this exact email; then run: guardcli users debug")
+	return 0
+}
+
+func writeAppUsersCSV(w *os.File, users []repo.AppUser) int {
+	cw := csv.NewWriter(w)
+	if err := cw.Write([]string{"clerk_user_id", "email", "role", "created_at", "invited_by"}); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	for _, u := range users {
+		invitedBy := ""
+		if u.InvitedBy != nil {
+			invitedBy = *u.InvitedBy
+		}
+		if err := cw.Write([]string{
+			u.ClerkUserID,
+			u.Email,
+			u.Role,
+			u.CreatedAt.UTC().Format(time.RFC3339),
+			invitedBy,
+		}); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
+}
+
+func writeUserInvitesCSV(w *os.File, invites []repo.UserInvite) int {
+	cw := csv.NewWriter(w)
+	if err := cw.Write([]string{
+		"id", "email", "role", "invited_by", "clerk_invitation_id", "created_at", "accepted_at", "pending",
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	for _, inv := range invites {
+		clerkInvID := ""
+		if inv.ClerkInvitationID != nil {
+			clerkInvID = *inv.ClerkInvitationID
+		}
+		acceptedAt := ""
+		if inv.AcceptedAt != nil {
+			acceptedAt = inv.AcceptedAt.UTC().Format(time.RFC3339)
+		}
+		pending := "true"
+		if inv.AcceptedAt != nil {
+			pending = "false"
+		}
+		if err := cw.Write([]string{
+			fmt.Sprintf("%d", inv.ID),
+			inv.Email,
+			inv.Role,
+			inv.InvitedBy,
+			clerkInvID,
+			inv.CreatedAt.UTC().Format(time.RFC3339),
+			acceptedAt,
+			pending,
+		}); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
 }
 
 func runSchedule(args []string) int {

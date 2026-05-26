@@ -59,6 +59,27 @@ func GetUserByClerkID(ctx context.Context, pool *db.Pool, clerkUserID string) (*
 	return &u, nil
 }
 
+func ListAppUsers(ctx context.Context, pool *db.Pool) ([]AppUser, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT clerk_user_id, email, role, created_at, invited_by FROM app_users ORDER BY created_at`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AppUser
+	for rows.Next() {
+		var u AppUser
+		var invitedBy *string
+		if err := rows.Scan(&u.ClerkUserID, &u.Email, &u.Role, &u.CreatedAt, &invitedBy); err != nil {
+			return nil, err
+		}
+		u.InvitedBy = invitedBy
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func CountAdmins(ctx context.Context, pool *db.Pool) (int64, error) {
 	var n int64
 	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM app_users WHERE role = 'admin'`).Scan(&n)
@@ -197,6 +218,28 @@ func CreateInvite(ctx context.Context, pool *db.Pool, email, role, invitedBy str
 	inv.ClerkInvitationID = clerkInvID
 	inv.AcceptedAt = acceptedAt
 	return &inv, nil
+}
+
+// DeleteInvitesByEmail removes all invites for the email (repair / replace).
+func DeleteInvitesByEmail(ctx context.Context, pool *db.Pool, email string) (int64, error) {
+	email = normalizeEmail(email)
+	tag, err := pool.Exec(ctx, `DELETE FROM user_invites WHERE lower(email) = $1`, email)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// FirstAdminClerkID returns the clerk_user_id of any admin, or ErrUserNotFound.
+func FirstAdminClerkID(ctx context.Context, pool *db.Pool) (string, error) {
+	var id string
+	err := pool.QueryRow(ctx,
+		`SELECT clerk_user_id FROM app_users WHERE role = 'admin' ORDER BY created_at LIMIT 1`,
+	).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrUserNotFound
+	}
+	return id, err
 }
 
 func DeletePendingInvite(ctx context.Context, pool *db.Pool, id int64) error {

@@ -11,6 +11,9 @@ __pycache__/
 web/node_modules/
 web/dist/
 
+# Neon CLI local project link (Fly deploy uses fly secrets, not this)
+.neon/
+
 # Local secrets (Clerk, DB, etc.)
 .env
 web/.env.local

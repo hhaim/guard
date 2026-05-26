@@ -1,6 +1,7 @@
 # Fly.io scale-to-zero: set min_machines_running = 0 and enable auto start/stop.
 app = "guard-scheduler"
-primary_region = "iad"
+# Closest Fly region to Israel (no TLV/Middle East DC on Fly).
+primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"

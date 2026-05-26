@@ -60,7 +60,13 @@ func (s *Service) Middleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	}))
-	return clerkHandler
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		clerkHandler.ServeHTTP(w, r)
+	})
 }
 
 func (s *Service) syncUser(ctx context.Context, clerkUserID, email string) (*User, error) {

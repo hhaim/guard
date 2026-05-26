@@ -17,7 +17,7 @@ Commands:
   build-cli     Build guardcli DB tool (bin/guardcli)
   build-all     Build UI, backend, and Docker images
   sim           Run guardsim CLI (pass args after sim)
-  cli           Run guardcli (pass args after cli)
+  cli           Run guardcli (pass args after cli; e.g. users list)
   test          Run Go unit tests and Python pytest suite
   run           Start the stack (docker compose up)
   help          Show this help (--help, -h)
@@ -30,6 +30,7 @@ Examples:
   ./b test
   ./b run
   ./b run --build          # pass extra args to docker compose up
+  DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" ./b cli users list
 EOF
 }
 
