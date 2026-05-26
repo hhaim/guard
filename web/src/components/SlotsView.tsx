@@ -12,6 +12,8 @@ import {
   slotCountForLocation,
   slotDisplayLabel,
   validateShiftHours,
+  validateSlotTypePattern,
+  PATTERN_WALL_CLOCK_HINT,
   zoneLocDisplayLabel,
   zonesDocToYamlObject,
   DEFAULT_FULL_DAY_CONFIG,
@@ -455,11 +457,12 @@ function SlotTypeSheet({
 }) {
   if (!edit) return null;
   const d = edit.draft;
+  const patternError = validateSlotTypePattern(d);
   return (
     <ZoneEditSheet
       open
       title={edit.mode === "new" ? "New slot type" : "Edit"}
-      canDone={!!d.id.trim() && !!d.name.trim()}
+      canDone={!!d.id.trim() && !!d.name.trim() && !patternError}
       onDone={onDone}
       onCancel={onCancel}
       footer={
@@ -520,6 +523,14 @@ function SlotTypeSheet({
             onRestAfterHours={(rest_after_hours) => onChange({ ...d, rest_after_hours })}
             onFullDayShift={(full_day_shift) => onChange({ ...d, full_day_shift })}
           />
+        )}
+        {patternError && (
+          <p className="err slot-type-pattern-err" role="alert">
+            {patternError}
+          </p>
+        )}
+        {(d.pattern === "full_day" || d.pattern === "windowed_slots") && !patternError && (
+          <p className="contacts-hint slot-type-grid-hint">{PATTERN_WALL_CLOCK_HINT}</p>
         )}
       </section>
     </ZoneEditSheet>
@@ -660,8 +671,20 @@ function FullDayConfigFields({
 }) {
   return (
     <>
-      <Field label="Start" value={config.start} autoCapitalize="none" onChange={(start) => onChange({ ...config, start })} />
-      <Field label="End" value={config.end} autoCapitalize="none" onChange={(end) => onChange({ ...config, end })} />
+      <Field
+        label="Start"
+        hint={PATTERN_WALL_CLOCK_HINT}
+        value={config.start}
+        autoCapitalize="none"
+        onChange={(start) => onChange({ ...config, start })}
+      />
+      <Field
+        label="End"
+        hint={PATTERN_WALL_CLOCK_HINT}
+        value={config.end}
+        autoCapitalize="none"
+        onChange={(end) => onChange({ ...config, end })}
+      />
       <NumField
         label="Rest after (hours)"
         value={config.rest_after_hours}
@@ -738,8 +761,20 @@ function WindowedSlotsConfigFields({
               )}
             </div>
             <Field label="Name" value={w.name} autoCapitalize="none" onChange={(name) => updateWindow(index, { name })} />
-            <Field label="Start" value={w.start} autoCapitalize="none" onChange={(start) => updateWindow(index, { start })} />
-            <Field label="End" value={w.end} autoCapitalize="none" onChange={(end) => updateWindow(index, { end })} />
+            <Field
+              label="Start"
+              hint={PATTERN_WALL_CLOCK_HINT}
+              value={w.start}
+              autoCapitalize="none"
+              onChange={(start) => updateWindow(index, { start })}
+            />
+            <Field
+              label="End"
+              hint={PATTERN_WALL_CLOCK_HINT}
+              value={w.end}
+              autoCapitalize="none"
+              onChange={(end) => updateWindow(index, { end })}
+            />
             <NumField
               label="Weight multiplier"
               value={w.weight_multiplier}
@@ -776,12 +811,14 @@ function NumField({
 
 function Field({
   label,
+  hint,
   value,
   onChange,
   autoCapitalize = "words",
   inputMode = "text",
 }: {
   label: string;
+  hint?: string;
   value: string;
   onChange: (v: string) => void;
   autoCapitalize?: "off" | "words" | "none";
@@ -791,6 +828,7 @@ function Field({
     <div className="settings-row">
       <label className="settings-row-label">
         <span className="title">{label}</span>
+        {hint ? <span className="hint">{hint}</span> : null}
       </label>
       <input
         className="settings-input settings-input-wide"

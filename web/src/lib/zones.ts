@@ -163,6 +163,72 @@ export function validateShiftHours(value: number): number {
   return n;
 }
 
+export type ParseWallClockHourResult =
+  | { ok: true; hour: number }
+  | { ok: false; error: string };
+
+/** Parse HH:MM wall-clock (whole hours only). Optional 24:00 when allow24. */
+export function parseWallClockHour(s: string, opts?: { allow24?: boolean }): ParseWallClockHourResult {
+  const raw = s.trim();
+  if (!raw) {
+    return { ok: false, error: "Time is required (HH:MM)" };
+  }
+  const m = /^(\d{1,2})(?::(\d{2}))?$/.exec(raw);
+  if (!m) {
+    return { ok: false, error: `Invalid time ${JSON.stringify(s)} (use HH:MM)` };
+  }
+  const hour = Number(m[1]);
+  const min = m[2] != null ? Number(m[2]) : 0;
+  if (!Number.isFinite(hour) || !Number.isFinite(min)) {
+    return { ok: false, error: `Invalid time ${JSON.stringify(s)}` };
+  }
+  if (min !== 0) {
+    return { ok: false, error: `${s} must use whole hours (:00 only)` };
+  }
+  if (hour === 24) {
+    if (!opts?.allow24) {
+      return { ok: false, error: "24:00 is only allowed as a window end" };
+    }
+    return { ok: true, hour: 24 };
+  }
+  if (hour < 0 || hour > 23) {
+    return { ok: false, error: `Hour out of range in ${JSON.stringify(s)}` };
+  }
+  return { ok: true, hour };
+}
+
+export const PATTERN_WALL_CLOCK_HINT =
+  "Whole hours only (HH:00). Minutes must be :00; use 24:00 for window end.";
+
+/** Validate full_day / windowed_slots wall-clock times (whole hours; matches simulator). */
+export function validateSlotTypePattern(st: SlotType): string | null {
+  const label = st.name.trim() || st.id || "slot type";
+
+  if (st.pattern === "full_day") {
+    const cfg = parseFullDayConfig(st.config);
+    const start = parseWallClockHour(cfg.start);
+    if (!start.ok) return `full_day "${label}": start — ${start.error}`;
+    const end = parseWallClockHour(cfg.end);
+    if (!end.ok) return `full_day "${label}": end — ${end.error}`;
+    return null;
+  }
+
+  if (st.pattern === "windowed_slots") {
+    const cfg = parseWindowedSlotsConfig(st.config);
+    for (let i = 0; i < cfg.slots.length; i++) {
+      const w = cfg.slots[i];
+      const wn = w.name.trim() || `window ${i + 1}`;
+      const start = parseWallClockHour(w.start);
+      if (!start.ok) return `windowed_slots "${label}" ${wn}: start — ${start.error}`;
+      const end = parseWallClockHour(w.end, { allow24: true });
+      if (!end.ok) return `windowed_slots "${label}" ${wn}: end — ${end.error}`;
+    }
+    return null;
+  }
+
+  return null;
+}
+
 function parseShiftHours(raw: unknown, fallback: number): number {
   if (raw == null || raw === "") return normalizeShiftHours(fallback);
   return normalizeShiftHours(asNum(raw, fallback), fallback);
@@ -407,6 +473,10 @@ export function validateZonesDoc(doc: ZonesDoc): string | null {
     if (!tz.id) return "Time zone missing id";
     if (tzIds.has(tz.id)) return `Duplicate time zone id: ${tz.id}`;
     tzIds.add(tz.id);
+  }
+  for (const st of doc.slots_types) {
+    const patErr = validateSlotTypePattern(st);
+    if (patErr) return patErr;
   }
   return null;
 }

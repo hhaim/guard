@@ -36,7 +36,8 @@ export function SlotsGuide() {
               <strong>full_day</strong>
             </td>
             <td>
-              <code>start</code>, <code>end</code>, <code>rest_after_hours</code>, <code>weight_multiplier</code>
+              <code>start</code>, <code>end</code> (whole hours, <code>HH:00</code>), <code>rest_after_hours</code>,{" "}
+              <code>weight_multiplier</code>
             </td>
             <td>One soldier per day for the duty window; marks busy through rest</td>
           </tr>
@@ -76,6 +77,11 @@ export function SlotsGuide() {
       <p>
         <strong>Fill order</strong> in the simulator: full_day → windowed_slots → rotating (rotating fills remaining
         blocks).
+      </p>
+      <p className="contacts-hint">
+        <strong>Wall-clock times</strong> for full day and windowed patterns must be whole hours (<code>HH:00</code>;
+        <code>24:00</code> allowed for window ends). The Slots tab JSON editor and slot-type form check this before save
+        so simulation and plan generation do not fail.
       </p>
       <p className="contacts-hint">
         Use <strong>Save slots</strong> on the Slots tab and <strong>Save time zones</strong> on the Time zones tab before
