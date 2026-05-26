@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Braces, ChevronRight, Download, Plus, Save, Upload } from "lucide-react";
+import { Braces, Download, Plus, Save, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPut } from "../api";
 import { useDevPanel } from "../context/AppStateContext";
@@ -14,6 +14,7 @@ import {
   type SoldiersDoc,
 } from "../lib/soldiers";
 import { downloadText, pickTextFile } from "../lib/fileIo";
+import { ContactsRowEditButton } from "./ContactsRowEdit";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { SoldierEditorSheet } from "./SoldierEditorSheet";
 
@@ -179,36 +180,31 @@ export function SoldiersView() {
             type="button"
             className="btn btn-tinted contacts-json-btn"
             aria-label="Show JSON debug panel"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              openPanel("json");
-            }}
+            onClick={() => openPanel("json")}
           >
             <Braces size={18} strokeWidth={2} />
-            JSON
+            <span className="contacts-json-btn-label">JSON</span>
           </button>
           <button
             type="button"
             className="btn btn-tinted contacts-json-btn"
             aria-label="Export soldiers JSON"
-            onPointerDown={(e) => {
-              e.preventDefault();
+            onClick={() =>
               downloadText(
                 `soldiers-${new Date().toISOString().slice(0, 10)}.json`,
                 JSON.stringify(liveJson, null, 2),
                 "application/json"
-              );
-            }}
+              )
+            }
           >
             <Download size={18} strokeWidth={2} />
-            Export
+            <span className="contacts-json-btn-label">Export</span>
           </button>
           <button
             type="button"
             className="btn btn-tinted contacts-json-btn"
             aria-label="Import soldiers JSON"
-            onPointerDown={async (e) => {
-              e.preventDefault();
+            onClick={async () => {
               try {
                 const text = await pickTextFile(".json,application/json");
                 if (!confirm("Import soldiers JSON? This replaces the current list.")) return;
@@ -222,7 +218,7 @@ export function SoldiersView() {
             }}
           >
             <Upload size={18} strokeWidth={2} />
-            Import
+            <span className="contacts-json-btn-label">Import</span>
           </button>
           <button
             type="button"
@@ -274,15 +270,10 @@ export function SoldiersView() {
                   <td>
                     <span className={`contacts-state${onBase ? " on-base" : ""}`}>{stateLabel(s.state)}</span>
                   </td>
-                  <td
-                    className="contacts-chevron"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      openEditor(index);
-                    }}
-                  >
-                    <ChevronRight size={18} strokeWidth={2} aria-label="Edit soldier" />
-                  </td>
+                  <ContactsRowEditButton
+                    label={`Edit ${s.full_name.trim() || s.id}`}
+                    onEdit={() => openEditor(index)}
+                  />
                 </tr>
               );
             })}
@@ -290,7 +281,7 @@ export function SoldiersView() {
         </table>
       </section>
 
-      <p className="contacts-hint">Double-click a row to edit · tap › on iPhone</p>
+      <p className="contacts-hint">Double-click a row to edit, or tap the › button</p>
 
       <div className="btn-row">
         <button

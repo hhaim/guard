@@ -54,10 +54,7 @@ export function DevPanelTrigger({ onOpen }: { onOpen: () => void }) {
       type="button"
       className="dev-trigger"
       aria-label="Open developer panel"
-      onPointerDown={(e) => {
-        e.preventDefault();
-        onOpen();
-      }}
+      onClick={() => onOpen()}
     >
       <Braces size={18} strokeWidth={2} />
       <span>{"{ }"}</span>

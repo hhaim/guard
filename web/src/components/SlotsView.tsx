@@ -1,4 +1,4 @@
-import { Braces, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { Braces, Plus, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useDevPanel } from "../context/AppStateContext";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
@@ -31,6 +31,7 @@ import {
   type ZoneSlot,
   type ZonesDoc,
 } from "../lib/zones";
+import { ContactsRowEditButton } from "./ContactsRowEdit";
 import { ConfigSaveBar } from "./ConfigSaveBar";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { ZoneEditSheet } from "./ZoneEditSheet";
@@ -129,18 +130,17 @@ export function SlotsView() {
           <button
             type="button"
             className="btn btn-tinted contacts-json-btn"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              openPanel("json");
-            }}
+            onClick={() => openPanel("json")}
           >
             <Braces size={18} strokeWidth={2} />
-            JSON
+            <span className="contacts-json-btn-label">JSON</span>
           </button>
         </div>
       </header>
 
       <ZonesYamlToolbar disabled={slotsQ.isLoading} doc={doc} onImport={(d) => replaceDoc(d)} />
+
+      <p className="contacts-hint contacts-list-hint">Double-click a row to edit, or tap the › button</p>
 
       {loadError && <div className="err glass-card">{loadError}</div>}
 
@@ -428,16 +428,7 @@ function EntityTable({
                     {i === 1 ? <code>{c}</code> : c}
                   </td>
                 ))}
-                <td
-                  className="contacts-chevron"
-                  title={row.inUse ? row.inUseMsg : undefined}
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    onEdit(row.index);
-                  }}
-                >
-                  <ChevronRight size={18} strokeWidth={2} />
-                </td>
+                <ContactsRowEditButton onEdit={() => onEdit(row.index)} />
               </tr>
             ))}
           </tbody>

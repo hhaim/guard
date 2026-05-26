@@ -1,8 +1,9 @@
-import { Braces, ChevronRight, Plus } from "lucide-react";
+import { Braces, Plus } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useDevPanel } from "../context/AppStateContext";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
 import { emptyTimeBand, zonesDocToYamlObject, type TimeBand } from "../lib/zones";
+import { ContactsRowEditButton } from "./ContactsRowEdit";
 import { ConfigSaveBar } from "./ConfigSaveBar";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { ZoneEditSheet } from "./ZoneEditSheet";
@@ -86,13 +87,10 @@ export function TimeZonesView() {
           <button
             type="button"
             className="btn btn-tinted contacts-json-btn"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              openPanel("json");
-            }}
+            onClick={() => openPanel("json")}
           >
             <Braces size={18} strokeWidth={2} />
-            JSON
+            <span className="contacts-json-btn-label">JSON</span>
           </button>
           <button
             type="button"
@@ -149,15 +147,10 @@ export function TimeZonesView() {
                     {t.from_hour}:00 – {t.to_hour}:00
                   </td>
                   <td>{t.weight}</td>
-                  <td
-                    className="contacts-chevron"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      setEdit({ mode: "edit", index, draft: { ...t } });
-                    }}
-                  >
-                    <ChevronRight size={18} strokeWidth={2} />
-                  </td>
+                  <ContactsRowEditButton
+                    label={`Edit ${t.name}`}
+                    onEdit={() => setEdit({ mode: "edit", index, draft: { ...t } })}
+                  />
                 </tr>
               ))}
             </tbody>
@@ -165,7 +158,7 @@ export function TimeZonesView() {
         )}
       </section>
 
-      <p className="contacts-hint">Double-click to edit · tap › on iPhone</p>
+      <p className="contacts-hint">Double-click a row to edit, or tap the › button</p>
 
       <ConfigSaveBar
         label="Save time zones"

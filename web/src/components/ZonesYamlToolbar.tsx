@@ -33,25 +33,19 @@ export function ZonesYamlToolbar({ disabled, onImport, doc }: ZonesYamlToolbarPr
         type="button"
         className="btn btn-tinted"
         disabled={disabled}
-        onPointerDown={(e) => {
-          e.preventDefault();
-          importYaml();
-        }}
+        onClick={() => importYaml()}
       >
         <Upload size={16} strokeWidth={2} />
-        Import YAML
+        <span className="zones-io-label">Import YAML</span>
       </button>
       <button
         type="button"
         className="btn btn-tinted"
         disabled={disabled || !doc}
-        onPointerDown={(e) => {
-          e.preventDefault();
-          exportYaml();
-        }}
+        onClick={() => exportYaml()}
       >
         <Download size={16} strokeWidth={2} />
-        Export YAML
+        <span className="zones-io-label">Export YAML</span>
       </button>
     </div>
   );
