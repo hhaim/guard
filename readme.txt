@@ -1,4 +1,9 @@
+1) review the tables 
+2) add soldiers timing + simulation yaml files 
+3) notions of days per slot 
+4) 
 
+================
 
 --- Phase 1 local (Clerk + Postgres RBAC) ---
 1. cp .env.example .env

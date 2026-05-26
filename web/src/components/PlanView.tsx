@@ -11,13 +11,14 @@ import {
   listProposals,
   saveProposal,
   type PlanGenerateParams,
-  type ProposalDoc,
+  type PlanDoc,
 } from "../api/plan";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
+import { planDocFromGenerate } from "../lib/planDoc";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
 import { downloadPlanReportPdf } from "../lib/planPdfExport";
-import { PlanChangeTable } from "./PlanChangeTable";
-import { ScheduleResultsReport, soldiersFromCfg } from "./ScheduleResultsReport";
+import { PlanDocView } from "./PlanDocView";
+import { soldiersFromCfg } from "./ScheduleResultsReport";
 
 const SLOT_KEY = "guard-plan-slot";
 
@@ -73,7 +74,7 @@ export function PlanView({
   const [bandRelative, setBandRelative] = useState(0.2);
   const [simTrials, setSimTrials] = useState(1);
   const [seed, setSeed] = useState("");
-  const [proposal, setProposal] = useState<ProposalDoc | null>(null);
+  const [proposal, setProposal] = useState<PlanDoc | null>(null);
   const [cfgVersion, setCfgVersion] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -185,17 +186,7 @@ export function PlanView({
   const generateM = useMutation({
     mutationFn: () => generatePlan(buildParams()),
     onSuccess: (data) => {
-      const p: ProposalDoc =
-        data.proposal ??
-        ({
-          format_version: 1,
-          anchor_date: data.anchor_date,
-          days: data.days,
-          shift_hours: data.shift_hours,
-          assignments: data.assignments,
-          meta: data.meta,
-          changes: data.changes ?? [],
-        } as ProposalDoc);
+      const p = data.proposal ?? planDocFromGenerate(data);
       setProposal(p);
       setDirty(false);
       setErrorMsg(null);
@@ -247,13 +238,29 @@ export function PlanView({
       setProposal(null);
       setCfgVersion(0);
       setDirty(false);
-      setStatusMsg(`Applied proposal ${selectedSlot} to verified schedule (${data.rows_written} rows). All proposals cleared.`);
+      setStatusMsg(
+        `Applied proposal ${selectedSlot} to verified schedule (${data.dates_written.length} day(s): ${data.dates_written.join(", ")}). All proposals cleared.`
+      );
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor] });
     },
-    onError: (e) => setErrorMsg(e instanceof Error ? e.message : "Apply failed"),
+    onError: (e) => {
+      const raw = e instanceof Error ? e.message : "Apply failed";
+      try {
+        const body = JSON.parse(raw) as { conflicting_dates?: string[] };
+        if (body.conflicting_dates?.length) {
+          setErrorMsg(
+            `Cannot apply: verified schedule already exists for ${body.conflicting_dates.join(", ")}. Delete those days first (admin).`
+          );
+          return;
+        }
+      } catch {
+        /* not JSON */
+      }
+      setErrorMsg(raw);
+    },
   });
 
-  const onProposalChange = (next: ProposalDoc) => {
+  const onProposalChange = (next: PlanDoc) => {
     setProposal(next);
     setDirty(true);
   };
@@ -287,7 +294,7 @@ export function PlanView({
       `Assignments: ${proposal.assignments.length}`,
       `Shift hours: ${proposal.shift_hours}`,
       "",
-      "This writes duties to the schedule database and deletes ALL proposal drafts (01–04).",
+      "This writes one verified day per planning date (fails if any date already exists). Deletes ALL proposal drafts (01–04).",
     ].join("\n");
     if (!window.confirm(msg)) return;
     applyM.mutate();
@@ -606,28 +613,14 @@ export function PlanView({
             <p className="msg-err">Cannot render schedule tables: {zonesLoadError}</p>
           )}
           {proposal && !zonesLoading && zonesDoc && (
-            <>
-              <PlanChangeTable
-                proposal={proposal}
-                zones={zonesDoc}
-                soldiers={soldierIds}
-                onChange={onProposalChange}
-                readOnly={readOnly}
-              />
-              {proposal.assignments.length > 0 ? (
-                <ScheduleResultsReport
-                  assignments={proposal.assignments}
-                  days={proposal.days}
-                  shiftHours={proposal.shift_hours}
-                  zones={zonesDoc}
-                  meta={proposal.meta}
-                  soldierIds={soldierIds}
-                  soldiers={soldiers}
-                />
-              ) : (
-                <p className="contacts-empty">No assignments in proposal.</p>
-              )}
-            </>
+            <PlanDocView
+              plan={proposal}
+              zones={zonesDoc}
+              soldierIds={soldierIds}
+              soldiers={soldiers}
+              onPlanChange={readOnly ? undefined : onProposalChange}
+              readOnly={readOnly}
+            />
           )}
         </div>
       </section>

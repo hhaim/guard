@@ -17,7 +17,7 @@ export function PlanWorkflowGuide() {
           <strong>Save proposal</strong> — persists the draft and manual edits.
         </li>
         <li>
-          <strong>Apply to verified schedule</strong> — confirms, writes duties for the anchor date, then{" "}
+          <strong>Apply to verified schedule</strong> — confirms, writes one row per calendar day (insert-only; 409 if a day already exists), then{" "}
           <strong>clears all four proposal slots</strong>.
         </li>
       </ol>

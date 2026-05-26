@@ -5,9 +5,11 @@ import { apiGet, callApi } from "../api";
 import { fetchPlanContext, type PlanContext } from "../api/plan";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
 import { planDebugDayOffsetFromValue } from "../lib/globalConfig";
+import { planDocFromGenerate } from "../lib/planDoc";
 import type { ScheduleAssignment } from "../lib/scheduleReport";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
-import { ScheduleResultsReport, soldiersFromCfg } from "./ScheduleResultsReport";
+import { PlanDocView } from "./PlanDocView";
+import { soldiersFromCfg } from "./ScheduleResultsReport";
 
 export type ScheduleRunParams = {
   anchor_date: string;
@@ -292,19 +294,13 @@ export function RunScheduleView() {
           {result?.ok && !zonesLoading && zonesLoadError && (
             <p className="msg-err">Cannot render schedule tables: {zonesLoadError}</p>
           )}
-          {result?.ok && !zonesLoading && zonesDoc && result.assignments.length > 0 && (
-            <ScheduleResultsReport
-              assignments={result.assignments}
-              days={result.days}
-              shiftHours={result.shift_hours}
+          {result?.ok && !zonesLoading && zonesDoc && (
+            <PlanDocView
+              plan={planDocFromGenerate(result)}
               zones={zonesDoc}
-              meta={result.meta}
               soldierIds={soldierIds}
               soldiers={soldiers}
             />
-          )}
-          {result?.ok && !zonesLoading && zonesDoc && result.assignments.length === 0 && (
-            <p className="contacts-empty">No assignments returned.</p>
           )}
           {result && !result.ok && (
             <p className="msg-err">{result.error ?? "Schedule run failed"}</p>

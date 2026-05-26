@@ -16,7 +16,7 @@ type Pool struct {
 	*pgxpool.Pool
 }
 
-// Connect opens a pool and applies embedded migrations (idempotent CREATE IF NOT EXISTS).
+// Connect opens a pool and applies embedded migrations (each file runs once; tracked in schema_migrations).
 func Connect(ctx context.Context, databaseURL string) (*Pool, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -35,23 +35,3 @@ func Connect(ctx context.Context, databaseURL string) (*Pool, error) {
 	return &Pool{Pool: pool}, nil
 }
 
-// Migrate runs all SQL files in order from embed.FS.
-func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	entries, err := migrationsFS.ReadDir("migrations")
-	if err != nil {
-		return fmt.Errorf("read migrations dir: %w", err)
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		b, err := migrationsFS.ReadFile("migrations/" + e.Name())
-		if err != nil {
-			return fmt.Errorf("read migration %s: %w", e.Name(), err)
-		}
-		if _, err := pool.Exec(ctx, string(b)); err != nil {
-			return fmt.Errorf("exec migration %s: %w", e.Name(), err)
-		}
-	}
-	return nil
-}

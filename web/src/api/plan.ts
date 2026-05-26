@@ -1,25 +1,10 @@
 import { apiDelete, apiGet, callApi } from "../api";
-import type { ScheduleAssignment } from "../lib/scheduleReport";
+import type { PlanChange, PlanDoc, ScheduleAssignment } from "../lib/planDoc";
+import { normalizePlanDoc, planDocFromGenerate } from "../lib/planDoc";
 
-export type PlanChange = {
-  ts_date: string;
-  slot: string;
-  shift_index: number;
-  shift_label?: string;
-  old_soldier_id: string;
-  new_soldier_id: string;
-};
-
-export type ProposalDoc = {
-  format_version: number;
-  anchor_date: string;
-  days: number;
-  shift_hours: number;
-  assignments: ScheduleAssignment[];
-  meta?: Record<string, unknown>;
-  changes?: PlanChange[];
-  updated_at?: string;
-};
+export type { PlanChange, PlanDoc, ScheduleAssignment } from "../lib/planDoc";
+/** @deprecated Use PlanDoc */
+export type ProposalDoc = PlanDoc;
 
 export type ProposalSlotInfo = {
   slot: string;
@@ -52,7 +37,7 @@ export type PlanGenerateResult = {
   count: number;
   meta?: Record<string, unknown>;
   changes?: PlanChange[];
-  proposal?: ProposalDoc;
+  proposal?: PlanDoc;
 };
 
 export type PlanListResponse = {
@@ -64,7 +49,7 @@ export type PlanGetResponse = {
   key: string;
   version: number;
   updated_at: string;
-  proposal: ProposalDoc;
+  proposal: PlanDoc;
   expected_version: number;
 };
 
@@ -99,25 +84,42 @@ export function listProposals(anchor: string): Promise<PlanListResponse> {
 }
 
 export function getProposal(anchor: string, slot: string): Promise<PlanGetResponse> {
-  return apiGet(`/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}`);
+  return apiGet<PlanGetResponse>(`/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}`).then(
+    (res) => ({
+      ...res,
+      proposal: normalizePlanDoc(res.proposal),
+    })
+  );
 }
 
 export function generatePlan(body: PlanGenerateParams): Promise<PlanGenerateResult> {
-  return callApi("/api/plan/generate", {
+  return callApi<PlanGenerateResult>("/api/plan/generate", {
     method: "POST",
     body: JSON.stringify(body),
-  });
+  }).then((data) => ({
+    ...data,
+    proposal: data.proposal
+      ? normalizePlanDoc(data.proposal)
+      : planDocFromGenerate({
+          anchor_date: data.anchor_date,
+          days: data.days,
+          shift_hours: data.shift_hours,
+          assignments: data.assignments,
+          meta: data.meta,
+          changes: data.changes,
+        }),
+  }));
 }
 
 export function saveProposal(
   anchor: string,
   slot: string,
-  proposal: ProposalDoc,
+  plan: PlanDoc,
   expectedVersion: number
 ): Promise<{ ok: boolean; version: number }> {
   return callApi(`/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}`, {
     method: "PUT",
-    body: JSON.stringify({ ...proposal, expected_version: expectedVersion }),
+    body: JSON.stringify({ ...normalizePlanDoc(plan), expected_version: expectedVersion }),
   });
 }
 
@@ -128,9 +130,23 @@ export function clearProposal(anchor: string, slot: string): Promise<{ ok: boole
   }>;
 }
 
-export function applyPlan(anchor: string, slot: string): Promise<{ ok: boolean; rows_written: number }> {
+export type PlanApplyResult = {
+  ok: boolean;
+  anchor_date: string;
+  slot: string;
+  dates_written: string[];
+};
+
+export function applyPlan(anchor: string, slot: string): Promise<PlanApplyResult> {
   return callApi("/api/plan/apply", {
     method: "POST",
     body: JSON.stringify({ anchor_date: anchor, slot }),
   });
+}
+
+export function deleteVerifiedScheduleDay(date: string): Promise<{ ok: boolean; date: string }> {
+  return apiDelete(`/api/schedule?date=${encodeURIComponent(date)}`) as Promise<{
+    ok: boolean;
+    date: string;
+  }>;
 }

@@ -1,24 +1,8 @@
+import type { ScheduleAssignment } from "./planDoc";
 import type { ZonesDoc } from "./zones";
 import { slotDisplayLabel } from "./zones";
 
-export type ScheduleAssignment = {
-  day: number;
-  calendar_block: number;
-  start_hour: number;
-  slot: number;
-  soldier_idx: number;
-  soldier_id?: string;
-  loc_i: number;
-  time_j: number;
-  weight: number;
-  raw_hours: number;
-  kind?: string;
-  rowspan?: number;
-  win_start_block?: number;
-  win_end_block?: number;
-  window_name?: string;
-  linear_busy_span_blocks?: number;
-};
+export type { ScheduleAssignment } from "./planDoc";
 
 export type ZoneReportView = {
   shiftHours: number;

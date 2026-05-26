@@ -61,6 +61,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/plan/proposals/{slot}", s.handlePlanPutProposal)
 	mux.HandleFunc("DELETE /api/plan/proposals/{slot}", s.handlePlanDeleteProposal)
 	mux.HandleFunc("POST /api/plan/apply", s.handlePlanApply)
+	mux.HandleFunc("DELETE /api/schedule", s.handleScheduleDelete)
 	mux.HandleFunc("GET /api/reports/schedule", s.handleReportSchedule)
 	mux.HandleFunc("GET /api/reports/blocks", s.handleReportBlocks)
 	mux.HandleFunc("GET /api/me", s.handleMe)
@@ -194,39 +195,13 @@ func (s *Server) handleReportSchedule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	rows, err := s.Pool.Query(r.Context(),
-		`SELECT ts_date, day_index, slot, shift_index, shift_start, shift_end, soldier_id, meta
-		 FROM schedule WHERE ts_date >= $1::date AND ts_date <= $2::date ORDER BY ts_date, shift_index, slot`,
-		from, to)
+	doc, err := repo.MergeScheduleRange(r.Context(), s.Pool, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
-	type row struct {
-		TsDate     time.Time       `json:"ts_date"`
-		DayIndex   int             `json:"day_index"`
-		Slot       string          `json:"slot"`
-		ShiftIndex int             `json:"shift_index"`
-		ShiftStart string          `json:"shift_start"`
-		ShiftEnd   string          `json:"shift_end"`
-		SoldierID  string          `json:"soldier_id"`
-		Meta       json.RawMessage `json:"meta"`
-	}
-	var out []row
-	for rows.Next() {
-		var v row
-		var ss, se time.Time
-		if err := rows.Scan(&v.TsDate, &v.DayIndex, &v.Slot, &v.ShiftIndex, &ss, &se, &v.SoldierID, &v.Meta); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		v.ShiftStart = ss.Format("15:04:05")
-		v.ShiftEnd = se.Format("15:04:05")
-		out = append(out, v)
-	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(doc)
 }
 
 func (s *Server) handleReportBlocks(w http.ResponseWriter, r *http.Request) {

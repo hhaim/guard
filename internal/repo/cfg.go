@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"guard/internal/db"
-	"guard/internal/schedule"
+	"guard/internal/model"
 )
 
 // ErrVersionConflict is returned when optimistic locking fails.
@@ -114,29 +114,6 @@ func AppendAudit(ctx context.Context, tx pgx.Tx, key string, newCfg json.RawMess
 	return err
 }
 
-func DeleteScheduleRange(ctx context.Context, tx pgx.Tx, from, to time.Time) error {
-	_, err := tx.Exec(ctx,
-		`DELETE FROM schedule WHERE ts_date >= $1::date AND ts_date <= $2::date`,
-		from, to)
-	return err
-}
-
-func InsertScheduleRows(ctx context.Context, tx pgx.Tx, rows []schedule.ScheduleRow) error {
-	for _, r := range rows {
-		_, err := tx.Exec(ctx,
-			`INSERT INTO schedule (ts_date, day_index, slot, shift_index, shift_start, shift_end, soldier_id, meta)
-			 VALUES ($1::date, $2, $3, $4, $5::time, $6::time, $7, $8)`,
-			r.TsDate, r.DayIndex, r.Slot, r.ShiftIndex,
-			r.ShiftStart.Format("15:04:05"), r.ShiftEnd.Format("15:04:05"),
-			r.SoldierID, r.Meta,
-		)
-		if err != nil {
-			return fmt.Errorf("insert schedule: %w", err)
-		}
-	}
-	return nil
-}
-
 // ScheduleReportRow is one aggregated fairness row.
 type ScheduleReportRow struct {
 	SoldierID string    `json:"soldier_id"`
@@ -189,22 +166,14 @@ func DeleteAllSchedule(ctx context.Context, pool *db.Pool) (int64, error) {
 }
 
 func ReportBlocksBySoldierDate(ctx context.Context, pool *db.Pool, from, to time.Time) ([]ScheduleReportRow, error) {
-	rows, err := pool.Query(ctx,
-		`SELECT soldier_id, ts_date, COUNT(*)::bigint
-		 FROM schedule WHERE ts_date >= $1::date AND ts_date <= $2::date
-		 GROUP BY soldier_id, ts_date ORDER BY ts_date, soldier_id`,
-		from, to)
+	days, err := ListScheduleDays(ctx, pool, from, to)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []ScheduleReportRow
-	for rows.Next() {
-		var r ScheduleReportRow
-		if err := rows.Scan(&r.SoldierID, &r.TsDate, &r.Blocks); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
+	agg := model.BlocksBySoldierDate(days)
+	out := make([]ScheduleReportRow, len(agg))
+	for i, r := range agg {
+		out[i] = ScheduleReportRow{SoldierID: r.SoldierID, TsDate: r.TsDate, Blocks: r.Blocks}
 	}
-	return out, rows.Err()
+	return out, nil
 }

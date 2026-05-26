@@ -10,8 +10,8 @@ import {
   buildTimelineLanes,
   buildZoneReportView,
   inferSoldierCount,
-  type ScheduleAssignment,
 } from "../lib/scheduleReport";
+import { normalizePlanDoc, type PlanDoc } from "../lib/planDoc";
 import { ScheduleStatsPanel } from "./ScheduleStatsPanel";
 
 export type ScheduleReportSections = {
@@ -31,11 +31,8 @@ const DEFAULT_SECTIONS: Required<ScheduleReportSections> = {
 };
 
 type Props = {
-  assignments: ScheduleAssignment[];
-  days: number;
-  shiftHours: number;
+  plan: PlanDoc;
   zones: ZonesDoc;
-  meta?: Record<string, unknown>;
   soldierIds?: string[];
   soldiers?: Soldier[];
   sections?: ScheduleReportSections;
@@ -292,15 +289,15 @@ function SoldierTimelineChart({
 
 /** Schedule matrix, per-soldier drill-down, and timeline (Python HTML report parity). */
 export function ScheduleResultsReport({
-  assignments,
-  days,
-  shiftHours,
+  plan: planProp,
   zones,
-  meta,
   soldierIds = [],
   soldiers = [],
   sections: sectionsProp,
 }: Props) {
+  const plan = useMemo(() => normalizePlanDoc(planProp), [planProp]);
+  const { assignments, days, shift_hours: shiftHours, meta } = plan;
+
   const sections = { ...DEFAULT_SECTIONS, ...sectionsProp };
   const [selectedSoldier, setSelectedSoldier] = useState<number | null>(null);
   const [showJson, setShowJson] = useState(false);
@@ -363,7 +360,7 @@ export function ScheduleResultsReport({
       </div>
 
       {showJson && (
-        <pre className="raw-response run-results-json">{JSON.stringify({ assignments, meta }, null, 2)}</pre>
+        <pre className="raw-response run-results-json">{JSON.stringify(plan, null, 2)}</pre>
       )}
 
       {showMatrix && sections.matrixShort && (

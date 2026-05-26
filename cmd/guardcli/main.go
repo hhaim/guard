@@ -323,7 +323,7 @@ func cmdScheduleClear() int {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
-	fmt.Printf("cleared %d schedule rows\n", n)
+	fmt.Printf("cleared %d verified schedule day(s)\n", n)
 	return 0
 }
 
@@ -356,12 +356,12 @@ func cmdScheduleExport(args []string) int {
 	}
 	defer pool.Close()
 
-	rows, err := repo.QueryScheduleRange(context.Background(), pool, from, end)
+	doc, err := repo.MergeScheduleRange(context.Background(), pool, from, end)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
-	data, err := repo.ScheduleRowsToYAML(rows, from, end)
+	data, err := repo.PlanDocToYAML(doc, from, end)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
@@ -374,6 +374,6 @@ func cmdScheduleExport(args []string) int {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
-	fmt.Fprintf(os.Stderr, "wrote %d rows to %s (%s .. %s)\n", len(rows), *out, from.Format("2006-01-02"), end.Format("2006-01-02"))
+	fmt.Fprintf(os.Stderr, "wrote %d assignments to %s (%s .. %s)\n", len(doc.Assignments), *out, from.Format("2006-01-02"), end.Format("2006-01-02"))
 	return 0
 }

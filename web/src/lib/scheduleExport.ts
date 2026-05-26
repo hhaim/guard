@@ -1,23 +1,13 @@
 import YAML from "yaml";
-import type { ScheduleReportRow } from "./scheduleRows";
+import type { PlanDoc } from "./planDoc";
 
-export function scheduleRowsToYaml(rows: ScheduleReportRow[], from: string, to: string): string {
-  const doc = {
+export function planDocToYaml(doc: PlanDoc, from: string, to: string): string {
+  const exportDoc = {
     exported_at: new Date().toISOString(),
     range: { from, to },
-    row_count: rows.length,
-    rows: rows.map((r) => ({
-      ts_date: r.ts_date.slice(0, 10),
-      day_index: r.day_index,
-      slot: r.slot,
-      shift_index: r.shift_index,
-      shift_start: r.shift_start,
-      shift_end: r.shift_end,
-      soldier_id: r.soldier_id,
-      meta: r.meta ?? {},
-    })),
+    plan: doc,
   };
-  return YAML.stringify(doc);
+  return YAML.stringify(exportDoc);
 }
 
 export function downloadTextFile(filename: string, content: string, mime = "text/yaml") {

@@ -20,6 +20,10 @@ export function StatsGuide() {
         <li>
           <strong>Export YAML</strong> downloads the applied schedule for the selected range.
         </li>
+        <li>
+          <strong>Remove verified day (admin):</strong> deletes one calendar day from history (with a confirmation
+          dialog) so you can re-apply a plan for that date.
+        </li>
       </ul>
       <p className="contacts-hint">If nothing appears, apply a plan first — empty state means no verified rows in range.</p>
 

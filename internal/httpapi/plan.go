@@ -8,32 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"guard/guardsched"
+	"guard/internal/model"
 	"guard/internal/repo"
-	"guard/internal/schedule"
 )
 
-const proposalFormatVersion = 1
+const proposalFormatVersion = model.PlanFormatVersion
 
-type planChange struct {
-	TsDate       string `json:"ts_date"`
-	Slot         string `json:"slot"`
-	ShiftIndex   int    `json:"shift_index"`
-	ShiftLabel   string `json:"shift_label,omitempty"`
-	OldSoldierID string `json:"old_soldier_id"`
-	NewSoldierID string `json:"new_soldier_id"`
-}
-
-type proposalDoc struct {
-	FormatVersion int              `json:"format_version"`
-	AnchorDate    string           `json:"anchor_date"`
-	Days          int              `json:"days"`
-	ShiftHours    float64          `json:"shift_hours"`
-	Assignments   []map[string]any `json:"assignments"`
-	Meta          map[string]any   `json:"meta,omitempty"`
-	Changes       []planChange     `json:"changes,omitempty"`
-	UpdatedAt     string           `json:"updated_at,omitempty"`
-}
+type planDoc = model.PlanDoc
 
 type planGenerateBody struct {
 	scheduleRunBody
@@ -42,7 +23,7 @@ type planGenerateBody struct {
 
 type planPutBody struct {
 	ExpectedVersion *int64 `json:"expected_version"`
-	proposalDoc
+	planDoc
 }
 
 type planApplyBody struct {
@@ -51,8 +32,8 @@ type planApplyBody struct {
 	DebugDayOffset *int   `json:"debug_day_offset,omitempty"`
 }
 
-func buildProposalFromSim(out *simRunOutput, changes []planChange) proposalDoc {
-	return proposalDoc{
+func buildProposalFromSim(out *simRunOutput, changes []model.PlanChange) planDoc {
+	return planDoc{
 		FormatVersion: proposalFormatVersion,
 		AnchorDate:    out.Anchor.Format("2006-01-02"),
 		Days:          out.Days,
@@ -130,7 +111,7 @@ func (s *Server) handlePlanListProposals(w http.ResponseWriter, r *http.Request)
 			info.Exists = true
 			info.UpdatedAt = row.UpdatedAt.UTC().Format(time.RFC3339)
 			info.Version = row.Version
-			var doc proposalDoc
+			var doc planDoc
 			if err := json.Unmarshal(row.Value, &doc); err == nil {
 				info.AssignmentCount = len(doc.Assignments)
 			}
@@ -280,7 +261,7 @@ func (s *Server) handlePlanPutProposal(w http.ResponseWriter, r *http.Request) {
 		body.FormatVersion = proposalFormatVersion
 	}
 
-	if err := s.saveProposal(r, anchor, slot, body.proposalDoc, body.ExpectedVersion); err != nil {
+	if err := s.saveProposal(r, anchor, slot, body.planDoc, body.ExpectedVersion); err != nil {
 		if errors.Is(err, repo.ErrVersionConflict) {
 			http.Error(w, `{"error":"version_conflict"}`, http.StatusConflict)
 			return
@@ -299,7 +280,7 @@ func (s *Server) handlePlanPutProposal(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) saveProposal(r *http.Request, anchor time.Time, slot string, doc proposalDoc, expectedVersion *int64) error {
+func (s *Server) saveProposal(r *http.Request, anchor time.Time, slot string, doc planDoc, expectedVersion *int64) error {
 	key := repo.GetProposalKey(anchor, slot)
 	raw, err := json.Marshal(doc)
 	if err != nil {
@@ -414,25 +395,13 @@ func (s *Server) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"proposal not found"}`, http.StatusNotFound)
 		return
 	}
-	var doc proposalDoc
+	var doc planDoc
 	if err := json.Unmarshal(row.Value, &doc); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	_, soldierKeys, slotLabels, _, err := s.loadPlanInputs(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Build records from assignments JSON (client may have edited soldier_id).
-	recs := guardsched.RecordsFromAssignmentJSON(doc.Assignments, soldierKeys)
-	bp, _ := guardsched.CalendarBlocksPerDaySafe(doc.ShiftHours)
-	rows, err := schedule.ToScheduleRows(schedule.PersistInput{
-		AnchorDate: anchor, BlockHours: doc.ShiftHours, BlocksPerDay: bp,
-		SoldierKeys: soldierKeys, SlotLabels: slotLabels, Records: recs,
-	})
+	dayPlans, err := model.SplitPlanByDate(doc)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -446,14 +415,32 @@ func (s *Server) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	endDate := anchor.AddDate(0, 0, doc.Days-1)
-	if err := repo.DeleteScheduleRange(ctx, tx, anchor, endDate); err != nil {
+	dates := make([]time.Time, len(dayPlans))
+	for i, d := range dayPlans {
+		dates[i] = d.TsDate
+	}
+	conflicts, err := repo.ExistingScheduleDates(ctx, tx, dates)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := repo.InsertScheduleRows(ctx, tx, rows); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if len(conflicts) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":             "schedule_conflict",
+			"conflicting_dates": conflicts,
+		})
 		return
+	}
+
+	written := make([]string, 0, len(dayPlans))
+	for _, d := range dayPlans {
+		if err := repo.InsertScheduleDay(ctx, tx, d, slot); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		written = append(written, d.TsDate.Format("2006-01-02"))
 	}
 	if err := repo.DeleteCfgByPrefix(ctx, tx, "proposal-"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -466,11 +453,38 @@ func (s *Server) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":          true,
-		"anchor_date": doc.AnchorDate,
-		"slot":        slot,
-		"rows_written": len(rows),
+		"ok":            true,
+		"anchor_date":   doc.AnchorDate,
+		"slot":          slot,
+		"dates_written": written,
 	})
+}
+
+func (s *Server) handleScheduleDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	dateS := strings.TrimSpace(r.URL.Query().Get("date"))
+	if dateS == "" {
+		http.Error(w, `{"error":"date query param required (YYYY-MM-DD)"}`, http.StatusBadRequest)
+		return
+	}
+	d, err := time.Parse("2006-01-02", dateS)
+	if err != nil {
+		http.Error(w, `{"error":"invalid date"}`, http.StatusBadRequest)
+		return
+	}
+	ok, err := repo.DeleteScheduleDay(r.Context(), s.Pool, d)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, `{"error":"schedule day not found"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "date": dateS})
 }
 
 func intFromAny(v any) int {

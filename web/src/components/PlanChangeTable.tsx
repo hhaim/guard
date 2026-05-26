@@ -1,6 +1,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { PlanChange, ProposalDoc } from "../api/plan";
+import type { PlanChange } from "../lib/planDoc";
+import type { PlanDoc } from "../lib/planDoc";
 import { buildZoneReportView, type ScheduleAssignment } from "../lib/scheduleReport";
 import type { ZonesDoc } from "../lib/zones";
 
@@ -64,10 +65,10 @@ function findAssignment(
 }
 
 type Props = {
-  proposal: ProposalDoc;
+  plan: PlanDoc;
   zones: ZonesDoc;
   soldiers: string[];
-  onChange: (next: ProposalDoc) => void;
+  onChange: (next: PlanDoc) => void;
   readOnly?: boolean;
 };
 
@@ -86,34 +87,34 @@ function ChangeField({
   );
 }
 
-export function PlanChangeTable({ proposal, zones, soldiers, onChange, readOnly = false }: Props) {
-  const dates = datesInRange(proposal.anchor_date, proposal.days);
+export function PlanChangeTable({ plan, zones, soldiers, onChange, readOnly = false }: Props) {
+  const dates = datesInRange(plan.anchor_date, plan.days);
   const slots = slotLabels(zones);
-  const changes = proposal.changes ?? [];
+  const changes = plan.changes ?? [];
 
   const updateRow = (index: number, patch: Partial<PlanChange>) => {
     const next = changes.map((c, i) => (i === index ? { ...c, ...patch } : c));
-    onChange({ ...proposal, changes: next });
+    onChange({ ...plan, changes: next });
   };
 
   const removeRow = (index: number) => {
-    onChange({ ...proposal, changes: changes.filter((_, i) => i !== index) });
+    onChange({ ...plan, changes: changes.filter((_, i) => i !== index) });
   };
 
   const addRow = () => {
     const shiftOpts = shiftsFor(
-      proposal.assignments,
-      proposal.anchor_date,
-      dates[0] ?? proposal.anchor_date,
+      plan.assignments,
+      plan.anchor_date,
+      dates[0] ?? plan.anchor_date,
       slots[0] ?? "",
       slots
     );
     onChange({
-      ...proposal,
+      ...plan,
       changes: [
         ...changes,
         {
-          ts_date: dates[0] ?? proposal.anchor_date,
+          ts_date: dates[0] ?? plan.anchor_date,
           slot: slots[0] ?? "",
           shift_index: shiftOpts[0]?.shift_index ?? 0,
           shift_label: shiftOpts[0]?.label,
@@ -129,8 +130,8 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange, readOnly 
     if (!ch.ts_date || !ch.slot || !ch.new_soldier_id) return;
     const labels = slotLabels(zones);
     const target = findAssignment(
-      proposal.assignments,
-      proposal.anchor_date,
+      plan.assignments,
+      plan.anchor_date,
       ch.ts_date,
       ch.slot,
       ch.shift_index,
@@ -139,7 +140,7 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange, readOnly 
     if (!target) return;
     const oldId = target.soldier_id ?? soldiers[target.soldier_idx] ?? "";
     const si = soldiers.indexOf(ch.new_soldier_id);
-    const updated = proposal.assignments.map((a) => {
+    const updated = plan.assignments.map((a) => {
       if (a.day === target.day && a.calendar_block === target.calendar_block && a.slot === target.slot) {
         return {
           ...a,
@@ -152,7 +153,7 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange, readOnly 
     const nextChanges = changes.map((c, i) =>
       i === index ? { ...c, old_soldier_id: oldId } : c
     );
-    onChange({ ...proposal, assignments: updated, changes: nextChanges });
+    onChange({ ...plan, assignments: updated, changes: nextChanges });
   };
 
   return (
@@ -180,15 +181,15 @@ export function PlanChangeTable({ proposal, zones, soldiers, onChange, readOnly 
         <div className="plan-changes-list">
           {changes.map((ch, i) => {
             const shiftOpts = shiftsFor(
-              proposal.assignments,
-              proposal.anchor_date,
+              plan.assignments,
+              plan.anchor_date,
               ch.ts_date,
               ch.slot,
               slots
             );
             const current = findAssignment(
-              proposal.assignments,
-              proposal.anchor_date,
+              plan.assignments,
+              plan.anchor_date,
               ch.ts_date,
               ch.slot,
               ch.shift_index,

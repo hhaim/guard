@@ -1,6 +1,6 @@
-import { Download } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { Download, Trash2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -11,16 +11,12 @@ import {
   YAxis,
 } from "recharts";
 import { apiGet } from "../api";
+import { deleteVerifiedScheduleDay } from "../api/plan";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
-import { downloadTextFile, scheduleRowsToYaml } from "../lib/scheduleExport";
-import { buildScheduleStats, buildZoneReportView, inferSoldierCount } from "../lib/scheduleReport";
-import {
-  scheduleDayCount,
-  scheduleRowsToAssignments,
-  type ScheduleReportRow,
-} from "../lib/scheduleRows";
-import { ScheduleResultsReport, soldiersFromCfg } from "./ScheduleResultsReport";
-import { ScheduleStatsPanel } from "./ScheduleStatsPanel";
+import { fetchVerifiedPlan, type PlanDoc } from "../lib/planDoc";
+import { downloadTextFile, planDocToYaml } from "../lib/scheduleExport";
+import { PlanDocView } from "./PlanDocView";
+import { soldiersFromCfg } from "./ScheduleResultsReport";
 
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
@@ -37,11 +33,27 @@ function rangeFromEndAndBack(endDate: string, daysBack: number): { from: string;
   };
 }
 
-export function StatsView() {
+const STATS_REPORT_SECTIONS = {
+  matrixShort: true,
+  matrixFull: true,
+  bySoldier: false,
+  timeline: false,
+  statsPanel: true,
+} as const;
+
+type StatsViewProps = {
+  isAdmin?: boolean;
+};
+
+export function StatsView({ isAdmin = false }: StatsViewProps) {
+  const qc = useQueryClient();
   const { doc: zonesDoc, slotsQ } = useZonesDocument();
   const [endDate, setEndDate] = useState(todayUTC);
   const [daysBack, setDaysBack] = useState(14);
   const [showDayMatrix, setShowDayMatrix] = useState(false);
+  const [deleteDate, setDeleteDate] = useState("");
+  const [deleteStatus, setDeleteStatus] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { from, to } = useMemo(() => rangeFromEndAndBack(endDate, daysBack), [endDate, daysBack]);
 
@@ -55,10 +67,7 @@ export function StatsView() {
 
   const scheduleQ = useQuery({
     queryKey: ["reports", "schedule", from, to],
-    queryFn: () =>
-      apiGet<ScheduleReportRow[]>(
-        `/api/reports/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-      ),
+    queryFn: () => fetchVerifiedPlan(from, to),
   });
 
   const blocksQ = useQuery({
@@ -85,22 +94,8 @@ export function StatsView() {
     [soldiersQ.data]
   );
 
-  const assignments = useMemo(() => {
-    if (!zonesDoc || !scheduleQ.data?.length) return [];
-    return scheduleRowsToAssignments(scheduleQ.data, zonesDoc, soldierIds);
-  }, [scheduleQ.data, zonesDoc, soldierIds]);
-
-  const scheduleDays = useMemo(() => {
-    if (!scheduleQ.data?.length) return 0;
-    return scheduleDayCount(scheduleQ.data, assignments);
-  }, [scheduleQ.data, assignments]);
-
-  const stats = useMemo(() => {
-    if (!zonesDoc || assignments.length === 0) return null;
-    const zone = buildZoneReportView(zonesDoc, zonesDoc.slots.length);
-    const soldierCount = inferSoldierCount(assignments);
-    return buildScheduleStats(assignments, scheduleDays, zone, soldierCount);
-  }, [assignments, zonesDoc, scheduleDays]);
+  const plan: PlanDoc | null = scheduleQ.data ?? null;
+  const hasSchedule = (plan?.assignments.length ?? 0) > 0;
 
   const chartData = useMemo(() => {
     const m = new Map<string, number>();
@@ -110,11 +105,72 @@ export function StatsView() {
     return [...m.entries()].map(([soldier_id, blocks]) => ({ soldier_id, blocks }));
   }, [blocksQ.data]);
 
+  const verifiedDates = useMemo(() => {
+    const dates = new Set<string>();
+    for (const r of blocksQ.data ?? []) {
+      dates.add(r.ts_date.slice(0, 10));
+    }
+    return [...dates].sort();
+  }, [blocksQ.data]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (verifiedDates.length === 0) {
+      setDeleteDate("");
+      return;
+    }
+    setDeleteDate((prev) => {
+      if (prev && verifiedDates.includes(prev)) return prev;
+      return verifiedDates[verifiedDates.length - 1] ?? "";
+    });
+  }, [isAdmin, verifiedDates]);
+
+  const deleteDayM = useMutation({
+    mutationFn: (date: string) => deleteVerifiedScheduleDay(date),
+    onSuccess: (_data, date) => {
+      setDeleteStatus(`Removed verified schedule for ${date}.`);
+      setDeleteError(null);
+      void qc.invalidateQueries({ queryKey: ["reports", "schedule"] });
+      void qc.invalidateQueries({ queryKey: ["reports", "blocks"] });
+    },
+    onError: (e) => {
+      setDeleteStatus(null);
+      setDeleteError(e instanceof Error ? e.message : "Delete failed");
+    },
+  });
+
+  const handleDeleteVerifiedDay = () => {
+    if (!deleteDate) return;
+    const blocksOnDay = (blocksQ.data ?? []).filter(
+      (r) => r.ts_date.slice(0, 10) === deleteDate
+    ).length;
+    const msg = [
+      `Remove verified schedule for ${deleteDate}?`,
+      "",
+      "This permanently deletes that calendar day from schedule history.",
+      blocksOnDay > 0
+        ? `About ${blocksOnDay} duty block(s) on this day will be removed.`
+        : "No duty blocks were found for this day in the current range (it may already be empty).",
+      "",
+      "After removal you can apply a new plan for this date on the Plan tab.",
+      "",
+      "This cannot be undone.",
+    ].join("\n");
+    if (!window.confirm(msg)) return;
+    setDeleteStatus(null);
+    setDeleteError(null);
+    deleteDayM.mutate(deleteDate);
+  };
+
   const downloadYaml = () => {
-    const rows = scheduleQ.data ?? [];
-    const yaml = scheduleRowsToYaml(rows, from, to);
+    if (!plan) return;
+    const yaml = planDocToYaml(plan, from, to);
     downloadTextFile(`schedule-${from}_to_${to}.yaml`, yaml);
   };
+
+  const reportSections = showDayMatrix
+    ? STATS_REPORT_SECTIONS
+    : { ...STATS_REPORT_SECTIONS, matrixShort: false, matrixFull: false };
 
   return (
     <div className="stats-layout">
@@ -123,8 +179,8 @@ export function StatsView() {
           Verified schedule stats
         </h2>
         <p className="contacts-hint" style={{ margin: "0 0 1rem" }}>
-          History from the applied schedule (not proposals). Range is inclusive: end date minus days back
-          through end date.
+          History from the applied schedule (not proposals). Same plan JSON as Plan. Range is inclusive: end date minus
+          days back through end date.
         </p>
 
         <div className="stats-range-form">
@@ -154,7 +210,7 @@ export function StatsView() {
 
         <p className="stats-range-summary">
           Showing <strong>{from}</strong> through <strong>{to}</strong>
-          {scheduleQ.data != null ? ` · ${scheduleQ.data.length} duty rows` : null}
+          {plan != null ? ` · ${plan.assignments.length} assignments · anchor ${plan.anchor_date}` : null}
         </p>
 
         <div className="stats-toolbar">
@@ -163,14 +219,14 @@ export function StatsView() {
               type="checkbox"
               checked={showDayMatrix}
               onChange={(e) => setShowDayMatrix(e.target.checked)}
-              disabled={!assignments.length || !zonesDoc}
+              disabled={!hasSchedule || !zonesDoc}
             />
-            <span>Show schedule by day (assignments per day)</span>
+            <span>Show schedule matrix</span>
           </label>
           <button
             type="button"
             className="btn btn-tinted"
-            disabled={!scheduleQ.data?.length}
+            disabled={!hasSchedule}
             onClick={downloadYaml}
           >
             <Download size={16} />
@@ -178,10 +234,65 @@ export function StatsView() {
           </button>
         </div>
 
+        {isAdmin && (
+          <div className="stats-admin-delete glass-card panel" style={{ marginTop: "1rem" }}>
+            <h3 className="sched-subtitle" style={{ margin: "0 0 0.35rem" }}>
+              Remove verified day (admin)
+            </h3>
+            <p className="contacts-hint" style={{ margin: "0 0 0.75rem" }}>
+              Delete one calendar day from schedule history so you can apply a plan again for that date. Requires
+              confirmation.
+            </p>
+            <div className="stats-range-form">
+              <label className="stats-range-field">
+                <span className="title">Day to remove</span>
+                <span className="hint">
+                  {verifiedDates.length > 0
+                    ? `Dates with data in range: ${verifiedDates.join(", ")}`
+                    : "Pick a date (YYYY-MM-DD)"}
+                </span>
+                {verifiedDates.length > 0 ? (
+                  <select
+                    className="settings-input settings-input-wide"
+                    value={deleteDate}
+                    onChange={(e) => setDeleteDate(e.target.value)}
+                  >
+                    {verifiedDates.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="settings-input settings-input-wide"
+                    type="date"
+                    min={from}
+                    max={to}
+                    value={deleteDate}
+                    onChange={(e) => setDeleteDate(e.target.value)}
+                  />
+                )}
+              </label>
+            </div>
+            <button
+              type="button"
+              className="btn btn-destructive"
+              disabled={!deleteDate || deleteDayM.isPending}
+              onClick={handleDeleteVerifiedDay}
+            >
+              <Trash2 size={16} />
+              {deleteDayM.isPending ? "Removing…" : "Remove day from history"}
+            </button>
+            {deleteStatus && <p className="msg-ok" style={{ marginTop: "0.75rem" }}>{deleteStatus}</p>}
+            {deleteError && <p className="msg-err" style={{ marginTop: "0.75rem" }}>{deleteError}</p>}
+          </div>
+        )}
+
         {scheduleQ.isLoading && <p>Loading schedule…</p>}
         {scheduleQ.isError && <p className="msg-err">{(scheduleQ.error as Error).message}</p>}
-        {scheduleQ.data?.length === 0 && !scheduleQ.isLoading && (
-          <p className="contacts-empty">No verified schedule rows in this range. Apply a plan first.</p>
+        {plan && !hasSchedule && !scheduleQ.isLoading && (
+          <p className="contacts-empty">No verified schedule in this range. Apply a plan first.</p>
         )}
 
         {chartData.length > 0 && (
@@ -201,33 +312,16 @@ export function StatsView() {
           </div>
         )}
 
-        {showDayMatrix && assignments.length > 0 && zonesDoc && !slotsQ.isLoading && (
-          <div className="stats-day-matrix">
-            <ScheduleResultsReport
-              assignments={assignments}
-              days={scheduleDays}
-              shiftHours={zonesDoc.shift_hours}
+        {hasSchedule && plan && zonesDoc && !slotsQ.isLoading && (
+          <div className="stats-plan-report">
+            <PlanDocView
+              plan={plan}
               zones={zonesDoc}
               soldierIds={soldierIds}
               soldiers={soldiers}
-              sections={{
-                matrixShort: true,
-                matrixFull: true,
-                bySoldier: false,
-                timeline: false,
-                statsPanel: false,
-              }}
+              sections={reportSections}
             />
           </div>
-        )}
-
-        {stats && zonesDoc && !slotsQ.isLoading && (
-          <ScheduleStatsPanel
-            stats={stats}
-            days={scheduleDays}
-            shiftHours={zonesDoc.shift_hours}
-            slotsPerBlock={zonesDoc.slots.length}
-          />
         )}
       </section>
     </div>

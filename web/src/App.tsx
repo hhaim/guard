@@ -93,7 +93,7 @@ function SignedInApp() {
         {tab === "slots" && <SlotsView />}
         {tab === "time_zones" && <TimeZonesView />}
         {tab === "plan" && <PlanView readOnly={isReadonly} onOpenHelp={openHelp} />}
-        {tab === "stats" && <StatsView />}
+        {tab === "stats" && <StatsView isAdmin={isAdmin} />}
       </ZonesDocumentProvider>
       {tab === "global" && <GlobalConfigView />}
       {tab === "help" && (

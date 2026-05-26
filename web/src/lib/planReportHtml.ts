@@ -1,4 +1,4 @@
-import type { PlanChange, ProposalDoc } from "../api/plan";
+import type { PlanChange, PlanDoc } from "./planDoc";
 import type { Soldier } from "../lib/soldiers";
 import {
   buildDutyBusy,
@@ -14,7 +14,7 @@ import { buildSoldierDisplay, type SoldierDisplay } from "./soldierDisplay";
 import type { ZonesDoc } from "./zones";
 
 export type PlanReportInput = {
-  proposal: ProposalDoc;
+  proposal: PlanDoc;
   slot: string;
   zones: ZonesDoc;
   soldierIds: string[];
