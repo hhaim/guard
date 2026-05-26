@@ -91,6 +91,7 @@ def _run_python(
     min_consecutive_free_hours: float,
     min_free_shifts_after_duty: int,
     band_relative: float,
+    plan_day_start: str = "05:00",
 ) -> tuple[list[g.AssignmentRecord], g.ZoneConfig, int]:
     zone = g.load_zone_config(
         zones_path,
@@ -109,6 +110,7 @@ def _run_python(
         min_consecutive_free_hours=min_consecutive_free_hours,
         min_free_shifts_after_duty=min_free_shifts_after_duty,
         band_relative=band_relative,
+        plan_day_start_hour=g.parse_plan_day_start(plan_day_start),
     )
     return pack[3], zone, blocks_pd
 
@@ -126,6 +128,7 @@ def _run_guardsim_json(
     min_free_shifts_after_duty: int,
     band_relative: float,
     compare_json: bool,
+    plan_day_start: str = "05:00",
 ) -> dict[str, Any]:
     cmd = [
         str(guardsim_bin),
@@ -147,6 +150,8 @@ def _run_guardsim_json(
         str(min_free_shifts_after_duty),
         "--band-relative",
         str(band_relative),
+        "--plan-day-start",
+        plan_day_start,
         "--quiet",
     ]
     if compare_json:

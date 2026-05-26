@@ -1,3 +1,5 @@
+import { DEFAULT_PLAN_DAY_START, parsePlanDayStart } from "./planDay";
+
 export const MAX_PLAN_DEBUG_DAY_OFFSET = 366;
 
 export type GlobalFormData = {
@@ -5,6 +7,7 @@ export type GlobalFormData = {
   number_of_iteration: number;
   random_seed: number;
   plan_debug_day_offset: number;
+  plan_day_start: string;
   [key: string]: unknown;
 };
 
@@ -13,6 +16,7 @@ export const DEFAULT_GLOBAL: GlobalFormData = {
   number_of_iteration: 1,
   random_seed: 42,
   plan_debug_day_offset: 0,
+  plan_day_start: DEFAULT_PLAN_DAY_START,
 };
 
 const KNOWN_KEYS = [
@@ -20,6 +24,7 @@ const KNOWN_KEYS = [
   "number_of_iteration",
   "random_seed",
   "plan_debug_day_offset",
+  "plan_day_start",
 ] as const;
 
 function asInt(v: unknown, fallback: number): number {
@@ -51,6 +56,10 @@ export function parseFormFromJson(raw: unknown): GlobalFormData {
     number_of_iteration: asInt(o.number_of_iteration, base.number_of_iteration),
     random_seed: asInt(o.random_seed, base.random_seed),
     plan_debug_day_offset: clampPlanDebugDayOffset(asInt(o.plan_debug_day_offset, base.plan_debug_day_offset)),
+    plan_day_start: (() => {
+      const p = parsePlanDayStart(o.plan_day_start);
+      return p.ok ? p.value : base.plan_day_start;
+    })(),
   };
   for (const [k, v] of Object.entries(o)) {
     if (!(KNOWN_KEYS as readonly string[]).includes(k)) {

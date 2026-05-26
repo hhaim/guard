@@ -917,4 +917,5 @@ def test_run_simulation_mixed_patterns_cooldown2_regression() -> None:
         block_hours=3.0,
         rng=rng,
         min_free_shifts_after_duty=2,
+        plan_day_start_hour=0,  # pinned: seed 7 + this YAML was validated at midnight grid
     )

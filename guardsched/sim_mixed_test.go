@@ -17,7 +17,7 @@ func TestRunSimulationZoneConfig_allRotatingZonesS1(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPyRandom(42)
-	_, _, err = RunSimulationZoneConfig(z, 10, 5, r, 8, true, 0, 2, 0, 0.2)
+	_, _, err = RunSimulationZoneConfig(z, 10, 5, r, 8, true, 0, 2, 0, 0.2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestRunSimulationZoneConfig_twelveSoldiersFourRotatingSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPyRandom(1)
-	_, _, err = RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2)
+	_, _, err = RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,10 +52,37 @@ func TestRunSimulationZoneConfig_mixedPatternsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPyRandom(7)
-	_, _, err = RunSimulationZoneConfig(z, 50, 2, r, 8, true, 0, 2, 0, 0.2)
+	_, _, err = RunSimulationZoneConfig(z, 50, 2, r, 8, true, 0, 2, 0, 0.2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestRunSimulationZoneConfig_planDayStartRotatingHour(t *testing.T) {
+	root := findRepoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "zones_s1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	z, err := LoadZoneConfigYAML(raw, 4, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewPyRandom(7)
+	recs, _, err := RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range recs {
+		if a == nil || a.Kind != "rotating" {
+			continue
+		}
+		if a.CalendarBlock == 0 && a.StartHour != 5 {
+			t.Fatalf("first rotating block start_hour=%d want 5", a.StartHour)
+		}
+		return
+	}
+	t.Fatal("no rotating assignment found")
 }
 
 func findRepoRoot(t *testing.T) string {

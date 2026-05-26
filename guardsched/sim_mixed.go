@@ -16,6 +16,7 @@ func RunSimulationZoneConfig(
 	maxConsecutiveDutyBlocks int,
 	minFreeShiftsAfterDuty int,
 	bandRelative float64,
+	planDayStartHour int,
 ) ([]*AssignmentRecord, *SimulationStats, error) {
 	slotsPerBlock := zone.SlotsPerBlock()
 	if numSoldiers < slotsPerBlock {
@@ -230,7 +231,8 @@ func RunSimulationZoneConfig(
 			dfsRotOk = true
 			for day := 0; day < days; day++ {
 				for b := 0; b < blocksPd; b++ {
-					startH := int(float64(b) * sh)
+					// Rotating grid: blocks align to plan-day start; full_day/windowed use YAML wall hours.
+					startH := BlockStartHour(planDayStartHour, b, sh)
 					timeJ := timeCategoryForHour(startH, simZ)
 					tw := zone.TimeBands[timeJ].Weight
 					var inBlock []*Soldier
@@ -283,7 +285,7 @@ func RunSimulationZoneConfig(
 	if !dfsRotOk {
 		for day := 0; day < days; day++ {
 			for b := 0; b < blocksPd; b++ {
-				startH := int(float64(b) * sh)
+				startH := BlockStartHour(planDayStartHour, b, sh)
 				timeJ := timeCategoryForHour(startH, simZ)
 				tw := zone.TimeBands[timeJ].Weight
 				var assigned []*Soldier

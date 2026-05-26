@@ -512,6 +512,7 @@ func RunSimulationAllRotating(
 	maxConsecutiveDutyBlocks int,
 	minFreeShiftsAfterDuty int,
 	bandRelative float64,
+	planDayStartHour int,
 ) []*Assignment {
 	if numSoldiers < slotsPerBlock {
 		panic("need soldiers >= slots per block")
@@ -556,7 +557,7 @@ func RunSimulationAllRotating(
 			dfsOk = true
 			for day := 0; day < days; day++ {
 				for b := 0; b < B; b++ {
-					startH := int(float64(b) * sh)
+					startH := BlockStartHour(planDayStartHour, b, sh)
 					timeJ := timeCategoryForHour(startH, z)
 					tw := z.TimeWeights[timeJ]
 					var inBlock []*Soldier
@@ -604,7 +605,7 @@ func RunSimulationAllRotating(
 	}
 	for day := 0; day < days; day++ {
 		for b := 0; b < B; b++ {
-			startH := int(float64(b) * sh)
+			startH := BlockStartHour(planDayStartHour, b, sh)
 			timeJ := timeCategoryForHour(startH, z)
 			tw := z.TimeWeights[timeJ]
 			var assigned []*Soldier

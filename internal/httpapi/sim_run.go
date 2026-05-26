@@ -87,6 +87,34 @@ func (s *Server) validatePlanAnchor(anchor time.Time, offset int) error {
 	return nil
 }
 
+func buildPlanDaysMeta(anchor time.Time, days int) []map[string]any {
+	out := make([]map[string]any, days)
+	for d := 0; d < days; d++ {
+		dt := anchor.AddDate(0, 0, d)
+		out[d] = map[string]any{
+			"day":            d,
+			"calendar_date":  dt.Format("2006-01-02"),
+			"weekday":        guardsched.WeekdayLongName(int(dt.Weekday())),
+		}
+	}
+	return out
+}
+
+func globalPlanDayStartFromCfg(value json.RawMessage) (hour int, raw string, err error) {
+	raw = guardsched.DefaultPlanDayStart
+	var g struct {
+		PlanDayStart string `json:"plan_day_start"`
+	}
+	if len(value) > 0 {
+		_ = json.Unmarshal(value, &g)
+	}
+	if s := strings.TrimSpace(g.PlanDayStart); s != "" {
+		raw = s
+	}
+	hour, err = guardsched.ParsePlanDayStart(raw)
+	return hour, raw, err
+}
+
 func (s *Server) globalPlanDebugOffset(ctx context.Context) int {
 	row, err := repo.GetCfg(ctx, s.Pool, "global")
 	if err != nil || row.Version == 0 {
@@ -150,10 +178,19 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	}
 
 	var global struct {
-		HistoryDays int   `json:"history_days"`
-		RandomSeed  int64 `json:"random_seed"`
+		HistoryDays   int    `json:"history_days"`
+		RandomSeed    int64  `json:"random_seed"`
+		PlanDayStart  string `json:"plan_day_start"`
 	}
 	_ = json.Unmarshal(globalRow.Value, &global)
+	planDayStartStr := strings.TrimSpace(global.PlanDayStart)
+	if planDayStartStr == "" {
+		planDayStartStr = guardsched.DefaultPlanDayStart
+	}
+	planDayStartHour, err := guardsched.ParsePlanDayStart(planDayStartStr)
+	if err != nil {
+		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+	}
 	if global.HistoryDays > 0 && body.Days > global.HistoryDays {
 		body.Days = global.HistoryDays
 	}
@@ -249,6 +286,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	recs, stats, trialMeta, err := guardsched.RunSimulationBestOfZoneConfig(
 		zc, len(keys), body.Days, trials, seedPtr,
 		minFreeH, true, 0, 2, minCool, bandRel,
+		planDayStartHour,
 	)
 	if err != nil {
 		return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
@@ -280,6 +318,9 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			"band_relative":                  bandRel,
 			"shift_cooldown_exclusions":      stats.ShiftCooldownExclusions,
 			"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
+			"plan_day_start":                 planDayStartStr,
+			"plan_day_start_hour":            planDayStartHour,
+			"plan_days":                      buildPlanDaysMeta(anchor, body.Days),
 		},
 	}, 0, "", nil
 }

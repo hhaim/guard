@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"guard/guardsched"
 	"guard/internal/model"
 	"guard/internal/repo"
 )
@@ -48,16 +49,26 @@ func buildProposalFromSim(out *simRunOutput, changes []model.PlanChange) planDoc
 func (s *Server) handlePlanContext(w http.ResponseWriter, r *http.Request) {
 	offset := s.resolvePlanDebugOffset(r.Context(), r, nil)
 	cfgOff := s.globalPlanDebugOffset(r.Context())
+	planDayStart := guardsched.DefaultPlanDayStart
+	planDayStartHour := 5
+	if row, err := repo.GetCfg(r.Context(), s.Pool, "global"); err == nil && row.Version != 0 {
+		if h, raw, perr := globalPlanDayStartFromCfg(row.Value); perr == nil {
+			planDayStart = raw
+			planDayStartHour = h
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"utc_today":            utcToday().Format("2006-01-02"),
-		"effective_today":      s.effectiveTodayUTC(offset).Format("2006-01-02"),
-		"plan_anchor":          s.allowedPlanAnchor(offset).Format("2006-01-02"),
-		"debug_day_offset":     s.planDebugOffset(offset),
-		"server_day_offset":    s.PlanDebugDayOffset,
-		"config_day_offset":    cfgOff,
-		"request_day_offset":   offset,
-		"allow_debug_offset":   s.AllowDebugOffset,
+		"utc_today":              utcToday().Format("2006-01-02"),
+		"effective_today":        s.effectiveTodayUTC(offset).Format("2006-01-02"),
+		"plan_anchor":            s.allowedPlanAnchor(offset).Format("2006-01-02"),
+		"debug_day_offset":       s.planDebugOffset(offset),
+		"server_day_offset":      s.PlanDebugDayOffset,
+		"config_day_offset":      cfgOff,
+		"request_day_offset":     offset,
+		"allow_debug_offset":     s.AllowDebugOffset,
+		"plan_day_start":         planDayStart,
+		"plan_day_start_hour":    planDayStartHour,
 	})
 }
 

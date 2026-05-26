@@ -1009,6 +1009,31 @@ def format_block_window(start_hour: int, block_hours: float) -> str:
     return f"{sh:02d}:00 (+{bh:g} h)"
 
 
+DEFAULT_PLAN_DAY_START = "05:00"
+DEFAULT_PLAN_DAY_START_HOUR = 5
+
+
+def parse_plan_day_start(s: str) -> int:
+    """Parse HH:MM (whole hours only; minutes must be 00). Default 05:00."""
+    s = (s or "").strip()
+    if not s:
+        return DEFAULT_PLAN_DAY_START_HOUR
+    parts = s.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"plan_day_start: expected HH:MM, got {s!r}")
+    h = int(parts[0].strip())
+    m = int(parts[1].strip())
+    if h < 0 or h > 23:
+        raise ValueError(f"plan_day_start: hour must be 0–23, got {parts[0]!r}")
+    if m != 0:
+        raise ValueError(f"plan_day_start: minutes must be 00, got {parts[1]!r}")
+    return h
+
+
+def block_start_hour(plan_start: int, block: int, shift_hours: float) -> int:
+    return (int(plan_start) + int(block * shift_hours)) % 24
+
+
 def parse_slot_location_indices(
     data: Dict[str, Any],
     slots_per_block: int,
@@ -1724,6 +1749,7 @@ def run_simulation(
     max_consecutive_duty_blocks: int = MAX_CONSECUTIVE_DUTY_BLOCKS_DEFAULT,
     min_free_shifts_after_duty: int = 0,
     band_relative: float = BAND_RELATIVE_DEFAULT,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> Tuple[
     List[Soldier],
     np.ndarray,
@@ -1738,6 +1764,7 @@ def run_simulation(
     if num_soldiers < slots_per_block:
         raise ValueError("need soldiers >= slots per block (concurrent guards)")
     sh = float(block_hours)
+    plan_start = int(plan_day_start_hour)
     B = calendar_blocks_per_day(sh)
     blocks_pd = B
     n_rot = sum(1 for p in zone.slot_patterns if p == "rotating")
@@ -1982,7 +2009,7 @@ def run_simulation(
             dfs_rot_ok = True
             for day in range(days):
                 for b in range(blocks_pd):
-                    start_h = int(b * sh)
+                    start_h = block_start_hour(plan_start, b, sh)
                     time_j = time_category_for_hour(start_h, zone)
                     tw = time_w[time_j]
                     in_block = [s for s in soldiers if dr[day, s.idx, b]]
@@ -2043,7 +2070,7 @@ def run_simulation(
     if not dfs_rot_ok:
         for day in range(days):
             for b in range(blocks_pd):
-                start_h = int(b * sh)
+                start_h = block_start_hour(plan_start, b, sh)
                 time_j = time_category_for_hour(start_h, zone)
                 tw = time_w[time_j]
                 assigned: List[Soldier] = []
@@ -2191,6 +2218,7 @@ def run_simulation_checkpoint_extend(
     max_consecutive_duty_blocks: int = MAX_CONSECUTIVE_DUTY_BLOCKS_DEFAULT,
     min_free_shifts_after_duty: int = 0,
     band_relative: float = BAND_RELATIVE_DEFAULT,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> Tuple[
     List[Soldier],
     np.ndarray,
@@ -2214,6 +2242,7 @@ def run_simulation_checkpoint_extend(
     if num_soldiers < slots_per_block:
         raise ValueError("need soldiers >= slots per block (concurrent guards)")
     sh = float(block_hours)
+    plan_start = int(plan_day_start_hour)
     B = calendar_blocks_per_day(sh)
     blocks_pd = B
     n_rot = sum(1 for p in zone.slot_patterns if p == "rotating")
@@ -2457,7 +2486,7 @@ def run_simulation_checkpoint_extend(
 
     for day in range(d0, d1):
         for b in range(blocks_pd):
-            start_h = int(b * sh)
+            start_h = block_start_hour(plan_start, b, sh)
             time_j = time_category_for_hour(start_h, zone)
             tw = time_w[time_j]
             assigned: List[Soldier] = []
@@ -2667,6 +2696,7 @@ def run_simulation_best_of(
     max_consecutive_duty_blocks: int = MAX_CONSECUTIVE_DUTY_BLOCKS_DEFAULT,
     min_free_shifts_after_duty: int = 0,
     band_relative: float = BAND_RELATIVE_DEFAULT,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> Tuple[
     Tuple[
         List[Soldier],
@@ -2706,6 +2736,7 @@ def run_simulation_best_of(
         max_consecutive_duty_blocks=max_consecutive_duty_blocks,
         min_free_shifts_after_duty=min_free_shifts_after_duty,
         band_relative=band_relative,
+        plan_day_start_hour=plan_day_start_hour,
     )
 
     if trials == 1:
@@ -3680,6 +3711,16 @@ def main() -> None:
         help="HTML zone charts: line chart (mean raw h/day), heatmap, or both (default: lines)",
     )
     p.add_argument(
+        "--plan-day-start",
+        type=str,
+        default=DEFAULT_PLAN_DAY_START,
+        metavar="HH:MM",
+        help=(
+            "Wall-clock hour when each 24h plan day begins (whole hours only, default 05:00). "
+            "Shifts the rotating block grid; full_day and windowed_slots keep YAML wall hours."
+        ),
+    )
+    p.add_argument(
         "--band-relative",
         type=float,
         default=BAND_RELATIVE_DEFAULT,
@@ -3790,6 +3831,7 @@ def main() -> None:
         default_shift_hours=BLOCK_HOURS_DEFAULT,
     )
     block_hours_eff = float(zone.shift_hours)
+    plan_day_start_hour = parse_plan_day_start(args.plan_day_start)
     blocks_pd = calendar_blocks_per_day(block_hours_eff)
 
     if args.sweep_band_relative is not None:
@@ -3828,6 +3870,7 @@ def main() -> None:
                     max_consecutive_duty_blocks=args.max_consecutive_duty_blocks,
                     min_free_shifts_after_duty=args.min_free_shifts_after_duty,
                     band_relative=br,
+                    plan_day_start_hour=plan_day_start_hour,
                 )
             except RestConstraintError as e:
                 print(f"ERROR at band_relative={br}: {e}", file=sys.stderr)
@@ -3886,6 +3929,7 @@ def main() -> None:
                 max_consecutive_duty_blocks=args.max_consecutive_duty_blocks,
                 min_free_shifts_after_duty=args.min_free_shifts_after_duty,
                 band_relative=args.band_relative,
+                plan_day_start_hour=plan_day_start_hour,
             )
             args.days = prefix_days + extend_days
             fm = fairness_metrics(pack[1], pack[0])
@@ -3905,6 +3949,7 @@ def main() -> None:
                 max_consecutive_duty_blocks=args.max_consecutive_duty_blocks,
                 min_free_shifts_after_duty=args.min_free_shifts_after_duty,
                 band_relative=args.band_relative,
+                plan_day_start_hour=plan_day_start_hour,
             )
         (
             soldiers,

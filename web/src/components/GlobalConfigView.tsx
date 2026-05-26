@@ -13,6 +13,7 @@ import {
   parseFormFromJson,
   type GlobalFormData,
 } from "../lib/globalConfig";
+import { parsePlanDayStart } from "../lib/planDay";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 
 type CfgResp = { key: string; value: unknown; version: number; updated_at: string };
@@ -164,6 +165,24 @@ export function GlobalConfigView() {
             value={formData.number_of_iteration}
             onChange={(n) => updateField("number_of_iteration", n)}
           />
+          <div className="settings-row">
+            <div className="settings-row-label">
+              <span className="title">Plan day start</span>
+              <span className="hint">Start of each 24h plan day (HH:00, UTC)</span>
+            </div>
+            <input
+              className="settings-input"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              value={formData.plan_day_start}
+              onChange={(e) => {
+                const raw = e.target.value;
+                const p = parsePlanDayStart(raw);
+                updateField("plan_day_start", p.ok ? p.value : raw);
+              }}
+            />
+          </div>
         </section>
 
         <section className="glass-card" aria-label="Randomness">

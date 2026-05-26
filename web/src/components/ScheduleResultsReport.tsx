@@ -12,6 +12,7 @@ import {
   inferSoldierCount,
 } from "../lib/scheduleReport";
 import { normalizePlanDoc, type PlanDoc } from "../lib/planDoc";
+import { formatWallClockHour, resolvePlanDayStartHour, timelineChartLayout } from "../lib/planDay";
 import { ScheduleStatsPanel } from "./ScheduleStatsPanel";
 
 export type ScheduleReportSections = {
@@ -78,7 +79,7 @@ function ScheduleMatrixTable({
 }) {
   return (
     <div className="sched-matrix-block">
-      <h4 className="sched-subtitle">Day {matrix.day} — schedule matrix (time × slot)</h4>
+      <h4 className="sched-subtitle">{matrix.title} — schedule matrix (time × slot)</h4>
       <div className="sched-table-scroll">
         <table className="sched-table sched-matrix-table">
           <thead>
@@ -200,34 +201,39 @@ function SoldierDetailTable({
 
 function SoldierTimelineChart({
   lanes,
-  totalHours,
   days,
   blockHours,
   slotsPerBlock,
+  planDayStartHour,
   display,
 }: {
   lanes: ReturnType<typeof buildTimelineLanes>;
-  totalHours: number;
   days: number;
   blockHours: number;
   slotsPerBlock: number;
+  planDayStartHour: number;
   display: SoldierDisplay;
 }) {
+  const layout = useMemo(
+    () => timelineChartLayout(days, planDayStartHour),
+    [days, planDayStartHour],
+  );
+
   const ticks = useMemo(() => {
-    const out: { hour: number; left: number }[] = [];
-    const step = totalHours <= 24 ? 4 : 6;
-    for (let h = 0; h <= totalHours; h += step) {
-      out.push({ hour: h, left: (h / totalHours) * 100 });
+    const out: { label: string; left: number }[] = [];
+    const step = layout.spanHours <= 24 ? 4 : 6;
+    for (let off = 0; off <= layout.spanHours; off += step) {
+      out.push({ label: layout.tickWallClock(off), left: layout.tickLeftPct(off) });
     }
     return out;
-  }, [totalHours]);
+  }, [layout]);
 
   return (
     <div className="sched-timeline-wrap">
       <h4 className="sched-subtitle">Soldier timelines (full simulation)</h4>
       <p className="sched-hint">
-        Green = off post, red = posted duty. X-axis is hours from the start of day 1; dashed lines are midnight between
-        simulation days.
+        Green = off post, red = posted duty. X-axis is wall-clock time from plan day start (
+        {formatWallClockHour(planDayStartHour)}); dashed lines mark the next plan day.
       </p>
       <p className="sched-hint sched-timeline-caption">
         {days}d — {lanes.length} soldiers, {slotsPerBlock} slots/block, shift_hours={blockHours}h
@@ -243,8 +249,8 @@ function SoldierTimelineChart({
         </div>
         <div className="sched-timeline-axis">
           {ticks.map((t) => (
-            <span key={t.hour} className="sched-timeline-tick" style={{ left: `${t.left}%` }}>
-              {t.hour}
+            <span key={t.label} className="sched-timeline-tick" style={{ left: `${t.left}%` }}>
+              {t.label}
             </span>
           ))}
         </div>
@@ -254,7 +260,7 @@ function SoldierTimelineChart({
               <div
                 key={i}
                 className="sched-timeline-midnight"
-                style={{ left: `${((i + 1) * 24) / totalHours * 100}%` }}
+                style={{ left: `${layout.dayBoundaryLeftPct(i)}%` }}
               />
             ))}
           {lanes.map((lane) => (
@@ -271,17 +277,17 @@ function SoldierTimelineChart({
                     key={i}
                     className={seg.onDuty ? "sched-seg sched-seg-on" : "sched-seg sched-seg-off"}
                     style={{
-                      left: `${(seg.startHour / totalHours) * 100}%`,
-                      width: `${(seg.duration / totalHours) * 100}%`,
+                      left: `${layout.segmentLeftPct(seg.startHour)}%`,
+                      width: `${layout.segmentWidthPct(seg.duration)}%`,
                     }}
-                    title={`${lane.label}: ${seg.onDuty ? "duty" : "free"} ${seg.startHour}h–${seg.startHour + seg.duration}h`}
+                    title={`${lane.label}: ${seg.onDuty ? "duty" : "free"} ${formatWallClockHour(seg.startHour)}–${formatWallClockHour(seg.startHour + seg.duration)}`}
                   />
                 ))}
               </div>
             </div>
           ))}
         </div>
-        <div className="sched-timeline-xlabel">Simulation time (hours)</div>
+        <div className="sched-timeline-xlabel">Wall-clock time (UTC)</div>
       </div>
     </div>
   );
@@ -296,7 +302,8 @@ export function ScheduleResultsReport({
   sections: sectionsProp,
 }: Props) {
   const plan = useMemo(() => normalizePlanDoc(planProp), [planProp]);
-  const { assignments, days, shift_hours: shiftHours, meta } = plan;
+  const { assignments, days, shift_hours: shiftHours, meta, anchor_date: anchorDate } = plan;
+  const planDayStartHour = resolvePlanDayStartHour(meta);
 
   const sections = { ...DEFAULT_SECTIONS, ...sectionsProp };
   const [selectedSoldier, setSelectedSoldier] = useState<number | null>(null);
@@ -314,13 +321,16 @@ export function ScheduleResultsReport({
     return {
       zone,
       soldierCount,
-      matrices: buildScheduleMatrices(assignments, days, zone),
+      matrices: buildScheduleMatrices(assignments, days, zone, {
+        planDayStartHour,
+        anchorDate,
+      }),
       busy,
-      lanes: buildTimelineLanes(busy, zone.shiftHours, soldierCount),
+      lanes: buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour),
       totalHours: days * 24,
       stats: buildScheduleStats(assignments, days, zone, soldierCount),
     };
-  }, [assignments, days, shiftHours, zones]);
+  }, [assignments, days, shiftHours, zones, anchorDate, planDayStartHour]);
 
   const display = useMemo(
     () => buildSoldierDisplay(soldierIds, soldiers, report.soldierCount),
@@ -329,8 +339,14 @@ export function ScheduleResultsReport({
 
   const soldierRows = useMemo(() => {
     if (selectedSoldier == null) return null;
-    return buildSoldierBlockRows(selectedSoldier, assignments, days, report.zone);
-  }, [selectedSoldier, assignments, days, report.zone]);
+    return buildSoldierBlockRows(
+      selectedSoldier,
+      assignments,
+      days,
+      report.zone,
+      planDayStartHour,
+    );
+  }, [selectedSoldier, assignments, days, report.zone, planDayStartHour]);
 
   const trialSeed =
     meta?.trial != null && typeof meta.trial === "object" && meta.trial !== null
@@ -353,6 +369,7 @@ export function ScheduleResultsReport({
         <p className="sched-hint">
           {assignments.length} assignments · {report.zone.blocksPerDay} blocks/day · {report.zone.shiftHours}h shifts
           {trialSeed != null ? ` · seed ${String(trialSeed)}` : ""}
+          {` · plan day starts ${String(meta?.plan_day_start ?? "05:00")}`}
         </p>
         <button type="button" className="btn btn-tinted sched-json-toggle" onClick={() => setShowJson((v) => !v)}>
           {showJson ? "Hide JSON" : "Show JSON"}
@@ -422,10 +439,10 @@ export function ScheduleResultsReport({
       {sections.timeline && (
         <SoldierTimelineChart
           lanes={report.lanes}
-          totalHours={report.totalHours}
           days={days}
           blockHours={report.zone.shiftHours}
           slotsPerBlock={report.zone.slotsPerBlock}
+          planDayStartHour={planDayStartHour}
           display={display}
         />
       )}

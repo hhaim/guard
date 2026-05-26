@@ -1,3 +1,4 @@
+import { formatWallClockHour, resolvePlanDayStartHour, timelineChartLayout } from "./planDay";
 import type { PlanChange, PlanDoc } from "./planDoc";
 import type { Soldier } from "../lib/soldiers";
 import {
@@ -336,16 +337,17 @@ function soldierDetailHtml(
 
 function timelineHtml(
   lanes: ReturnType<typeof buildTimelineLanes>,
-  totalHours: number,
   days: number,
+  planDayStartHour: number,
   display: SoldierDisplay
 ): string {
+  const layout = timelineChartLayout(days, planDayStartHour);
   const laneRows = lanes
     .map((lane) => {
       const segs = lane.segments
         .map(
           (seg) =>
-            `<span class="seg ${seg.onDuty ? "seg-on" : "seg-off"}" style="left:${(seg.startHour / totalHours) * 100}%;width:${(seg.duration / totalHours) * 100}%"></span>`
+            `<span class="seg ${seg.onDuty ? "seg-on" : "seg-off"}" style="left:${layout.segmentLeftPct(seg.startHour)}%;width:${layout.segmentWidthPct(seg.duration)}%"></span>`
         )
         .join("");
       const badge = soldierBadgeHtml(lane.soldierIdx, lane.label, display);
@@ -356,7 +358,7 @@ function timelineHtml(
     })
     .join("");
   return `<div class="sched-timeline-wrap">
-    <p class="sched-hint">Green = off post, red = on duty. ${days} day(s), ${totalHours}h total span.</p>
+    <p class="sched-hint">Green = off post, red = on duty. ${days} plan day(s) from ${esc(formatWallClockHour(planDayStartHour))}; wall-clock UTC.</p>
     ${laneRows}
   </div>`;
 }
@@ -488,6 +490,8 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
   const assignments = proposal.assignments;
   const days = proposal.days;
   const shiftHours = proposal.shift_hours;
+  const planDayStartHour = resolvePlanDayStartHour(proposal.meta);
+  const anchorDate = proposal.anchor_date;
   const slotsPerBlock = zones.slots.length;
   const zone = buildZoneReportView(zones, slotsPerBlock);
   if (shiftHours > 0) {
@@ -496,9 +500,12 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
   }
   const soldierCount = inferSoldierCount(assignments);
   const display = buildSoldierDisplay(soldierIds, soldiers, soldierCount);
-  const matrices = buildScheduleMatrices(assignments, days, zone);
+  const matrices = buildScheduleMatrices(assignments, days, zone, {
+    planDayStartHour,
+    anchorDate,
+  });
   const busy = buildDutyBusy(assignments, days, soldierCount, zone.blocksPerDay);
-  const lanes = buildTimelineLanes(busy, zone.shiftHours, soldierCount);
+  const lanes = buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour);
   const stats = buildScheduleStats(assignments, days, zone, soldierCount);
   const totalHours = days * 24;
   const changes = proposal.changes ?? [];
@@ -510,7 +517,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
         m,
         display.shortLabel,
         display,
-        `Day ${m.day} — schedule matrix (time × slot)`
+        `${m.title} — schedule matrix (time × slot)`
       )
     )
     .join("");
@@ -521,13 +528,13 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
         m,
         display.fullLabel,
         display,
-        `Day ${m.day} — schedule matrix (full name)`
+        `${m.title} — schedule matrix (full name)`
       )
     )
     .join("");
 
   const soldierSections = Array.from({ length: soldierCount }, (_, s) => {
-    const rows = buildSoldierBlockRows(s, assignments, days, zone);
+    const rows = buildSoldierBlockRows(s, assignments, days, zone, planDayStartHour);
     return soldierDetailHtml(s, display.fullLabel(s), rows, display);
   }).join("");
 
@@ -549,6 +556,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
         ${effectiveToday ? ` · Effective today: <strong>${esc(effectiveToday)}</strong>` : ""}
         ${trialSeed != null ? ` · Seed: <strong>${esc(String(trialSeed))}</strong>` : ""}
         · Generated: ${esc(generatedAt)} UTC
+        · Plan day starts: <strong>${esc(String(proposal.meta?.plan_day_start ?? "05:00"))}</strong>
       </p>
       <h2 class="sched-section-title">Manual swaps</h2>
       ${changesTableHtml(changes)}
@@ -560,7 +568,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
 
     <div class="pdf-page">
       <h2 class="sched-section-title">Soldier timelines</h2>
-      ${timelineHtml(lanes, totalHours, days, display)}
+      ${timelineHtml(lanes, days, planDayStartHour, display)}
     </div>
 
     ${statsHtml(stats, days, zone.shiftHours, zone.slotsPerBlock, display)}

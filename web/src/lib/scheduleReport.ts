@@ -1,5 +1,6 @@
 import type { ScheduleAssignment } from "./planDoc";
 import type { ZonesDoc } from "./zones";
+import { blockStartHour, calendarDateForDay, planDayTitle, weekdayLongName } from "./planDay";
 import { slotDisplayLabel } from "./zones";
 
 export type { ScheduleAssignment } from "./planDoc";
@@ -43,8 +44,16 @@ export type MatrixRow = {
 
 export type MatrixDay = {
   day: number;
+  title: string;
+  calendarDate?: string;
+  weekday?: string;
   headers: { slot: number; label: string; locId: string }[];
   rows: MatrixRow[];
+};
+
+export type ScheduleMatrixOpts = {
+  planDayStartHour?: number;
+  anchorDate?: string;
 };
 
 export type TimelineSegment = {
@@ -164,7 +173,10 @@ export function buildScheduleMatrices(
   assignments: ScheduleAssignment[],
   days: number,
   zone: ZoneReportView,
+  opts?: ScheduleMatrixOpts,
 ): MatrixDay[] {
+  const planStart = opts?.planDayStartHour ?? 0;
+  const anchor = opts?.anchorDate?.trim() ?? "";
   const lookupRot = new Map<string, { soldierIdx: number; label: string }>();
   const merged = new Map<string, { soldierIdx: number; label: string; rowspan: number; startBlock: number }>();
 
@@ -198,7 +210,7 @@ export function buildScheduleMatrices(
     const skip = Array(zone.slotsPerBlock).fill(0);
 
     for (let b = 0; b < zone.blocksPerDay; b++) {
-      const sh = Math.round(b * zone.shiftHours);
+      const sh = blockStartHour(planStart, b, zone.shiftHours);
       const cells: MatrixCell[] = [];
       for (let j = 0; j < zone.slotsPerBlock; j++) {
         if (skip[j] > 0) {
@@ -225,7 +237,16 @@ export function buildScheduleMatrices(
       }
       rows.push({ window: formatBlockWindow(sh, zone.shiftHours), cells });
     }
-    matrices.push({ day: d + 1, headers, rows });
+    const calendarDate = anchor ? calendarDateForDay(anchor, d) : undefined;
+    const weekday = calendarDate ? weekdayLongName(calendarDate) : undefined;
+    matrices.push({
+      day: d + 1,
+      title: anchor ? planDayTitle(d, anchor) : `Day ${d + 1}`,
+      calendarDate,
+      weekday,
+      headers,
+      rows,
+    });
   }
   return matrices;
 }
@@ -235,6 +256,7 @@ export function buildSoldierBlockRows(
   assignments: ScheduleAssignment[],
   days: number,
   zone: ZoneReportView,
+  planDayStartHour = 0,
 ): SoldierBlockRow[] {
   const dutyLookup = new Map<string, ScheduleAssignment>();
   for (const a of assignments) {
@@ -247,10 +269,13 @@ export function buildSoldierBlockRows(
   const rows: SoldierBlockRow[] = [];
   for (let d = 0; d < days; d++) {
     for (let b = 0; b < zone.blocksPerDay; b++) {
-      const startH = Math.round(b * zone.shiftHours);
+      const duty = dutyLookup.get(`${d}:${b}`);
+      const startH =
+        duty != null
+          ? duty.start_hour
+          : blockStartHour(planDayStartHour, b, zone.shiftHours);
       const timeJ = timeCategoryForHour(startH, zone);
       const win = formatBlockWindow(startH, zone.shiftHours);
-      const duty = dutyLookup.get(`${d}:${b}`);
       if (duty) {
         rows.push({
           day: d + 1,
@@ -285,6 +310,7 @@ export function buildTimelineLanes(
   busy: boolean[][][],
   blockHours: number,
   soldierCount: number,
+  planDayStartHour = 0,
 ): { soldierIdx: number; label: string; segments: TimelineSegment[] }[] {
   const days = busy.length;
   const lanes: { soldierIdx: number; label: string; segments: TimelineSegment[] }[] = [];
@@ -293,7 +319,7 @@ export function buildTimelineLanes(
     for (let d = 0; d < days; d++) {
       for (let b = 0; b < (busy[d]?.[s]?.length ?? 0); b++) {
         segments.push({
-          startHour: d * 24 + b * blockHours,
+          startHour: d * 24 + planDayStartHour + b * blockHours,
           duration: blockHours,
           onDuty: !!busy[d]?.[s]?.[b],
         });

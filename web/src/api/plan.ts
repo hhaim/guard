@@ -62,6 +62,8 @@ export type PlanContext = {
   config_day_offset: number;
   request_day_offset: number;
   allow_debug_offset: boolean;
+  plan_day_start?: string;
+  plan_day_start_hour?: number;
 };
 
 export function fetchPlanContext(debugDayOffset?: number): Promise<PlanContext> {

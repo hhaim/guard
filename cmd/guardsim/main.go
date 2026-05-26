@@ -40,6 +40,7 @@ func run() int {
 	minFreeShifts := flag.Int("min-free-shifts-after-duty", 0, "Rotating cooldown: min free blocks after duty")
 	bandRelative := flag.Float64("band-relative", defaultBandRelative, "hybrid_rel band slack R")
 	maxDutyBlocks := flag.Int("max-consecutive-duty-blocks", defaultMaxDutyBlocks, "Max consecutive rotating duty blocks (0=off)")
+	planDayStart := flag.String("plan-day-start", guardsched.DefaultPlanDayStart, "Plan day start HH:MM (whole hours; default 05:00)")
 	seed := flag.Int64("seed", -1, "RNG seed (required if --sim-trials > 1)")
 	simTrials := flag.Int("sim-trials", defaultSimTrials, "Score N seeds (S..S+N-1), replay best")
 	jsonOut := flag.String("json-output", "", "Write assignments JSON to PATH (stdout if '-')")
@@ -134,10 +135,17 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "Days: %d  shift_hours: %.0f  blocks/day: %d\n", nDays, zc.ShiftHours, blocksPD)
 	}
 
+	planStartHour, err := guardsched.ParsePlanDayStart(*planDayStart)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
+
 	recs, stats, meta, err := guardsched.RunSimulationBestOfZoneConfig(
 		zc, nSoldiers, nDays, *simTrials, seedPtr,
 		*minFreeHours, true, 0,
 		*maxDutyBlocks, *minFreeShifts, *bandRelative,
+		planStartHour,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: schedule: %v\n", err)
