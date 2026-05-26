@@ -1,0 +1,19 @@
+schema_version: 1
+name: sick_full_day_s3
+sim:
+  days: 1
+  seed: 99
+  plan_day_start: "05:00"
+  start_working_day: 0
+zones:
+  file: ../../zones_s1.yaml
+  slots_per_block: 4
+status:
+  - soldier: s3
+    state: sick
+    whole_plan_day: true
+    plan_day: 0
+expect:
+  availability:
+    - plan_day: 0
+      summary: { full: 11, absent_full: 1, absent_partial: 0 }

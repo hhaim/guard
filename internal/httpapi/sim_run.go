@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"guard/guardsched"
+	"guard/internal/availability"
+	"guard/internal/model"
 	"guard/internal/repo"
 )
 
@@ -35,6 +37,7 @@ type simRunOutput struct {
 	TrialMeta    map[string]any
 	AssignJSON   []map[string]any
 	BlocksPerDay int
+	Soldiers     map[string]model.PlanDaySoldiers
 	Meta         map[string]any
 }
 
@@ -260,14 +263,11 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		if id == "" {
 			continue
 		}
-		st := strings.ToLower(strings.TrimSpace(sol.State))
-		if st != "" && st != "base" {
-			continue
-		}
 		keys = append(keys, id)
 	}
+	keys = availability.RosterFromIDs(keys)
 	if len(keys) < 1 {
-		return nil, 400, `{"error":"need at least one base soldier"}`, fmt.Errorf("no soldiers")
+		return nil, 400, `{"error":"need at least one soldier"}`, fmt.Errorf("no soldiers")
 	}
 
 	slotsPerBlock := countYAMLSlots(yamlBytes)
@@ -275,7 +275,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		return nil, 400, `{"error":"could not determine slots count from YAML"}`, fmt.Errorf("bad yaml slots")
 	}
 	if len(keys) < slotsPerBlock {
-		return nil, 400, fmt.Sprintf(`{"error":"need at least %d base soldiers"}`, slotsPerBlock), fmt.Errorf("not enough soldiers")
+		return nil, 400, fmt.Sprintf(`{"error":"need at least %d soldiers"}`, slotsPerBlock), fmt.Errorf("not enough soldiers")
 	}
 
 	zc, err := guardsched.LoadZoneConfigYAML(yamlBytes, slotsPerBlock, body.ShiftHours)
@@ -283,10 +283,15 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
 	}
 
+	availChecker, soldiersByDay, err := s.buildPlanAvailability(ctx, anchor, body.Days, planDayStartHour, keys)
+	if err != nil {
+		return nil, 500, err.Error(), err
+	}
+
 	recs, stats, trialMeta, err := guardsched.RunSimulationBestOfZoneConfig(
 		zc, len(keys), body.Days, trials, seedPtr,
 		minFreeH, true, 0, 2, minCool, bandRel,
-		planDayStartHour,
+		planDayStartHour, availChecker,
 	)
 	if err != nil {
 		return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
@@ -310,6 +315,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		TrialMeta:    trialMeta,
 		AssignJSON:   assignJSON,
 		BlocksPerDay: bp,
+		Soldiers:     soldiersByDay,
 		Meta: map[string]any{
 			"sim_trials":                     trials,
 			"trial":                          trialMeta,
@@ -372,12 +378,9 @@ func (s *Server) loadPlanInputs(ctx context.Context) (yamlBytes []byte, soldierK
 		if id == "" {
 			continue
 		}
-		st := strings.ToLower(strings.TrimSpace(sol.State))
-		if st != "" && st != "base" {
-			continue
-		}
 		soldierKeys = append(soldierKeys, id)
 	}
+	soldierKeys = availability.RosterFromIDs(soldierKeys)
 
 	slotsPerBlock := countYAMLSlots(yamlBytes)
 	zc, err := guardsched.LoadZoneConfigYAML(yamlBytes, slotsPerBlock, slotsDoc.ShiftHours)

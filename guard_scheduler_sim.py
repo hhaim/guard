@@ -60,10 +60,10 @@ import io
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from itertools import combinations
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -989,13 +989,22 @@ def time_band_clock_spans_hours(zone: ZoneConfig) -> np.ndarray:
 def heatmap_time_fraction_by_row(raw_time_per_soldier: np.ndarray) -> np.ndarray:
     """``raw_time[s,j] / sum_j raw_time[s,j]`` — each soldier’s time rows sum to 1."""
     row_sum = np.sum(raw_time_per_soldier, axis=1, keepdims=True)
-    return np.where(row_sum > 1e-12, raw_time_per_soldier / row_sum, 0.0)
+    out = np.zeros_like(raw_time_per_soldier, dtype=np.float64)
+    np.divide(
+        raw_time_per_soldier,
+        row_sum,
+        out=out,
+        where=row_sum > 1e-12,
+    )
+    return out
 
 
 def heatmap_time_fraction_by_row_daily(daily_raw_time: np.ndarray) -> np.ndarray:
     """Per (day, soldier): raw hours in band / that day’s total guard hours for that soldier."""
     row_sum = np.sum(daily_raw_time, axis=2, keepdims=True)
-    return np.where(row_sum > 1e-12, daily_raw_time / row_sum, 0.0)
+    out = np.zeros_like(daily_raw_time, dtype=np.float64)
+    np.divide(daily_raw_time, row_sum, out=out, where=row_sum > 1e-12)
+    return out
 
 
 def format_block_window(start_hour: int, block_hours: float) -> str:
@@ -1032,6 +1041,42 @@ def parse_plan_day_start(s: str) -> int:
 
 def block_start_hour(plan_start: int, block: int, shift_hours: float) -> int:
     return (int(plan_start) + int(block * shift_hours)) % 24
+
+
+def _soldier_avail(availability: Any, soldier_idx: int, day: int, check: Any) -> bool:
+    """If availability checker is set, run check(); otherwise allow."""
+    if availability is None:
+        return True
+    return bool(check())
+
+
+def _soldier_avail_wall(
+    availability: Any, soldier_idx: int, day: int, h0: int, h1: int
+) -> bool:
+    return _soldier_avail(
+        availability,
+        soldier_idx,
+        day,
+        lambda: availability.avail_duty_wall_hours(soldier_idx, day, h0, h1),
+    )
+
+
+def _soldier_avail_rotating(
+    availability: Any,
+    soldier_idx: int,
+    day: int,
+    block: int,
+    plan_start: int,
+    shift_hours: float,
+) -> bool:
+    return _soldier_avail(
+        availability,
+        soldier_idx,
+        day,
+        lambda: availability.avail_rotating_block(
+            soldier_idx, day, block, plan_start, shift_hours
+        ),
+    )
 
 
 def parse_slot_location_indices(
@@ -1638,6 +1683,34 @@ def _rotating_slot_indices(zone: ZoneConfig) -> List[int]:
     return [i for i, p in enumerate(zone.slot_patterns) if p == "rotating"]
 
 
+def _rotating_duty_blocks_in_draft(
+    draft_rot: np.ndarray, soldier_idx: int, *, day: Optional[int] = None
+) -> int:
+    """Count rotating duty blocks already set in ``draft_rot`` (optionally one plan day)."""
+    if day is None:
+        return int(np.sum(draft_rot[:, soldier_idx, :]))
+    return int(np.sum(draft_rot[day, soldier_idx, :]))
+
+
+def _rotating_combination_sort_key(
+    draft_rot: np.ndarray, day: int, comb: Sequence[Soldier]
+) -> Tuple[int, int, int]:
+    """
+    Order DFS combinations for load spread: lower max/sum duty first; when tied,
+  prefer higher roster indices so extra soldiers (e.g. s12+) are not left idle.
+    """
+    loads = [_rotating_duty_blocks_in_draft(draft_rot, s.idx) for s in comb]
+    return (max(loads), sum(loads), -sum(s.idx for s in comb))
+
+
+def _iter_rotating_combinations_fair(
+    cands: Sequence[Soldier], n_rot: int, draft_rot: np.ndarray, day: int
+) -> Iterable[Tuple[Soldier, ...]]:
+    combs = list(combinations(cands, n_rot))
+    combs.sort(key=lambda c: _rotating_combination_sort_key(draft_rot, day, c))
+    return combs
+
+
 def _rotating_eligible_for_mask(
     soldiers: Sequence[Soldier],
     draft_rot: np.ndarray,
@@ -1648,6 +1721,9 @@ def _rotating_eligible_for_mask(
     k_rest: int,
     max_consecutive_duty_blocks: int,
     x_cool: int,
+    availability: Any = None,
+    plan_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    shift_hours: float = 4.0,
 ) -> List[Soldier]:
     out: List[Soldier] = []
     for s in soldiers:
@@ -1667,6 +1743,10 @@ def _rotating_eligible_for_mask(
             )
             if gap < x_cool and gap < LARGE_LINEAR_GAP:
                 continue
+        if not _soldier_avail_rotating(
+            availability, s.idx, day, b, plan_start_hour, shift_hours
+        ):
+            continue
         out.append(s)
     return out
 
@@ -1684,6 +1764,9 @@ def _dfs_rotating_only_mask(
     max_consecutive_duty_blocks: int,
     x_cool: int,
     nodes: List[int],
+    availability: Any = None,
+    plan_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    shift_hours: float = 4.0,
 ) -> bool:
     """Fill ``draft_rot`` with exactly ``n_rot`` soldiers on duty per (day, block)."""
     if L >= days * blocks_pd:
@@ -1699,13 +1782,16 @@ def _dfs_rotating_only_mask(
         k_rest,
         max_consecutive_duty_blocks,
         x_cool,
+        availability,
+        plan_start_hour,
+        shift_hours,
     )
     if len(cands) < n_rot:
         return False
     nodes[0] += 1
     if nodes[0] > _ROTATING_COOLDOWN_DFS_MAX_NODES:
         return False
-    for comb in combinations(cands, n_rot):
+    for comb in _iter_rotating_combinations_fair(cands, n_rot, draft_rot, day):
         for s in comb:
             draft_rot[day, s.idx, b] = True
         bad = False
@@ -1729,6 +1815,9 @@ def _dfs_rotating_only_mask(
             max_consecutive_duty_blocks=max_consecutive_duty_blocks,
             x_cool=x_cool,
             nodes=nodes,
+            availability=availability,
+            plan_start_hour=plan_start_hour,
+            shift_hours=shift_hours,
         ):
             return True
         for s in comb:
@@ -1750,6 +1839,7 @@ def run_simulation(
     min_free_shifts_after_duty: int = 0,
     band_relative: float = BAND_RELATIVE_DEFAULT,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    availability: Any = None,
 ) -> Tuple[
     List[Soldier],
     np.ndarray,
@@ -1775,8 +1865,14 @@ def run_simulation(
 
     nl = zone.n_loc
     nt = zone.n_time
-    hours_total = days * 24.0
-    soldiers = [make_soldier(i, hours_total, nl, nt) for i in range(num_soldiers)]
+    soldiers = [make_soldier(i, 0.0, nl, nt) for i in range(num_soldiers)]
+    for day in range(days):
+        for i, s in enumerate(soldiers):
+            if availability is None:
+                s.available_hours += 24.0
+            else:
+                bh, ah = availability.fairness_hours(i, day)
+                s.available_hours += bh + ah
 
     loc_w = zone.loc_weights
     time_w = zone.time_weights
@@ -1828,6 +1924,7 @@ def run_simulation(
                 s
                 for s in soldiers
                 if not _any_busy_span(busy, s.idx, L0, span, B, days)
+                and _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
             ]
             if not pool:
                 raise RestConstraintError(
@@ -1907,6 +2004,7 @@ def run_simulation(
                     s
                     for s in soldiers
                     if not _any_busy_span(busy, s.idx, L0w, spanw, B, days)
+                    and _soldier_avail_wall(availability, s.idx, day, h0, h1x)
                 ]
                 if not pool:
                     continue
@@ -2004,6 +2102,9 @@ def run_simulation(
             max_consecutive_duty_blocks=max_consecutive_duty_blocks,
             x_cool=x_cool,
             nodes=dfs_nodes,
+            availability=availability,
+            plan_start_hour=plan_day_start_hour,
+            shift_hours=sh,
         ):
             np.copyto(busy_rot, dr)
             dfs_rot_ok = True
@@ -2099,6 +2200,9 @@ def run_simulation(
                             or consecutive_duty_blocks_before(busy_rot, day, b, s.idx, blocks_pd)
                             < max_consecutive_duty_blocks
                         )
+                        and _soldier_avail_rotating(
+                            availability, s.idx, day, b, plan_start, sh
+                        )
                     ]
                     if x_cool > 0:
                         stats.shift_cooldown_pool_iterations += 1
@@ -2170,7 +2274,7 @@ def run_simulation(
     raw_time_mat = np.stack([s.raw_time for s in soldiers], axis=0)
     Z = np.zeros((num_soldiers, nl + nt), dtype=np.float64)
     tot_row = np.sum(raw_loc_mat, axis=1, keepdims=True)
-    Z[:, :nl] = np.where(tot_row > 1e-12, raw_loc_mat / tot_row, 0.0)
+    np.divide(raw_loc_mat, tot_row, out=Z[:, :nl], where=tot_row > 1e-12)
     Z[:, nl:] = heatmap_time_fraction_by_row(raw_time_mat)
 
     Z_day = np.zeros((days, num_soldiers, nl + nt), dtype=np.float64)
@@ -2581,7 +2685,7 @@ def run_simulation_checkpoint_extend(
     raw_time_mat = np.stack([s.raw_time for s in soldiers], axis=0)
     Z = np.zeros((num_soldiers, nl + nt), dtype=np.float64)
     tot_row = np.sum(raw_loc_mat, axis=1, keepdims=True)
-    Z[:, :nl] = np.where(tot_row > 1e-12, raw_loc_mat / tot_row, 0.0)
+    np.divide(raw_loc_mat, tot_row, out=Z[:, :nl], where=tot_row > 1e-12)
     Z[:, nl:] = heatmap_time_fraction_by_row(raw_time_mat)
 
     Z_day = np.zeros((days, num_soldiers, nl + nt), dtype=np.float64)
@@ -2697,6 +2801,7 @@ def run_simulation_best_of(
     min_free_shifts_after_duty: int = 0,
     band_relative: float = BAND_RELATIVE_DEFAULT,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    availability: Any = None,
 ) -> Tuple[
     Tuple[
         List[Soldier],
@@ -2737,6 +2842,7 @@ def run_simulation_best_of(
         min_free_shifts_after_duty=min_free_shifts_after_duty,
         band_relative=band_relative,
         plan_day_start_hour=plan_day_start_hour,
+        availability=availability,
     )
 
     if trials == 1:
@@ -3019,11 +3125,12 @@ def build_soldier_timeline_figure(
     busy: np.ndarray,
     block_hours: float,
     title: str,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> "plt.Figure":
     """
     One horizontal lane per soldier: red = **posted duty** in that block, green = not on a
     duty row (same cells as the per-soldier HTML block table). YAML ``rest_after`` padding is
-    not shown as red here. X-axis is cumulative hours from simulation start (each day is 24 h).
+    not shown as red here. X-axis is hours along the plan-day timeline (0 = plan day start).
     """
     plt, _, Patch = _get_matplotlib()
 
@@ -3054,7 +3161,8 @@ def build_soldier_timeline_figure(
     ax.set_yticklabels([f"S{i}" for i in range(n_s - 1, -1, -1)])
     ax.set_xlim(0, total_h)
     ax.set_ylim(-0.55, n_s - 0.45)
-    ax.set_xlabel("Simulation time (hours)")
+    ps = int(plan_day_start_hour) % 24
+    ax.set_xlabel(f"Plan-day timeline (h=0 at {ps:02d}:00 wall clock)")
     ax.set_title(
         f"Per-soldier schedule (green = off post, red = posted duty)\n{title}", fontsize=10
     )
@@ -3064,6 +3172,17 @@ def build_soldier_timeline_figure(
         Patch(facecolor=red, edgecolor="white", label="Posted duty"),
     ]
     ax.legend(handles=legend_el, loc="upper right", fontsize=8)
+    step = 4
+    for off in range(0, int(total_h) + 1, step):
+        ax.text(
+            off,
+            n_s - 0.08,
+            f"{(ps + off) % 24:02d}:00",
+            fontsize=6,
+            ha="center",
+            va="top",
+            color="0.35",
+        )
     for d in range(1, days):
         ax.axvline(d * 24.0, color="0.55", lw=0.8, ls="--", alpha=0.6)
     fig.tight_layout()
@@ -3077,6 +3196,7 @@ def build_day_schedule_matrix_html(
     slots_per_block: int,
     block_hours: float,
     zone: ZoneConfig,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> str:
     """Per day: rows = time shift, columns = Slot 1..y, cell = soldier id (rowspan for full_day / windowed)."""
     lookup_rot: Dict[Tuple[int, int, int], str] = {}
@@ -3110,8 +3230,9 @@ def build_day_schedule_matrix_html(
             )
         heads_s = "".join(heads)
         rows: List[str] = []
+        plan_start = int(plan_day_start_hour)
         for b in range(blocks_pd):
-            sh = int(round(b * block_hours))
+            sh = block_start_hour(plan_start, b, block_hours)
             win = format_block_window(sh, block_hours)
             tds: List[str] = []
             for j in range(slots_per_block):
@@ -3186,6 +3307,7 @@ def write_html_report(
     sim_stats: SimulationStats,
     min_free_shifts_after_duty: int,
     zone_viz: str,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> None:
     col_labels = zone.heatmap_column_labels()
     nl = zone.n_loc
@@ -3265,9 +3387,10 @@ def write_html_report(
     n_blocks_total = calendar_blocks_per_day * days
     for sidx in range(num_soldiers_list):
         trs_s: List[str] = []
+        plan_start = int(plan_day_start_hour)
         for d in range(days):
             for b in range(calendar_blocks_per_day):
-                start_h = int(round(b * block_hours))
+                start_h = block_start_hour(plan_start, b, block_hours)
                 time_j = time_category_for_hour(start_h, zone)
                 win = format_block_window(start_h, block_hours)
                 key = (sidx, d, b)
@@ -3362,7 +3485,13 @@ def write_html_report(
     seed_s = esc(seed) if seed is not None else "—"
 
     matrix_html = build_day_schedule_matrix_html(
-        assignments, days, calendar_blocks_per_day, slots_per_block, block_hours, zone
+        assignments,
+        days,
+        calendar_blocks_per_day,
+        slots_per_block,
+        block_hours,
+        zone,
+        plan_day_start_hour=plan_day_start_hour,
     )
     matrix_toc = " ".join(
         f"<a href='#matrix-day-{d + 1}'>Day {d + 1} matrix</a>" for d in range(days)
@@ -3580,7 +3709,31 @@ def write_html_report(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("-x", "--soldiers", type=int, required=True, help="Number of soldiers")
+    p.add_argument(
+        "--scenario",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Scenario YAML (testdata/scenarios/*.yaml): zones, days, seed, status rows",
+    )
+    p.add_argument(
+        "--anchor-date",
+        type=str,
+        default=None,
+        help="Plan anchor YYYY-MM-DD for scenario status (default: scenario sim.anchor_date or 2026-05-27)",
+    )
+    p.add_argument(
+        "--check-expect",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="With --scenario, validate expect.* from the YAML (default: on)",
+    )
+    p.add_argument(
+        "--availability-only",
+        action="store_true",
+        help="With --scenario, compile availability and exit (no schedule run)",
+    )
+    p.add_argument("-x", "--soldiers", type=int, default=None, help="Number of soldiers")
     p.add_argument(
         "-y",
         "--slots",
@@ -3782,6 +3935,84 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    scenario_avail: Any = None
+    scenario_doc: Any = None
+    if args.scenario:
+        from scenario_loader import (
+            build_checker,
+            check_expectations,
+            compile_day_availability,
+            load_scenario_file,
+            parse_plan_day_start_hour,
+            resolve_scenario_times,
+            roster as scenario_roster,
+        )
+
+        sc_path = Path(args.scenario)
+        scenario_doc = load_scenario_file(sc_path)
+        anchor = scenario_doc.default_anchor()
+        if args.anchor_date:
+            anchor = datetime.strptime(args.anchor_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if scenario_doc.status_only:
+            scenario_doc.sim["plan_day_start"] = args.plan_day_start
+        resolve_scenario_times(scenario_doc, anchor)
+        if args.days is None:
+            if scenario_doc.days > 0:
+                args.days = scenario_doc.days
+            elif scenario_doc.status_only:
+                raise SystemExit(
+                    "-d/--days is required with schema_version 2 status-only scenario"
+                )
+        elif scenario_doc.status_only:
+            scenario_doc.sim["days"] = args.days
+        if args.soldiers is None:
+            args.soldiers = scenario_doc.infer_soldier_count(12)
+        if args.slots is None and scenario_doc.slots_per_block > 0:
+            args.slots = scenario_doc.slots_per_block
+        if args.seed is None and scenario_doc.seed:
+            args.seed = scenario_doc.seed
+        if not scenario_doc.status_only and args.zones == "zones.yaml":
+            args.zones = str(scenario_doc.resolve_zones_path(sc_path))
+        if not scenario_doc.status_only and args.plan_day_start == DEFAULT_PLAN_DAY_START:
+            if scenario_doc.plan_day_start:
+                args.plan_day_start = scenario_doc.plan_day_start
+        roster_ids = scenario_roster(args.soldiers)
+        chk = build_checker(scenario_doc, roster_ids, num_days=args.days)
+        if args.check_expect:
+            check_expectations(scenario_doc, chk, assignments=None, roster_ids=roster_ids)
+        if len(scenario_doc.resolved) > 0:
+            scenario_avail = chk
+        print(
+            f"Scenario: {scenario_doc.name}  anchor={scenario_doc.anchor.date()}  "
+            f"status_rows={len(scenario_doc.resolved)}",
+            file=sys.stderr,
+        )
+        if args.availability_only:
+            import json
+
+            out: Dict[str, Any] = {}
+            ps = parse_plan_day_start_hour(scenario_doc.plan_day_start)
+            n_scenario_days = args.days if args.days is not None else max(1, scenario_doc.days)
+            for d in range(n_scenario_days):
+                cal = (scenario_doc.anchor + timedelta(days=d)).strftime("%Y-%m-%d")
+                day = compile_day_availability(
+                    scenario_doc.anchor, d, ps, roster_ids, scenario_doc.resolved
+                )
+                out[cal] = {
+                    "avail_full": day.avail_full,
+                    "avail_partial": day.avail_partial,
+                    "summary": {
+                        "full": day.full,
+                        "absent_full": day.absent_full,
+                        "absent_partial": day.absent_partial,
+                    },
+                }
+            print(json.dumps(out, indent=2))
+            raise SystemExit(0)
+
+    if args.soldiers is None:
+        raise SystemExit("-x/--soldiers is required unless using --scenario")
+
     if args.load_state:
         if args.sweep_band_relative is not None:
             raise SystemExit("--load-state cannot be combined with --sweep-band-relative")
@@ -3950,6 +4181,7 @@ def main() -> None:
                 min_free_shifts_after_duty=args.min_free_shifts_after_duty,
                 band_relative=args.band_relative,
                 plan_day_start_hour=plan_day_start_hour,
+                availability=scenario_avail,
             )
         (
             soldiers,
@@ -3969,6 +4201,19 @@ def main() -> None:
     expect = expected_assignment_count(zone, args.days, blocks_pd, slots_eff)
     if n_asn != expect:
         raise RuntimeError(f"internal: assignment count {n_asn} != expected {expect}")
+    if args.scenario and args.check_expect and scenario_doc is not None:
+        from scenario_loader import build_checker, check_expectations, roster as scenario_roster
+
+        roster_ids = scenario_roster(args.soldiers)
+        chk = build_checker(scenario_doc, roster_ids)
+        try:
+            check_expectations(
+                scenario_doc, chk, assignments=assignments, roster_ids=roster_ids
+            )
+            print("Scenario expectations: OK", file=sys.stderr)
+        except AssertionError as e:
+            print(f"ERROR: scenario expect: {e}", file=sys.stderr)
+            raise SystemExit(1) from e
     if args.save_state:
         ck_meta = build_checkpoint_run_meta(zone, zones_path, slots_eff, block_hours_eff, args)
         ck_doc = build_checkpoint_document(
@@ -4159,7 +4404,9 @@ def main() -> None:
     busy_tl = build_busy_tensor(
         assignments, args.days, args.soldiers, blocks_pd, include_yaml_rest=False
     )
-    fig_tl = build_soldier_timeline_figure(busy_tl, block_hours_eff, title)
+    fig_tl = build_soldier_timeline_figure(
+        busy_tl, block_hours_eff, title, plan_day_start_hour=plan_day_start_hour
+    )
     soldier_timeline_png = _figure_to_png_bytes(fig_tl)
 
     if not args.no_png:
@@ -4248,6 +4495,7 @@ def main() -> None:
             sim_stats,
             args.min_free_shifts_after_duty,
             args.zone_viz,
+            plan_day_start_hour=plan_day_start_hour,
         )
         if args.pdf_output:
             export_html_to_pdf(Path(args.html_output), Path(args.pdf_output))

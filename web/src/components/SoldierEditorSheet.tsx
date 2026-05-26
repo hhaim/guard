@@ -1,5 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
-import { SOLDIER_STATES, soldierInitials, type Soldier } from "../lib/soldiers";
+import { fetchPlanContext } from "../api/plan";
+import { parsePlanDayStart } from "../lib/planDay";
+import { soldierInitials, type Soldier } from "../lib/soldiers";
+import { SoldierStatusTimeline } from "./SoldierStatusTimeline";
 
 type SoldierEditorSheetProps = {
   open: boolean;
@@ -57,6 +61,15 @@ export function SoldierEditorSheet({
   const title = mode === "new" ? "New Soldier" : "Edit";
   const canDone = soldier.id.trim() !== "";
 
+  const planCtxQ = useQuery({
+    queryKey: ["plan", "context"],
+    queryFn: () => fetchPlanContext(),
+    enabled: open && mode === "edit",
+  });
+  const anchor = planCtxQ.data?.plan_anchor ?? "";
+  const startParsed = parsePlanDayStart(planCtxQ.data?.plan_day_start ?? "05:00");
+  const planDayStartHour = startParsed.ok ? startParsed.hour : 5;
+
   return (
     <div className="contacts-sheet-backdrop" role="presentation" onPointerDown={onCancel}>
       <div
@@ -103,24 +116,15 @@ export function SoldierEditorSheet({
             placeholder="e.g. s0"
             autoCapitalize="none"
           />
-          <div className="settings-row">
-            <label className="settings-row-label">
-              <span className="title">Status</span>
-              <span className="hint">Only “on base” soldiers are scheduled</span>
-            </label>
-            <select
-              className="settings-input settings-input-wide"
-              value={soldier.state}
-              onChange={(e) => onChange({ ...soldier, state: e.target.value })}
-            >
-              {SOLDIER_STATES.map((st) => (
-                <option key={st.value} value={st.value}>
-                  {st.label}
-                </option>
-              ))}
-            </select>
-          </div>
         </section>
+
+        {mode === "edit" && anchor && soldier.id.trim() && (
+          <SoldierStatusTimeline
+            soldierId={soldier.id.trim()}
+            anchorDate={anchor}
+            planDayStartHour={planDayStartHour}
+          />
+        )}
 
         {mode === "edit" && onDelete && (
           <button type="button" className="btn btn-destructive contacts-delete-btn" onPointerDown={() => onDelete()}>

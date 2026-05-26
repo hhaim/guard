@@ -919,3 +919,26 @@ def test_run_simulation_mixed_patterns_cooldown2_regression() -> None:
         min_free_shifts_after_duty=2,
         plan_day_start_hour=0,  # pinned: seed 7 + this YAML was validated at midnight grid
     )
+
+
+def test_rotating_dfs_spreads_extra_soldiers_zones_s1() -> None:
+    """16 soldiers on zones_s1 (4 gate slots): s12–s15 must not be left idle when feasible."""
+    zone = g.load_zone_config(ZONES_S1, slots_per_block=4)
+    rng = random.Random(0)
+    soldiers, *_ = g.run_simulation(
+        num_soldiers=16,
+        slots_per_block=4,
+        days=1,
+        zone=zone,
+        block_hours=float(zone.shift_hours),
+        rng=rng,
+        min_consecutive_free_hours=6,
+        min_free_shifts_after_duty=2,
+        band_relative=0.2,
+        plan_day_start_hour=5,
+    )
+    raw = [s.total_raw_guard_hours() for s in soldiers]
+    assert min(raw) > 0.0, f"idle soldiers with hours {raw}"
+    assert soldiers[12].total_raw_guard_hours() > 0.0
+    assert soldiers[13].total_raw_guard_hours() > 0.0
+    assert soldiers[14].total_raw_guard_hours() > 0.0

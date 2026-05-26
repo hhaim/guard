@@ -378,6 +378,9 @@ func rotatingEligibleForMask(
 	soldiers []*Soldier,
 	draftRot, busy [][][]bool,
 	day, b, blocksPd, kRest, maxConsecutiveDuty, xCool int,
+	avail AvailabilityChecker,
+	planDayStartHour int,
+	sh float64,
 ) []*Soldier {
 	var out []*Soldier
 	for _, s := range soldiers {
@@ -396,6 +399,11 @@ func rotatingEligibleForMask(
 			if gap < xCool && gap < largeLinearGap {
 				continue
 			}
+		}
+		if avail != nil && !soldierAvail(avail, s.Idx, day, func() bool {
+			return avail.AvailRotatingBlock(s.Idx, day, b, planDayStartHour, sh)
+		}) {
+			continue
 		}
 		out = append(out, s)
 	}
@@ -416,17 +424,90 @@ func nChooseK(n, k int) int {
 	return c
 }
 
+func rotatingDutyBlocksInDraft(draftRot [][][]bool, soldierIdx int) int {
+	n := 0
+	for d := range draftRot {
+		for b := range draftRot[d][soldierIdx] {
+			if draftRot[d][soldierIdx][b] {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+type rotatingCombKey struct {
+	maxLoad, sumLoad, negIdxSum int
+}
+
+func rotatingCombinationSortKey(draftRot [][][]bool, comb []*Soldier) rotatingCombKey {
+	maxL, sumL, idxSum := 0, 0, 0
+	for _, s := range comb {
+		load := rotatingDutyBlocksInDraft(draftRot, s.Idx)
+		if load > maxL {
+			maxL = load
+		}
+		sumL += load
+		idxSum += s.Idx
+	}
+	return rotatingCombKey{maxLoad: maxL, sumLoad: sumL, negIdxSum: -idxSum}
+}
+
+func forEachCombinationSoldiersFair(
+	draftRot [][][]bool,
+	pool []*Soldier,
+	k int,
+	fn func([]*Soldier) bool,
+) bool {
+	var combs [][]*Soldier
+	var comb []*Soldier
+	var rec func(start int)
+	rec = func(start int) {
+		if len(comb) == k {
+			cp := append([]*Soldier(nil), comb...)
+			combs = append(combs, cp)
+			return
+		}
+		for i := start; i < len(pool); i++ {
+			comb = append(comb, pool[i])
+			rec(i + 1)
+			comb = comb[:len(comb)-1]
+		}
+	}
+	rec(0)
+	sort.Slice(combs, func(i, j int) bool {
+		ki := rotatingCombinationSortKey(draftRot, combs[i])
+		kj := rotatingCombinationSortKey(draftRot, combs[j])
+		if ki.maxLoad != kj.maxLoad {
+			return ki.maxLoad < kj.maxLoad
+		}
+		if ki.sumLoad != kj.sumLoad {
+			return ki.sumLoad < kj.sumLoad
+		}
+		return ki.negIdxSum < kj.negIdxSum
+	})
+	for _, c := range combs {
+		if fn(c) {
+			return true
+		}
+	}
+	return false
+}
+
 func dfsRotatingOnlyMask(
 	draftRot, busy [][][]bool,
 	soldiers []*Soldier,
 	L, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool int,
+	avail AvailabilityChecker,
+	planDayStartHour int,
+	sh float64,
 	nodes *int,
 ) bool {
 	if L >= days*blocksPd {
 		return true
 	}
 	day, b := L/blocksPd, L%blocksPd
-	cands := rotatingEligibleForMask(soldiers, draftRot, busy, day, b, blocksPd, kRest, maxConsecutiveDuty, xCool)
+	cands := rotatingEligibleForMask(soldiers, draftRot, busy, day, b, blocksPd, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh)
 	if len(cands) < nRot {
 		return false
 	}
@@ -434,7 +515,7 @@ func dfsRotatingOnlyMask(
 	if *nodes > maxRotatingDfsNodes {
 		return false
 	}
-	return forEachCombinationSoldiers(cands, nRot, func(comb []*Soldier) bool {
+	return forEachCombinationSoldiersFair(draftRot, cands, nRot, func(comb []*Soldier) bool {
 		for _, s := range comb {
 			draftRot[day][s.Idx][b] = true
 		}
@@ -449,7 +530,7 @@ func dfsRotatingOnlyMask(
 			}
 		}
 		if !bad {
-			if dfsRotatingOnlyMask(draftRot, busy, soldiers, L+1, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool, nodes) {
+			if dfsRotatingOnlyMask(draftRot, busy, soldiers, L+1, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh, nodes) {
 				return true
 			}
 		}
@@ -552,7 +633,7 @@ func RunSimulationAllRotating(
 		rotatingDfsTried = true
 		dr := new3DBool(days, numSoldiers, B)
 		nodes := 0
-		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, B, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, &nodes) {
+		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, B, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, nil, planDayStartHour, sh, &nodes) {
 			copy3D(busyRot, dr)
 			dfsOk = true
 			for day := 0; day < days; day++ {

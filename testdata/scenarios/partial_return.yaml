@@ -1,0 +1,19 @@
+schema_version: 1
+name: partial_return_s2
+sim:
+  days: 1
+  seed: 42
+  plan_day_start: "05:00"
+  start_working_day: 0
+zones:
+  file: ../../zones_s1.yaml
+  slots_per_block: 4
+status:
+  - soldier: s2
+    state: away
+    from: { plan_day: -1, time: "05:00" }
+    until: { plan_day: 0, time: "12:00" }
+expect:
+  availability:
+    - plan_day: 0
+      summary: { full: 11, absent_full: 0, absent_partial: 1 }

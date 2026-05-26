@@ -2,7 +2,8 @@ export type Soldier = {
   id: string;
   key?: string;
   full_name: string;
-  state: string;
+  /** @deprecated use status board entries; read-only from legacy cfg */
+  state?: string;
 };
 
 export type SoldiersDoc = {
@@ -22,7 +23,6 @@ export function emptySoldier(index: number): Soldier {
   return {
     id: `s${index}`,
     full_name: "",
-    state: "base",
   };
 }
 
@@ -33,7 +33,9 @@ function normalizeSoldier(raw: Record<string, unknown>): Soldier {
     id,
     ...(key ? { key } : {}),
     full_name: String(raw.full_name ?? "").trim(),
-    state: String(raw.state ?? "base").trim() || "base",
+    ...(raw.state != null && String(raw.state).trim()
+      ? { state: String(raw.state).trim() }
+      : {}),
   };
 }
 
@@ -59,7 +61,6 @@ export function deriveJsonFromDoc(doc: SoldiersDoc): Record<string, unknown> {
       const row: Record<string, string> = {
         id: s.id,
         full_name: s.full_name,
-        state: s.state || "base",
       };
       if (s.key && s.key !== s.id) row.key = s.key;
       return row;

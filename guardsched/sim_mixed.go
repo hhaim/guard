@@ -17,6 +17,7 @@ func RunSimulationZoneConfig(
 	minFreeShiftsAfterDuty int,
 	bandRelative float64,
 	planDayStartHour int,
+	avail AvailabilityChecker,
 ) ([]*AssignmentRecord, *SimulationStats, error) {
 	slotsPerBlock := zone.SlotsPerBlock()
 	if numSoldiers < slotsPerBlock {
@@ -41,10 +42,21 @@ func RunSimulationZoneConfig(
 	simZ := zone.ToZone()
 	nl := len(zone.Locations)
 	nt := len(zone.TimeBands)
-	hoursTotal := float64(days) * 24.0
 	soldiers := make([]*Soldier, numSoldiers)
 	for i := range soldiers {
-		soldiers[i] = makeSoldier(i, hoursTotal, nl, nt)
+		soldiers[i] = makeSoldier(i, 0, nl, nt)
+	}
+	for day := 0; day < days; day++ {
+		for i := range soldiers {
+			var add float64
+			if avail == nil {
+				add = 24.0
+			} else {
+				bh, ah := availFairnessHours(avail, i, day)
+				add = bh + ah
+			}
+			soldiers[i].AvailableHours += add
+		}
 	}
 	busy := new3DBool(days, numSoldiers, blocksPd)
 	busyRot := new3DBool(days, numSoldiers, blocksPd)
@@ -82,7 +94,10 @@ func RunSimulationZoneConfig(
 			dutyW := b1 - b0 + 1
 			var pool []*Soldier
 			for _, s := range soldiers {
-				if !anyBusySpan(busy, s.Idx, L0, span, B, days) {
+				if !anyBusySpan(busy, s.Idx, L0, span, B, days) &&
+					soldierAvail(avail, s.Idx, day, func() bool {
+						return avail.AvailDutyWallHours(s.Idx, day, sh0, sh1+1)
+					}) {
 					pool = append(pool, s)
 				}
 			}
@@ -149,7 +164,10 @@ func RunSimulationZoneConfig(
 				L0w, spanw := linearBusySpanDutyHoursPlusRest(day, B, sh, h0, h1x, true, restH)
 				var pool []*Soldier
 				for _, s := range soldiers {
-					if !anyBusySpan(busy, s.Idx, L0w, spanw, B, days) {
+					if !anyBusySpan(busy, s.Idx, L0w, spanw, B, days) &&
+						soldierAvail(avail, s.Idx, day, func() bool {
+							return avail.AvailDutyWallHours(s.Idx, day, h0, h1x)
+						}) {
 						pool = append(pool, s)
 					}
 				}
@@ -226,7 +244,7 @@ func RunSimulationZoneConfig(
 		rotatingDfsTried = true
 		dr := new3DBool(days, numSoldiers, blocksPd)
 		nodes := 0
-		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, blocksPd, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, &nodes) {
+		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, blocksPd, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, avail, planDayStartHour, sh, &nodes) {
 			copy3D(busyRot, dr)
 			dfsRotOk = true
 			for day := 0; day < days; day++ {
@@ -318,6 +336,11 @@ func RunSimulationZoneConfig(
 							consecutiveDutyBlocksBefore(busyRot, day, b, s.Idx, blocksPd) >= maxConsecutiveDutyBlocks {
 							continue
 						}
+						if !soldierAvail(avail, s.Idx, day, func() bool {
+							return avail.AvailRotatingBlock(s.Idx, day, b, planDayStartHour, sh)
+						}) {
+							continue
+						}
 						base = append(base, s)
 					}
 					pool := base
@@ -375,6 +398,17 @@ func RunSimulationZoneConfig(
 	_ = dailyRawLoc
 	_ = dailyRawTime
 	return assignments, stats, nil
+}
+
+type fairnessHours interface {
+	FairnessHours(idx, day int) (base, away float64)
+}
+
+func availFairnessHours(avail AvailabilityChecker, idx, day int) (base, away float64) {
+	if fh, ok := avail.(fairnessHours); ok {
+		return fh.FairnessHours(idx, day)
+	}
+	return 24, 0
 }
 
 func new3DFloat(d1, d2, d3 int) [][][]float64 {

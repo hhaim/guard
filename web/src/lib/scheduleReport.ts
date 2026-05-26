@@ -1,6 +1,13 @@
 import type { ScheduleAssignment } from "./planDoc";
 import type { ZonesDoc } from "./zones";
-import { blockStartHour, calendarDateForDay, planDayTitle, weekdayLongName } from "./planDay";
+import {
+  blockStartHour,
+  blockTimelineStartHour,
+  calendarDateForDay,
+  formatWallClockHour,
+  planDayTitle,
+  weekdayLongName,
+} from "./planDay";
 import { slotDisplayLabel } from "./zones";
 
 export type { ScheduleAssignment } from "./planDoc";
@@ -270,11 +277,11 @@ export function buildSoldierBlockRows(
   for (let d = 0; d < days; d++) {
     for (let b = 0; b < zone.blocksPerDay; b++) {
       const duty = dutyLookup.get(`${d}:${b}`);
-      const startH =
+      const startH = blockStartHour(planDayStartHour, b, zone.shiftHours);
+      const timeJ =
         duty != null
-          ? duty.start_hour
-          : blockStartHour(planDayStartHour, b, zone.shiftHours);
-      const timeJ = timeCategoryForHour(startH, zone);
+          ? duty.time_j
+          : timeCategoryForHour(startH, zone);
       const win = formatBlockWindow(startH, zone.shiftHours);
       if (duty) {
         rows.push({
@@ -319,7 +326,7 @@ export function buildTimelineLanes(
     for (let d = 0; d < days; d++) {
       for (let b = 0; b < (busy[d]?.[s]?.length ?? 0); b++) {
         segments.push({
-          startHour: d * 24 + planDayStartHour + b * blockHours,
+          startHour: blockTimelineStartHour(d, b, planDayStartHour, blockHours),
           duration: blockHours,
           onDuty: !!busy[d]?.[s]?.[b],
         });
@@ -328,6 +335,16 @@ export function buildTimelineLanes(
     lanes.push({ soldierIdx: s, label: `S${s}`, segments });
   }
   return lanes;
+}
+
+/** Wall-clock label for a timeline segment (plan-day-aware). */
+export function formatTimelineSegmentRange(
+  seg: TimelineSegment,
+  planDayStartHour: number,
+): string {
+  const off0 = seg.startHour - planDayStartHour;
+  const off1 = off0 + seg.duration;
+  return `${formatWallClockHour(planDayStartHour + off0)}–${formatWallClockHour(planDayStartHour + off1)}`;
 }
 
 export type SoldierSummaryRow = {

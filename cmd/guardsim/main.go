@@ -4,6 +4,10 @@
 //
 //	go run ./cmd/guardsim -x 12 -y 4 -d 1 --zones zones_s1.yaml \
 //	  --shift-hours 4 --min-free-shifts-after-duty 2 --min-consecutive-free-hours 6 --band-relative 0.2
+//
+// Scenario YAML (status + expectations):
+//
+//	go run ./cmd/guardsim --scenario testdata/scenarios/partial_return.yaml
 package main
 
 import (
@@ -12,15 +16,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"guard/guardsched"
+	"guard/internal/availability"
 )
 
 const (
-	defaultMinFreeHours     = 6.0
-	defaultBandRelative     = 0.2
-	defaultMaxDutyBlocks    = 2
-	defaultSimTrials        = 1
+	defaultMinFreeHours  = 6.0
+	defaultBandRelative  = 0.2
+	defaultMaxDutyBlocks = 2
+	defaultSimTrials     = 1
 )
 
 func main() {
@@ -34,7 +41,11 @@ func run() int {
 	slotsLong := flag.Int("slots", 0, "Alias for -y")
 	days := flag.Int("d", 0, "Simulation days")
 	daysLong := flag.Int("days", 0, "Alias for -d")
-	zonesPath := flag.String("zones", "zones.yaml", "Zones YAML (schema v2)")
+	zonesPath := flag.String("zones", "", "Zones YAML (schema v2); default zones.yaml, or scenario zones.file")
+	scenarioPath := flag.String("scenario", "", "Scenario YAML (testdata/scenarios/*.yaml): sets zones, days, seed, status")
+	anchorDate := flag.String("anchor-date", "", "Plan anchor YYYY-MM-DD for scenario status (default: scenario sim.anchor_date or 2026-05-27)")
+	checkExpect := flag.Bool("check-expect", true, "With --scenario, fail if expect.* does not match")
+	availabilityOnly := flag.Bool("availability-only", false, "With --scenario, compile availability and check expect.availability only (no schedule run)")
 	shiftHours := flag.Float64("shift-hours", 0, "Calendar block hours: 2, 3, or 4 (overrides YAML)")
 	minFreeHours := flag.Float64("min-consecutive-free-hours", defaultMinFreeHours, "Min consecutive free hours per soldier per day")
 	minFreeShifts := flag.Int("min-free-shifts-after-duty", 0, "Rotating cooldown: min free blocks after duty")
@@ -60,16 +71,55 @@ func run() int {
 	if nDays <= 0 {
 		nDays = *daysLong
 	}
+	zonesFile := *zonesPath
+
+	var sc *guardsched.Scenario
+	var avail guardsched.AvailabilityChecker
+	var soldiersByDay map[string]any
+
+	if *scenarioPath != "" {
+		var err error
+		sc, err = guardsched.LoadScenarioFile(*scenarioPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: scenario: %v\n", err)
+			return 2
+		}
+		if zonesFile == "" {
+			if sc.IsStatusOnly() {
+				zonesFile = "zones.yaml"
+			} else {
+				zonesFile, err = guardsched.ResolveZonesPath(*scenarioPath, sc.Zones.File)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					return 2
+				}
+			}
+		}
+		if nDays < 1 {
+			if sc.Sim.Days > 0 {
+				nDays = sc.Sim.Days
+			}
+		}
+		if nSlots < 1 && sc.Zones.SlotsPerBlock > 0 {
+			nSlots = sc.Zones.SlotsPerBlock
+		}
+		if nSoldiers < 1 {
+			nSoldiers = sc.InferSoldierCount(12)
+		}
+	} else if zonesFile == "" {
+		zonesFile = "zones.yaml"
+	}
+
 	if nSoldiers < 1 {
-		fmt.Fprintln(os.Stderr, "error: -x/--soldiers must be >= 1")
+		fmt.Fprintln(os.Stderr, "error: -x/--soldiers must be >= 1 (or use --scenario)")
 		return 2
 	}
 	if nDays < 1 {
-		fmt.Fprintln(os.Stderr, "error: -d/--days must be >= 1")
+		fmt.Fprintln(os.Stderr, "error: -d/--days must be >= 1 (or use --scenario)")
 		return 2
 	}
 
-	raw, err := os.ReadFile(*zonesPath)
+	raw, err := os.ReadFile(zonesFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: read zones: %v\n", err)
 		return 2
@@ -79,7 +129,7 @@ func run() int {
 	if nSlots > 0 {
 		slotsArg = &nSlots
 	}
-	slotsEff, err := guardsched.ResolveSlotsPerBlock(slotsArg, raw, filepath.Base(*zonesPath))
+	slotsEff, err := guardsched.ResolveSlotsPerBlock(slotsArg, raw, filepath.Base(zonesFile))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2
@@ -115,9 +165,17 @@ func run() int {
 		return 2
 	}
 
+	planDayStartStr := *planDayStart
+	if sc != nil && strings.TrimSpace(sc.Sim.PlanDayStart) != "" {
+		planDayStartStr = sc.Sim.PlanDayStart
+	}
+
 	var seedPtr *int64
 	if *seed >= 0 {
 		s := *seed
+		seedPtr = &s
+	} else if sc != nil && sc.Sim.Seed != 0 {
+		s := sc.Sim.Seed
 		seedPtr = &s
 	}
 	if *simTrials > 1 && seedPtr == nil {
@@ -125,44 +183,107 @@ func run() int {
 		return 2
 	}
 
+	planStartHour, err := guardsched.ParsePlanDayStart(planDayStartStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
+
+	roster := guardsched.Roster(nSoldiers)
+
+	if sc != nil {
+		anchor, err := resolveAnchor(sc, *anchorDate)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 2
+		}
+		if sc.IsStatusOnly() {
+			if strings.TrimSpace(sc.Sim.PlanDayStart) == "" {
+				sc.Sim.PlanDayStart = planDayStartStr
+			}
+			if sc.Sim.Days < 1 {
+				sc.Sim.Days = nDays
+			}
+		}
+		if err := sc.ResolveTimes(anchor); err != nil {
+			fmt.Fprintf(os.Stderr, "error: scenario times: %v\n", err)
+			return 2
+		}
+		chk, err := sc.BuildChecker(roster)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 2
+		}
+		if len(sc.Resolved) > 0 {
+			avail = chk
+		}
+		soldiersByDay = compileSoldiersJSON(chk, anchor, nDays, planStartHour)
+		if *checkExpect {
+			if err := sc.CheckExpectations(chk, nil, roster); err != nil {
+				fmt.Fprintf(os.Stderr, "error: scenario expect (availability): %v\n", err)
+				return 1
+			}
+		}
+		if !*quiet {
+			fmt.Fprintf(os.Stderr, "Scenario: %s  anchor=%s  status_rows=%d\n",
+				sc.Name, anchor.Format("2006-01-02"), len(sc.Resolved))
+		}
+		if *availabilityOnly {
+			if !*quiet {
+				fmt.Fprintln(os.Stderr, "availability-only: OK")
+				b, _ := json.MarshalIndent(soldiersByDay, "", "  ")
+				fmt.Println(string(b))
+			}
+			return 0
+		}
+	}
+
 	if !*quiet {
 		fmt.Fprintf(os.Stderr, "Soldiers: %d (%s .. %s)\n", nSoldiers, "s0", fmt.Sprintf("s%d", nSoldiers-1))
 		if nSlots > 0 {
 			fmt.Fprintf(os.Stderr, "Concurrent slots: %d (-y)\n", slotsEff)
 		} else {
-			fmt.Fprintf(os.Stderr, "Concurrent slots: %d (from %s)\n", slotsEff, filepath.Base(*zonesPath))
+			fmt.Fprintf(os.Stderr, "Concurrent slots: %d (from %s)\n", slotsEff, filepath.Base(zonesFile))
 		}
 		fmt.Fprintf(os.Stderr, "Days: %d  shift_hours: %.0f  blocks/day: %d\n", nDays, zc.ShiftHours, blocksPD)
-	}
-
-	planStartHour, err := guardsched.ParsePlanDayStart(*planDayStart)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 2
 	}
 
 	recs, stats, meta, err := guardsched.RunSimulationBestOfZoneConfig(
 		zc, nSoldiers, nDays, *simTrials, seedPtr,
 		*minFreeHours, true, 0,
 		*maxDutyBlocks, *minFreeShifts, *bandRelative,
-		planStartHour,
+		planStartHour, avail,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: schedule: %v\n", err)
 		return 1
 	}
 
+	if sc != nil && *checkExpect {
+		chk, _ := sc.BuildChecker(roster)
+		if err := sc.CheckExpectations(chk, recs, roster); err != nil {
+			fmt.Fprintf(os.Stderr, "error: scenario expect: %v\n", err)
+			return 1
+		}
+		if !*quiet {
+			fmt.Fprintln(os.Stderr, "Scenario expectations: OK")
+		}
+	}
+
 	if *compareJSON != "" {
 		extra := map[string]any{
-			"band_relative":              *bandRelative,
-			"min_consecutive_free_hours": *minFreeHours,
-			"min_free_shifts_after_duty": *minFreeShifts,
+			"band_relative":               *bandRelative,
+			"min_consecutive_free_hours":  *minFreeHours,
+			"min_free_shifts_after_duty":  *minFreeShifts,
 			"max_consecutive_duty_blocks": *maxDutyBlocks,
-			"sim_trials":                 *simTrials,
-			"trial_seed":                 meta["trial_seed"],
-			"trial_index":                meta["trial_index"],
-			"zones_path":                 *zonesPath,
-			"source":                     "go",
+			"sim_trials":                  *simTrials,
+			"trial_seed":                  meta["trial_seed"],
+			"trial_index":                 meta["trial_index"],
+			"zones_path":                  zonesFile,
+			"source":                      "go",
+		}
+		if sc != nil {
+			extra["scenario"] = sc.Name
 		}
 		cmpDoc := guardsched.ScheduleCompareFromRecords(
 			zc, recs, nDays, blocksPD, slotsEff, nSoldiers, zc.ShiftHours, extra,
@@ -191,16 +312,16 @@ func run() int {
 	assignJSON := guardsched.AssignmentRecordsToJSON(recs, keys)
 
 	outDoc := map[string]any{
-		"ok":          true,
-		"zones":       filepath.Base(*zonesPath),
-		"soldiers":    nSoldiers,
-		"soldier_ids": keys,
-		"slots":       slotsEff,
-		"days":        nDays,
-		"shift_hours": zc.ShiftHours,
+		"ok":             true,
+		"zones":          filepath.Base(zonesFile),
+		"soldiers":       nSoldiers,
+		"soldier_ids":    keys,
+		"slots":          slotsEff,
+		"days":           nDays,
+		"shift_hours":    zc.ShiftHours,
 		"blocks_per_day": blocksPD,
-		"count":       len(assignJSON),
-		"assignments": assignJSON,
+		"count":          len(assignJSON),
+		"assignments":    assignJSON,
 		"meta": map[string]any{
 			"sim_trials":                     *simTrials,
 			"trial":                          meta,
@@ -210,7 +331,12 @@ func run() int {
 			"max_consecutive_duty_blocks":    *maxDutyBlocks,
 			"shift_cooldown_exclusions":      stats.ShiftCooldownExclusions,
 			"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
+			"plan_day_start":                 planDayStartStr,
 		},
+	}
+	if sc != nil {
+		outDoc["scenario"] = sc.Name
+		outDoc["soldiers_availability"] = soldiersByDay
 	}
 	payload, err := json.MarshalIndent(outDoc, "", "  ")
 	if err != nil {
@@ -241,3 +367,29 @@ func run() int {
 	}
 	return 0
 }
+
+func resolveAnchor(sc *guardsched.Scenario, flagAnchor string) (time.Time, error) {
+	if strings.TrimSpace(flagAnchor) != "" {
+		t, err := time.Parse("2006-01-02", flagAnchor)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid --anchor-date: %w", err)
+		}
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil
+	}
+	return sc.DefaultAnchorDate()
+}
+
+func compileSoldiersJSON(chk *availability.Checker, anchor time.Time, days, planStartHour int) map[string]any {
+	out := make(map[string]any, days)
+	for d := 0; d < days; d++ {
+		cal := anchor.AddDate(0, 0, d).Format("2006-01-02")
+		day := chk.CompileDay(d)
+		out[cal] = map[string]any{
+			"avail_full":     day.AvailFull,
+			"avail_partial":  day.AvailPartial,
+			"summary":        day.Summary,
+		}
+	}
+	return out
+}
+

@@ -1,0 +1,19 @@
+schema_version: 1
+name: evening_outing_s5
+sim:
+  days: 1
+  seed: 7
+  plan_day_start: "05:00"
+  start_working_day: 0
+zones:
+  file: ../../zones_s1.yaml
+  slots_per_block: 4
+status:
+  - soldier: s5
+    state: outing
+    from: { plan_day: 0, time: "20:00" }
+    until: { plan_day: 1, time: "01:00" }
+expect:
+  availability:
+    - plan_day: 0
+      summary: { full: 11, absent_full: 0, absent_partial: 1 }

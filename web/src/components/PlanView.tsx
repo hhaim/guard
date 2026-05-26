@@ -18,6 +18,11 @@ import { planDocFromGenerate } from "../lib/planDoc";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
 import { downloadPlanReportPdf } from "../lib/planPdfExport";
 import { PlanDocView } from "./PlanDocView";
+import {
+  AvailabilityBadges,
+  fetchPreviewAvailabilityByDays,
+  type PlanDaySoldiers,
+} from "./SoldiersStatusBoard";
 import { soldiersFromCfg } from "./ScheduleResultsReport";
 
 const SLOT_KEY = "guard-plan-slot";
@@ -97,13 +102,7 @@ export function PlanView({
 
   const soldierIds = useMemo(() => {
     const list = soldiersQ.data?.value?.soldiers ?? [];
-    return list
-      .map((s) => s.id || s.key || "")
-      .filter((id) => {
-        if (!id) return false;
-        const st = (list.find((x) => (x.id || x.key) === id)?.state ?? "").toLowerCase();
-        return !st || st === "base";
-      });
+    return list.map((s) => s.id || s.key || "").filter(Boolean);
   }, [soldiersQ.data]);
 
   const soldiers = useMemo(
@@ -113,6 +112,25 @@ export function PlanView({
 
   const slotInfo = proposalsQ.data?.slots.find((s) => s.slot === selectedSlot);
   const slotFilled = Boolean(slotInfo?.exists);
+
+  const previewAvailQ = useQuery({
+    queryKey: ["plan", "preview-availability", anchor, days],
+    queryFn: () => fetchPreviewAvailabilityByDays(anchor, days),
+    enabled: Boolean(anchor) && days >= 1,
+  });
+
+  const availabilityByDay = useMemo((): Record<string, PlanDaySoldiers> | undefined => {
+    const preview = previewAvailQ.data;
+    const fromProposal = proposal?.soldiers;
+    if (!preview && !fromProposal) return undefined;
+    const out: Record<string, PlanDaySoldiers> = { ...preview };
+    if (fromProposal) {
+      for (const [date, day] of Object.entries(fromProposal)) {
+        out[date] = day;
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }, [previewAvailQ.data, proposal?.soldiers]);
 
   const loadSlot = useCallback(
     async (slot: string, opts?: { silent?: boolean }) => {
@@ -394,6 +412,10 @@ export function PlanView({
                 );
               })}
             </div>
+            <AvailabilityBadges
+              soldiersByDay={availabilityByDay}
+              label="Availability (preview)"
+            />
           </div>
 
           <div className="plan-active-banner" role="status">

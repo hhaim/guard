@@ -31,12 +31,25 @@ export type PlanChange = {
   new_soldier_id: string;
 };
 
+export type PlanSoldiersSummary = {
+  full: number;
+  absent_full: number;
+  absent_partial: number;
+};
+
+export type PlanDaySoldiersDoc = {
+  avail_full?: string[];
+  avail_partial?: Record<string, string[][]>;
+  summary?: PlanSoldiersSummary;
+};
+
 export type PlanDoc = {
   format_version: number;
   anchor_date: string;
   days: number;
   shift_hours: number;
   assignments: ScheduleAssignment[];
+  soldiers?: Record<string, PlanDaySoldiersDoc>;
   meta?: Record<string, unknown>;
   changes?: PlanChange[];
   updated_at?: string;
@@ -87,12 +100,17 @@ export function normalizePlanDoc(raw: unknown): PlanDoc {
       )
     : [];
   const days = num(o.days, assignments.length > 0 ? inferDaySpan(assignments) : 0);
+  const soldiers =
+    o.soldiers && typeof o.soldiers === "object" && !Array.isArray(o.soldiers)
+      ? (o.soldiers as Record<string, PlanDaySoldiersDoc>)
+      : undefined;
   return {
     format_version: num(o.format_version, PLAN_DOC_FORMAT_VERSION),
     anchor_date: str(o.anchor_date) ?? "",
     days,
     shift_hours: num(o.shift_hours, 4),
     assignments,
+    soldiers,
     meta: o.meta && typeof o.meta === "object" ? (o.meta as Record<string, unknown>) : undefined,
     changes: Array.isArray(o.changes) ? (o.changes as PlanChange[]) : undefined,
     updated_at: str(o.updated_at),
@@ -120,6 +138,7 @@ export function planDocFromGenerate(data: {
   days: number;
   shift_hours: number;
   assignments: ScheduleAssignment[];
+  soldiers?: Record<string, PlanDaySoldiersDoc>;
   meta?: Record<string, unknown>;
   changes?: PlanChange[];
 }): PlanDoc {
@@ -129,6 +148,7 @@ export function planDocFromGenerate(data: {
     days: data.days,
     shift_hours: data.shift_hours,
     assignments: data.assignments,
+    soldiers: data.soldiers,
     meta: data.meta,
     changes: data.changes,
   });

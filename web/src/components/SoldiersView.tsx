@@ -17,13 +17,9 @@ import { downloadText, pickTextFile } from "../lib/fileIo";
 import { ContactsRowEditButton } from "./ContactsRowEdit";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { SoldierEditorSheet } from "./SoldierEditorSheet";
+import { SoldiersStatusBoard } from "./SoldiersStatusBoard";
 
 type CfgResp = { key: string; value: unknown; version: number; updated_at: string };
-
-function stateLabel(state: string): string {
-  if (state === "base") return "On base";
-  return state.charAt(0).toUpperCase() + state.slice(1);
-}
 
 export function SoldiersView() {
   const qc = useQueryClient();
@@ -245,14 +241,11 @@ export function SoldiersView() {
               <th className="contacts-th-avatar" scope="col" />
               <th scope="col">Name</th>
               <th scope="col">ID</th>
-              <th scope="col">Status</th>
               <th className="contacts-th-chevron" scope="col" />
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map(({ s, index }) => {
-              const onBase = s.state === "base" || s.state === "";
-              return (
+            {sortedRows.map(({ s, index }) => (
                 <tr
                   key={`${s.id}-${index}`}
                   className="contacts-row"
@@ -267,19 +260,17 @@ export function SoldiersView() {
                   <td className="contacts-id">
                     <code>{s.id}</code>
                   </td>
-                  <td>
-                    <span className={`contacts-state${onBase ? " on-base" : ""}`}>{stateLabel(s.state)}</span>
-                  </td>
                   <ContactsRowEditButton
                     label={`Edit ${s.full_name.trim() || s.id}`}
                     onEdit={() => openEditor(index)}
                   />
                 </tr>
-              );
-            })}
+              ))}
           </tbody>
         </table>
       </section>
+
+      <SoldiersStatusBoard soldiers={doc.soldiers} />
 
       <p className="contacts-hint">Double-click a row to edit, or tap the › button</p>
 

@@ -32,6 +32,25 @@ export function blockStartHour(planStart: number, block: number, shiftHours: num
   return ((h % 24) + 24) % 24;
 }
 
+/** Hours from the plan-day timeline origin (0 = first plan day starts at planDayStartHour wall clock). */
+export function blockTimelineOffset(
+  day: number,
+  block: number,
+  shiftHours: number,
+): number {
+  return day * 24 + block * shiftHours;
+}
+
+/** Absolute timeline coordinate used by segment layout (origin = planDayStartHour). */
+export function blockTimelineStartHour(
+  day: number,
+  block: number,
+  planDayStartHour: number,
+  shiftHours: number,
+): number {
+  return planDayStartHour + blockTimelineOffset(day, block, shiftHours);
+}
+
 /** UTC calendar date for plan day index (anchor YYYY-MM-DD + dayIndex). */
 export function calendarDateForDay(anchorDate: string, dayIndex: number): string {
   const base = new Date(`${anchorDate}T00:00:00.000Z`);

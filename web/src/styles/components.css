@@ -1995,3 +1995,229 @@
   padding: 0 0.5rem;
   font-weight: 600;
 }
+
+/* §7 Status board + plan availability badges */
+.status-board-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1rem 0;
+}
+
+.status-board-fab {
+  flex-shrink: 0;
+}
+
+.status-board-scroll {
+  overflow-x: auto;
+  padding: 0 0.5rem 0.5rem;
+}
+
+.status-board-table .status-board-day-th {
+  text-align: center;
+  min-width: 4.5rem;
+}
+
+.status-board-date {
+  display: block;
+  font-weight: 600;
+}
+
+.status-board-day-hint {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.status-board-name {
+  white-space: nowrap;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-board-foot {
+  padding: 0 1rem 1rem;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4rem;
+  min-height: 36px;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  border-radius: var(--radius-button);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform var(--ease-hover), box-shadow var(--ease-hover);
+}
+
+.status-chip:active {
+  transform: scale(0.97);
+}
+
+.status-chip--full {
+  background: color-mix(in srgb, var(--success) 22%, transparent);
+  color: var(--text-primary);
+}
+
+.status-chip--partial {
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+  color: var(--text-primary);
+}
+
+.status-chip--absent {
+  background: color-mix(in srgb, var(--destructive) 22%, transparent);
+  color: var(--text-primary);
+}
+
+.status-sheet-meta {
+  padding: 0 1.1rem 0.75rem;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.status-action-list {
+  margin: 0 1rem 1rem;
+  padding: 0.25rem 0;
+}
+
+.status-action-btn {
+  width: calc(100% - 2.2rem);
+  margin: 0.35rem 1.1rem;
+}
+
+.status-inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 1.1rem;
+  font-size: var(--text-sm);
+}
+
+.status-sheet-error {
+  margin: 0 1rem 1rem;
+}
+
+.soldier-timeline {
+  margin: 1rem;
+}
+
+.soldier-timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 1rem 0.75rem;
+}
+
+.soldier-timeline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--text-secondary) 20%, transparent);
+}
+
+.soldier-timeline-status {
+  text-transform: capitalize;
+  margin-right: 0.35rem;
+}
+
+.soldier-timeline-range {
+  display: block;
+  font-size: var(--text-xs);
+}
+
+.soldier-timeline-resolved {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.soldier-timeline-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.btn-sm {
+  min-height: 32px;
+  padding: 0.25rem 0.6rem;
+  font-size: var(--text-xs);
+}
+
+.btn-destructive-text {
+  color: var(--destructive);
+}
+
+.availability-badges {
+  padding: 0.5rem 1.1rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.availability-badges-title {
+  margin: 0;
+}
+
+.availability-badges-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+.availability-badge-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--text-sm);
+}
+
+.availability-badge-date {
+  font-weight: 600;
+  min-width: 2.5rem;
+}
+
+.availability-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.availability-badge--full {
+  background: color-mix(in srgb, var(--success) 25%, transparent);
+  color: var(--success);
+}
+
+.availability-badge--absent {
+  background: color-mix(in srgb, var(--destructive) 22%, transparent);
+  color: var(--destructive);
+}
+
+.availability-badge--partial {
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+  color: var(--warning);
+}
+
+.availability-legend {
+  display: flex;
+  gap: 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.availability-legend .availability-badge {
+  font-weight: 600;
+}

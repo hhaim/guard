@@ -19,6 +19,20 @@ type PlanChange struct {
 	NewSoldierID string `json:"new_soldier_id"`
 }
 
+// PlanDaySoldiers is a computed per-day availability snapshot (read-only in UI).
+type PlanDaySoldiers struct {
+	AvailFull    []string              `json:"avail_full"`
+	AvailPartial map[string][][]string `json:"avail_partial,omitempty"`
+	Summary      *PlanSoldiersSummary  `json:"summary,omitempty"`
+}
+
+// PlanSoldiersSummary holds badge counts for the plan tab.
+type PlanSoldiersSummary struct {
+	Full          int `json:"full"`
+	AbsentFull    int `json:"absent_full"`
+	AbsentPartial int `json:"absent_partial"`
+}
+
 // PlanDoc is the planning / verified-schedule JSON document (one or more calendar days).
 type PlanDoc struct {
 	FormatVersion int              `json:"format_version"`
@@ -26,9 +40,11 @@ type PlanDoc struct {
 	Days          int              `json:"days"`
 	ShiftHours    float64          `json:"shift_hours"`
 	Assignments   []map[string]any `json:"assignments"`
-	Meta          map[string]any   `json:"meta,omitempty"`
-	Changes       []PlanChange     `json:"changes,omitempty"`
-	UpdatedAt     string           `json:"updated_at,omitempty"`
+	// Soldiers maps calendar date (YYYY-MM-DD) -> compiled availability for that plan day.
+	Soldiers      map[string]PlanDaySoldiers `json:"soldiers,omitempty"`
+	Meta          map[string]any           `json:"meta,omitempty"`
+	Changes       []PlanChange             `json:"changes,omitempty"`
+	UpdatedAt     string                   `json:"updated_at,omitempty"`
 }
 
 // ScheduleDay is one persisted calendar day in the schedule table.
@@ -79,6 +95,11 @@ func SplitPlanByDate(doc PlanDoc) ([]ScheduleDay, error) {
 			Assignments:   byDate[d],
 			Meta:          doc.Meta,
 			Changes:       doc.Changes,
+		}
+		if doc.Soldiers != nil {
+			if s, ok := doc.Soldiers[d]; ok {
+				dayDoc.Soldiers = map[string]PlanDaySoldiers{d: s}
+			}
 		}
 		if dayDoc.FormatVersion == 0 {
 			dayDoc.FormatVersion = PlanFormatVersion

@@ -9,6 +9,7 @@ import {
   buildScheduleStats,
   buildTimelineLanes,
   buildZoneReportView,
+  formatTimelineSegmentRange,
   inferSoldierCount,
 } from "../lib/scheduleReport";
 import { normalizePlanDoc, type PlanDoc } from "../lib/planDoc";
@@ -280,7 +281,7 @@ function SoldierTimelineChart({
                       left: `${layout.segmentLeftPct(seg.startHour)}%`,
                       width: `${layout.segmentWidthPct(seg.duration)}%`,
                     }}
-                    title={`${lane.label}: ${seg.onDuty ? "duty" : "free"} ${formatWallClockHour(seg.startHour)}–${formatWallClockHour(seg.startHour + seg.duration)}`}
+                    title={`${lane.label}: ${seg.onDuty ? "duty" : "free"} ${formatTimelineSegmentRange(seg, planDayStartHour)}`}
                   />
                 ))}
               </div>

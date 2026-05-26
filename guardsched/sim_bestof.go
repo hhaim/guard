@@ -43,6 +43,7 @@ func RunSimulationBestOfZoneConfig(
 	minFreeShiftsAfterDuty int,
 	bandRelative float64,
 	planDayStartHour int,
+	avail AvailabilityChecker,
 ) (recs []*AssignmentRecord, stats *SimulationStats, meta map[string]any, err error) {
 	if trials < 1 {
 		return nil, nil, nil, fmt.Errorf("sim_trials must be >= 1")
@@ -56,7 +57,7 @@ func RunSimulationBestOfZoneConfig(
 			zone, numSoldiers, days, rng,
 			minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 			maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-			planDayStartHour,
+			planDayStartHour, avail,
 		)
 	}
 	if trials == 1 {
