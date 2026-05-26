@@ -123,9 +123,9 @@ export function PlanView({
     const preview = previewAvailQ.data;
     const fromProposal = proposal?.soldiers;
     if (!preview && !fromProposal) return undefined;
-    const out: Record<string, PlanDaySoldiers> = { ...preview };
-    if (fromProposal) {
-      for (const [date, day] of Object.entries(fromProposal)) {
+    const out: Record<string, PlanDaySoldiers> = fromProposal ? { ...fromProposal } : {};
+    if (preview) {
+      for (const [date, day] of Object.entries(preview)) {
         out[date] = day;
       }
     }
@@ -415,6 +415,7 @@ export function PlanView({
             <AvailabilityBadges
               soldiersByDay={availabilityByDay}
               label="Availability (preview)"
+              planDayStartLabel={planCtxQ.data?.plan_day_start ?? "05:00"}
             />
           </div>
 

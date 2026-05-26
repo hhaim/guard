@@ -128,7 +128,7 @@ func (s *Server) handleSoldiersStatusList(w http.ResponseWriter, r *http.Request
 			row.ID = &id
 			row.Note = h.Note
 			row.Actor = h.Actor
-			row.Editable = true
+			row.Editable = repo.HotStatusEntryEditable(h)
 		}
 		out = append(out, row)
 	}
@@ -159,7 +159,7 @@ func (s *Server) handleSoldiersStatusList(w http.ResponseWriter, r *http.Request
 			Status:    h.Status,
 			Note:      h.Note,
 			Actor:     h.Actor,
-			Editable:  true,
+			Editable:  repo.HotStatusEntryEditable(h),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -178,6 +178,42 @@ type statusCreateBody struct {
 	EndAt     *string `json:"end_at"`
 	Status    string  `json:"status"`
 	Note      string  `json:"note"`
+}
+
+type statusClearBody struct {
+	SoldierID string `json:"soldier_id"`
+	StartAt   string `json:"start_at"`
+	EndAt     string `json:"end_at"`
+}
+
+func (s *Server) handleSoldiersStatusClear(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	var body statusClearBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	winStart, err := time.Parse(time.RFC3339, body.StartAt)
+	if err != nil {
+		http.Error(w, `{"error":"invalid start_at"}`, http.StatusBadRequest)
+		return
+	}
+	winEnd, err := time.Parse(time.RFC3339, body.EndAt)
+	if err != nil {
+		http.Error(w, `{"error":"invalid end_at"}`, http.StatusBadRequest)
+		return
+	}
+	if err := repo.ClearStatusForWindow(r.Context(), s.Pool, body.SoldierID, winStart, winEnd); err != nil {
+		if errors.Is(err, repo.ErrStatusTooOld) {
+			http.Error(w, `{"error":"cannot clear: includes archived hot entry"}`, http.StatusForbidden)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleSoldiersStatusCreate(w http.ResponseWriter, r *http.Request) {
@@ -213,6 +249,10 @@ func (s *Server) handleSoldiersStatusCreate(w http.ResponseWriter, r *http.Reque
 		Actor:     actor,
 	})
 	if err != nil {
+		if errors.Is(err, repo.ErrStatusOverlaps) {
+			http.Error(w, `{"error":"status interval overlaps existing entry"}`, http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -281,6 +321,14 @@ func (s *Server) handleSoldiersStatusPatch(w http.ResponseWriter, r *http.Reques
 			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 			return
 		}
+		if errors.Is(err, repo.ErrStatusTooOld) {
+			http.Error(w, `{"error":"entry older than 7 days cannot be edited"}`, http.StatusForbidden)
+			return
+		}
+		if errors.Is(err, repo.ErrStatusOverlaps) {
+			http.Error(w, `{"error":"status interval overlaps existing entry"}`, http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -303,9 +351,14 @@ func (s *Server) handleSoldiersStatusDelete(w http.ResponseWriter, r *http.Reque
 		http.Error(w, `{"error":"start_at query required"}`, http.StatusBadRequest)
 		return
 	}
-	if err := repo.DeleteHotStatusEntry(r.Context(), s.Pool, id, start); err != nil {
+	actor := r.Header.Get("X-Actor")
+	if err := repo.DeleteHotStatusEntry(r.Context(), s.Pool, id, start, actor); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, repo.ErrStatusTooOld) {
+			http.Error(w, `{"error":"entry older than 7 days cannot be deleted"}`, http.StatusForbidden)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)

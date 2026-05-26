@@ -146,6 +146,7 @@ func CompileDayAvailability(
 
 	out := DaySoldiers{
 		AvailPartial: make(map[string][][]string),
+		AvailAbsent:  nil,
 	}
 
 	for _, sid := range roster {
@@ -158,6 +159,7 @@ func CompileDayAvailability(
 		assignable := subtractIntervals(window, blocked)
 
 		if len(assignable) == 0 {
+			out.AvailAbsent = append(out.AvailAbsent, sid)
 			continue
 		}
 
@@ -177,6 +179,7 @@ func CompileDayAvailability(
 	}
 
 	sort.Strings(out.AvailFull)
+	sort.Strings(out.AvailAbsent)
 	out.Summary.Full = len(out.AvailFull)
 	out.Summary.AbsentPartial = len(out.AvailPartial)
 	rosterSet := make(map[string]struct{}, len(roster))

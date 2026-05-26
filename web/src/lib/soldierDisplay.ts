@@ -31,7 +31,11 @@ export function buildSoldierDisplay(
   const byId = new Map(soldiers.map((s) => [s.id, s]));
   const count = Math.max(soldierCount, soldierIds.length);
 
-  const shortLabel = (idx: number) => `S${idx}`;
+  const shortLabel = (idx: number) => {
+    const id = soldierIds[idx];
+    if (id) return id;
+    return `S${idx}`;
+  };
   const fullLabel = (idx: number) => {
     const id = soldierIds[idx];
     const s = id ? byId.get(id) : undefined;

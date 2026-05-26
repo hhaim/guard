@@ -40,6 +40,7 @@ export type PlanSoldiersSummary = {
 export type PlanDaySoldiersDoc = {
   avail_full?: string[];
   avail_partial?: Record<string, string[][]>;
+  avail_absent?: string[];
   summary?: PlanSoldiersSummary;
 };
 

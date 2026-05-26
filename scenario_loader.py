@@ -54,6 +54,7 @@ class Interval:
 class DaySoldiers:
     avail_full: List[str] = field(default_factory=list)
     avail_partial: Dict[str, List[List[str]]] = field(default_factory=dict)
+    avail_absent: List[str] = field(default_factory=list)
     full: int = 0
     absent_full: int = 0
     absent_partial: int = 0
@@ -272,6 +273,7 @@ def compile_day_availability(
         blocked = _blocked_for_soldier(entries, sid, win_start, win_end, open_end)
         assignable = _subtract(window, blocked)
         if not assignable:
+            out.avail_absent.append(sid)
             continue
         if (
             len(assignable) == 1
@@ -286,6 +288,7 @@ def compile_day_availability(
         out.avail_partial[sid] = pairs
 
     out.avail_full.sort()
+    out.avail_absent.sort()
     out.full = len(out.avail_full)
     out.absent_partial = len(out.avail_partial)
     present = out.full + out.absent_partial
@@ -402,6 +405,26 @@ class AvailabilityChecker:
         start = win_start + timedelta(hours=block * shift_hours)
         end = start + timedelta(hours=shift_hours)
         return self.avail_idx(soldier_idx, day, start, end)
+
+
+def build_unavail_timeline_tensor(
+    avail: "AvailabilityChecker",
+    days: int,
+    num_soldiers: int,
+    blocks_pd: int,
+    plan_day_start_hour: int,
+    shift_hours: float,
+) -> "np.ndarray":
+    """``unavail[day, soldier, block]`` — away/sick/training (timeline yellow segments)."""
+    import numpy as np
+
+    unavail = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
+    for d in range(days):
+        for s in range(num_soldiers):
+            for b in range(blocks_pd):
+                if not avail.avail_rotating_block(s, d, b, plan_day_start_hour, shift_hours):
+                    unavail[d, s, b] = True
+    return unavail
 
 
 def block_start_hour(plan_start: int, block: int, shift_hours: float) -> int:

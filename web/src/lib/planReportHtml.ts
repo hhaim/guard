@@ -12,6 +12,11 @@ import {
   type MatrixDay,
 } from "./scheduleReport";
 import { buildSoldierDisplay, type SoldierDisplay } from "./soldierDisplay";
+import {
+  buildPlanAvailabilityReport,
+  classificationLabel,
+  formatAvailabilityWindows,
+} from "./planSoldierAvailability";
 import type { ZonesDoc } from "./zones";
 
 export type PlanReportInput = {
@@ -206,6 +211,25 @@ const REPORT_CSS = `
   .seg { position: absolute; top: 1px; bottom: 1px; border-radius: 1px; }
   .seg-on { background: #c62828; }
   .seg-off { background: #2e7d32; }
+  .seg-unavail { background: #f9a825; }
+  .sched-availability-day { margin: 0 0 14px; }
+  .sched-availability-table { min-width: 520px; }
+  .sched-avail-row--full td:nth-child(2) { color: #1b5e20; font-weight: 600; }
+  .sched-avail-row--partial td:nth-child(2) { color: #9a6b00; font-weight: 600; }
+  .sched-avail-row--absent_full td:nth-child(2) { color: #b71c1c; font-weight: 600; }
+  .availability-badge {
+    display: inline-block;
+    min-width: 1.6rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 11px;
+    text-align: center;
+  }
+  .availability-badge--full { background: #d1fae5; color: #065f46; }
+  .availability-badge--absent { background: #fecdd3; color: #881337; }
+  .availability-badge--partial { background: #fef3c7; color: #78350f; }
+  .availability-badges-row { display: flex; gap: 6px; margin: 4px 0 8px; }
   @media print {
     body { padding: 0; }
     .pdf-page,
@@ -347,7 +371,7 @@ function timelineHtml(
       const segs = lane.segments
         .map(
           (seg) =>
-            `<span class="seg ${seg.onDuty ? "seg-on" : "seg-off"}" style="left:${layout.segmentLeftPct(seg.startHour)}%;width:${layout.segmentWidthPct(seg.duration)}%"></span>`
+            `<span class="seg ${seg.onDuty ? "seg-on" : seg.unavailable ? "seg-unavail" : "seg-off"}" style="left:${layout.segmentLeftPct(seg.startHour)}%;width:${layout.segmentWidthPct(seg.duration)}%"></span>`
         )
         .join("");
       const badge = soldierBadgeHtml(lane.soldierIdx, lane.label, display);
@@ -358,7 +382,7 @@ function timelineHtml(
     })
     .join("");
   return `<div class="sched-timeline-wrap">
-    <p class="sched-hint">Green = off post, red = on duty. ${days} plan day(s) from ${esc(formatWallClockHour(planDayStartHour))}; wall-clock UTC.</p>
+    <p class="sched-hint">Green = off post, yellow = away/sick, red = on duty. ${days} plan day(s) from ${esc(formatWallClockHour(planDayStartHour))}; wall-clock UTC.</p>
     ${laneRows}
   </div>`;
 }
@@ -484,6 +508,54 @@ function statsHtml(
     ${statsTableWrap("Mean raw guard hours per calendar day by time band", timeMeanTable)}`;
 }
 
+function availabilityReportHtml(
+  proposal: PlanDoc,
+  soldiers: Soldier[],
+  display: SoldierDisplay,
+): string {
+  if (!proposal.soldiers || Object.keys(proposal.soldiers).length === 0) {
+    return "";
+  }
+  const labelForId = (id: string) => {
+    const ids = soldiers.map((s) => s.id);
+    const idx = ids.indexOf(id);
+    return idx >= 0 ? display.fullLabel(idx) : id;
+  };
+  const days = buildPlanAvailabilityReport(proposal, soldiers, labelForId);
+  const dayBlocks = days
+    .map((day) => {
+      const rows = day.rows
+        .map(
+          (row) => `<tr class="sched-avail-row sched-avail-row--${esc(row.classification)}">
+          <th scope="row">${esc(row.label)}</th>
+          <td>${esc(classificationLabel(row.classification))}</td>
+          <td>${esc(formatAvailabilityWindows(row.windows))}</td>
+        </tr>`
+        )
+        .join("");
+      return `<div class="sched-availability-day">
+        <h3 class="sched-subtitle">${esc(day.date)}</h3>
+        <div class="availability-badges-row">
+          <span class="availability-badge availability-badge--full" title="Full">${day.summary.full}</span>
+          <span class="availability-badge availability-badge--absent" title="Absent full">${day.summary.absent_full}</span>
+          <span class="availability-badge availability-badge--partial" title="Partial">${day.summary.absent_partial}</span>
+        </div>
+        <div class="sched-table-scroll">
+          <table class="sched-table sched-availability-table">
+            <thead><tr><th>Soldier</th><th>Classification</th><th>Assignable windows</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+    })
+    .join("");
+  return `<div class="pdf-page sched-availability-report">
+    <h2 class="sched-section-title">Soldier availability</h2>
+    <p class="sched-hint">Snapshot embedded at generate/apply (read-only).</p>
+    ${dayBlocks}
+  </div>`;
+}
+
 /** Build a self-contained HTML document for the selected plan proposal (print / PDF). */
 export function buildPlanReportHtml(input: PlanReportInput): string {
   const { proposal, slot, zones, soldierIds, soldiers, effectiveToday } = input;
@@ -503,9 +575,15 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
   const matrices = buildScheduleMatrices(assignments, days, zone, {
     planDayStartHour,
     anchorDate,
+    soldierIds,
   });
   const busy = buildDutyBusy(assignments, days, soldierCount, zone.blocksPerDay);
-  const lanes = buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour);
+  const lanes = buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
+    soldierIds,
+    anchorDate,
+    shiftHours: zone.shiftHours,
+    soldiersByDay: proposal.soldiers,
+  });
   const stats = buildScheduleStats(assignments, days, zone, soldierCount);
   const totalHours = days * 24;
   const changes = proposal.changes ?? [];
@@ -565,6 +643,8 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
     ${matrixShort || ""}
     ${matrixFull || ""}
     ${soldierSections || ""}
+
+    ${availabilityReportHtml(proposal, soldiers, display)}
 
     <div class="pdf-page">
       <h2 class="sched-section-title">Soldier timelines</h2>

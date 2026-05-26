@@ -26,6 +26,8 @@ func Authorize(role, method, path string) bool {
 		return true
 	case path == "/api/cfg/soldiers", path == "/api/cfg/slots":
 		return true
+	case strings.HasPrefix(path, "/api/soldiers/status"):
+		return true
 	default:
 		return false
 	}

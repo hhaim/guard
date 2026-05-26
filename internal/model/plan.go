@@ -23,6 +23,7 @@ type PlanChange struct {
 type PlanDaySoldiers struct {
 	AvailFull    []string              `json:"avail_full"`
 	AvailPartial map[string][][]string `json:"avail_partial,omitempty"`
+	AvailAbsent  []string              `json:"avail_absent,omitempty"`
 	Summary      *PlanSoldiersSummary  `json:"summary,omitempty"`
 }
 

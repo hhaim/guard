@@ -19,11 +19,28 @@ export const SOLDIER_STATES = [
   { value: "other", label: "Other" },
 ] as const;
 
-export function emptySoldier(index: number): Soldier {
+/** Next default id s0, s1, … from max numeric suffix in existing ids (supports s12, etc.). */
+export function nextSoldierId(soldiers: Soldier[]): string {
+  let max = -1;
+  for (const s of soldiers) {
+    const m = /^s(\d+)$/i.exec(s.id.trim());
+    if (m) max = Math.max(max, Number.parseInt(m[1], 10));
+  }
+  return `s${max + 1}`;
+}
+
+export function emptySoldier(soldiers: Soldier[]): Soldier {
   return {
-    id: `s${index}`,
+    id: nextSoldierId(soldiers),
     full_name: "",
   };
+}
+
+/** Roster index for a soldier id, or -1 if not on the roster. */
+export function rosterIndexForId(soldierIds: string[], soldierId: string): number {
+  const id = soldierId.trim();
+  if (!id) return -1;
+  return soldierIds.findIndex((x) => x === id);
 }
 
 function normalizeSoldier(raw: Record<string, unknown>): Soldier {

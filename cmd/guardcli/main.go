@@ -108,10 +108,8 @@ func cmdDBRetention(args []string) int {
 	}
 	defer pool.Close()
 
-	var dropped int
-	if err := pool.QueryRow(context.Background(),
-		`SELECT guard_retention_maintain($1, $2)`, *days, *future,
-	).Scan(&dropped); err != nil {
+	dropped, err := repo.RunRetentionMaintenance(context.Background(), pool, *days, *future)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}

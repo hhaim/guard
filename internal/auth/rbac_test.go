@@ -18,6 +18,12 @@ func TestAuthorizeReadonly(t *testing.T) {
 	if !Authorize("readonly", "GET", "/api/cfg/slots") {
 		t.Fatal("slots")
 	}
+	if !Authorize("readonly", "GET", "/api/soldiers/status") {
+		t.Fatal("soldiers status list")
+	}
+	if Authorize("readonly", "POST", "/api/soldiers/status") {
+		t.Fatal("deny post soldiers status")
+	}
 	if Authorize("readonly", "PUT", "/api/cfg/soldiers") {
 		t.Fatal("deny put cfg")
 	}

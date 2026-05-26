@@ -113,7 +113,7 @@ export function SoldierEditorSheet({
             label="ID"
             value={soldier.id}
             onChange={(id) => onChange({ ...soldier, id: id.trim() })}
-            placeholder="e.g. s0"
+            placeholder="e.g. s0 or s12"
             autoCapitalize="none"
           />
         </section>

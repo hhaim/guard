@@ -45,6 +45,7 @@ type Entry struct {
 type DaySoldiers struct {
 	AvailFull     []string              `json:"avail_full"`
 	AvailPartial  map[string][][]string `json:"avail_partial,omitempty"`
+	AvailAbsent   []string              `json:"avail_absent,omitempty"`
 	Summary       DaySummary            `json:"summary"`
 }
 

@@ -1,9 +1,11 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import {
+  clearSoldierStatusWindow,
   createSoldierStatus,
   type SoldierStatusKind,
 } from "../api/soldierStatus";
+import { formatApiError } from "../lib/apiError";
 import { planDayBoundsIso, wallClockIso } from "../lib/planDayBounds";
 
 type Props = {
@@ -43,23 +45,40 @@ export function StatusCellSheet({
       onSaved();
       onClose();
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => setError(formatApiError(e)),
   });
 
   if (!open) return null;
 
   const { start, end } = planDayBoundsIso(calendarDate, planDayStartHour);
 
-  const setPlanDayStatus = (status: SoldierStatusKind) => {
+  const setOnBase = () => {
     mutate.mutate(() =>
-      createSoldierStatus({
+      clearSoldierStatusWindow({
+        soldier_id: soldierId,
+        start_at: start,
+        end_at: end,
+      }).then(() => undefined),
+    );
+  };
+
+  const setPlanDayStatus = (status: SoldierStatusKind) => {
+    mutate.mutate(async () => {
+      await clearSoldierStatusWindow({
+        soldier_id: soldierId,
+        start_at: start,
+        end_at: end,
+      });
+      await createSoldierStatus({
         soldier_id: soldierId,
         start_at: start,
         end_at: end,
         status,
-      }).then(() => undefined),
-    );
+      });
+    });
   };
+
+  const onBase = cellKind === "full";
 
   const setReturnsAt = () => {
     const returnAt = wallClockIso(calendarDate, returnTime);
@@ -120,6 +139,21 @@ export function StatusCellSheet({
           <br />
           Current: <strong>{cellKind === "full" ? "Full" : cellKind === "partial" ? "Partial" : "Absent"}</strong>
         </p>
+
+        <section className="glass-card status-action-list">
+          <p className="settings-section-header">On base</p>
+          <button
+            type="button"
+            className={`btn status-action-btn${onBase ? " btn-filled" : " btn-tinted"}`}
+            disabled={mutate.isPending || onBase}
+            onClick={setOnBase}
+          >
+            {onBase ? "On base (this plan day)" : "Clear status — on base"}
+          </button>
+          <p className="contacts-hint">
+            Removes away, sick, training, and outings for this plan day so the soldier is fully available.
+          </p>
+        </section>
 
         <section className="glass-card status-action-list">
           <p className="settings-section-header">Mark whole plan day</p>

@@ -54,3 +54,12 @@ export async function deleteSoldierStatus(id: number, startAt: string): Promise<
   const q = new URLSearchParams({ start_at: startAt });
   await apiDelete(`/api/soldiers/status/${id}?${q.toString()}`);
 }
+
+/** Remove blocking status for [start_at, end_at) so the soldier is on base for that window. */
+export async function clearSoldierStatusWindow(body: {
+  soldier_id: string;
+  start_at: string;
+  end_at: string;
+}): Promise<void> {
+  await apiPost("/api/soldiers/status/clear", body);
+}

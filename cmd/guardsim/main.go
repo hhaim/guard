@@ -387,6 +387,7 @@ func compileSoldiersJSON(chk *availability.Checker, anchor time.Time, days, plan
 		out[cal] = map[string]any{
 			"avail_full":     day.AvailFull,
 			"avail_partial":  day.AvailPartial,
+			"avail_absent":   day.AvailAbsent,
 			"summary":        day.Summary,
 		}
 	}

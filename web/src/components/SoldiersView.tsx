@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Braces, Download, Plus, Save, Upload } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Braces, Download, Plus, Upload } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPut } from "../api";
 import { useDevPanel } from "../context/AppStateContext";
+import { formatApiError } from "../lib/apiError";
 import {
   deriveJsonFromDoc,
   docFromServer,
@@ -21,6 +22,8 @@ import { SoldiersStatusBoard } from "./SoldiersStatusBoard";
 
 type CfgResp = { key: string; value: unknown; version: number; updated_at: string };
 
+const ROSTER_AUTOSAVE_MS = 600;
+
 export function SoldiersView() {
   const qc = useQueryClient();
   const { openPanel } = useDevPanel();
@@ -31,10 +34,14 @@ export function SoldiersView() {
   });
 
   const [doc, setDoc] = useState<SoldiersDoc>({ soldiers: [] });
-  const [baseline, setBaseline] = useState<SoldiersDoc>({ soldiers: [] });
   const [jsonOverride, setJsonOverride] = useState<string | null>(null);
   const [version, setVersion] = useState<number | undefined>();
   const [dirty, setDirty] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const versionRef = useRef(version);
+  versionRef.current = version;
+  const skipAutosaveRef = useRef(false);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<"edit" | "new">("edit");
@@ -44,11 +51,13 @@ export function SoldiersView() {
   useEffect(() => {
     if (!soldiersQ.data) return;
     const next = docFromServer(soldiersQ.data.value);
+    skipAutosaveRef.current = true;
     setDoc(next);
-    setBaseline(next);
     setJsonOverride(null);
     setVersion(soldiersQ.data.version);
     setDirty(false);
+    setSaveState("idle");
+    setSaveError(null);
   }, [soldiersQ.data]);
 
   const liveJson = useMemo(() => {
@@ -83,12 +92,65 @@ export function SoldiersView() {
     });
   }, [doc.soldiers]);
 
+  const saveRosterM = useMutation({
+    mutationFn: async (payload: SoldiersDoc) => {
+      const err = validateDoc(payload);
+      if (err) throw new Error(err);
+      const res = (await apiPut("/api/cfg/soldiers", {
+        value: deriveJsonFromDoc(payload),
+        expected_version: versionRef.current ?? 0,
+      })) as { version?: number };
+      return res;
+    },
+    onMutate: () => {
+      setSaveState("pending");
+      setSaveError(null);
+    },
+    onSuccess: (res) => {
+      if (res?.version != null) versionRef.current = res.version;
+      setVersion(res?.version);
+      setDirty(false);
+      setSaveState("saved");
+      void qc.invalidateQueries({ queryKey: ["cfg", "soldiers"] });
+      void qc.invalidateQueries({ queryKey: ["plan", "preview-availability"] });
+    },
+    onError: (e: Error) => {
+      setSaveState("error");
+      setSaveError(formatApiError(e));
+    },
+  });
+
+  const docForSave = useMemo((): SoldiersDoc | null => {
+    if (jsonOverride != null) {
+      try {
+        return parseDocFromJson(JSON.parse(jsonOverride));
+      } catch {
+        return null;
+      }
+    }
+    return doc;
+  }, [doc, jsonOverride]);
+
+  useEffect(() => {
+    if (skipAutosaveRef.current) {
+      skipAutosaveRef.current = false;
+      return;
+    }
+    if (!dirty || jsonError || !docForSave) return;
+    const timer = window.setTimeout(() => {
+      saveRosterM.mutate(docForSave);
+    }, ROSTER_AUTOSAVE_MS);
+    return () => window.clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- saveRosterM is stable enough; debounce on doc only
+  }, [dirty, jsonError, docForSave]);
+
   const syncJsonToForm = useCallback((text: string) => {
     setJsonOverride(text);
     try {
       const parsed = parseDocFromJson(JSON.parse(text));
       setDoc(parsed);
       setDirty(true);
+      setSaveState("idle");
     } catch {
       /* keep draft */
     }
@@ -98,6 +160,7 @@ export function SoldiersView() {
     setJsonOverride(null);
     setDoc(next);
     setDirty(true);
+    setSaveState("idle");
   }, []);
 
   const openEditor = useCallback((index: number, mode: "edit" | "new" = "edit") => {
@@ -108,7 +171,7 @@ export function SoldiersView() {
   }, [doc.soldiers]);
 
   const openNew = useCallback(() => {
-    const next = emptySoldier(doc.soldiers.length);
+    const next = emptySoldier(doc.soldiers);
     setEditorMode("new");
     setEditorIndex(doc.soldiers.length);
     setDraft(next);
@@ -139,27 +202,27 @@ export function SoldiersView() {
   }, [doc, editorIndex, editorMode, markDirty]);
 
   const resetToServer = useCallback(() => {
-    setDoc(baseline);
+    if (!soldiersQ.data) return;
+    skipAutosaveRef.current = true;
+    const next = docFromServer(soldiersQ.data.value);
+    setDoc(next);
     setJsonOverride(null);
+    setVersion(soldiersQ.data.version);
     setDirty(false);
-  }, [baseline]);
+    setSaveState("idle");
+    setSaveError(null);
+  }, [soldiersQ.data]);
 
-  const saveM = useMutation({
-    mutationFn: async () => {
-      const err = jsonError;
-      if (err) throw new Error(err);
-      const payload = deriveJsonFromDoc(jsonOverride != null ? parseDocFromJson(JSON.parse(jsonOverride)) : doc);
-      await apiPut("/api/cfg/soldiers", {
-        value: payload,
-        expected_version: version ?? 0,
-      });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["cfg", "soldiers"] });
-      setDirty(false);
-      setJsonOverride(null);
-    },
-  });
+  const rosterStatusLabel =
+    saveState === "pending"
+      ? "Saving roster…"
+      : saveState === "saved"
+        ? "Roster saved"
+        : saveState === "error"
+          ? "Roster save failed"
+          : dirty
+            ? "Roster pending save…"
+            : "";
 
   return (
     <>
@@ -168,7 +231,7 @@ export function SoldiersView() {
           <h2 className="contacts-title">Soldiers</h2>
           <p className="contacts-count">
             {sortedRows.length} {sortedRows.length === 1 ? "soldier" : "soldiers"}
-            {dirty ? " · unsaved changes" : ""}
+            {rosterStatusLabel ? ` · ${rosterStatusLabel}` : ""}
           </p>
         </div>
         <div className="contacts-toolbar-actions">
@@ -208,6 +271,7 @@ export function SoldiersView() {
                 setDoc(parsed);
                 setJsonOverride(null);
                 setDirty(true);
+                setSaveState("idle");
               } catch (err) {
                 alert(err instanceof Error ? err.message : "Import failed");
               }
@@ -216,6 +280,19 @@ export function SoldiersView() {
             <Upload size={18} strokeWidth={2} />
             <span className="contacts-json-btn-label">Import</span>
           </button>
+        </div>
+      </header>
+
+      <SoldiersStatusBoard soldiers={doc.soldiers} />
+
+      <section className="soldiers-roster-section" aria-labelledby="soldiers-roster-heading">
+        <header className="soldiers-roster-header">
+          <div>
+            <h3 id="soldiers-roster-heading" className="contacts-title">
+              Roster
+            </h3>
+            <p className="contacts-count">Identity only — edits save automatically.</p>
+          </div>
           <button
             type="button"
             className="contacts-add-btn"
@@ -227,25 +304,24 @@ export function SoldiersView() {
           >
             <Plus size={22} strokeWidth={2.5} />
           </button>
-        </div>
-      </header>
+        </header>
 
-      <section className="glass-card contacts-list-card" aria-label="Soldiers list">
-        {soldiersQ.isLoading && <p className="contacts-empty">Loading…</p>}
-        {!soldiersQ.isLoading && sortedRows.length === 0 && (
-          <p className="contacts-empty">No soldiers yet. Tap + to add one.</p>
-        )}
-        <table className="contacts-table">
-          <thead>
-            <tr>
-              <th className="contacts-th-avatar" scope="col" />
-              <th scope="col">Name</th>
-              <th scope="col">ID</th>
-              <th className="contacts-th-chevron" scope="col" />
-            </tr>
-          </thead>
-          <tbody>
-            {sortedRows.map(({ s, index }) => (
+        <div className="glass-card contacts-list-card">
+          {soldiersQ.isLoading && <p className="contacts-empty">Loading…</p>}
+          {!soldiersQ.isLoading && sortedRows.length === 0 && (
+            <p className="contacts-empty">No soldiers yet. Tap + to add one.</p>
+          )}
+          <table className="contacts-table">
+            <thead>
+              <tr>
+                <th className="contacts-th-avatar" scope="col" />
+                <th scope="col">Name</th>
+                <th scope="col">ID</th>
+                <th className="contacts-th-chevron" scope="col" />
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map(({ s, index }) => (
                 <tr
                   key={`${s.id}-${index}`}
                   className="contacts-row"
@@ -266,44 +342,17 @@ export function SoldiersView() {
                   />
                 </tr>
               ))}
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
+
+        <p className="contacts-hint">Double-click a row to edit, or tap the › button</p>
+
+        {saveError && <p className="msg-err">{saveError}</p>}
+        {jsonError && dirty && <p className="msg-err">{jsonError}</p>}
       </section>
 
-      <SoldiersStatusBoard soldiers={doc.soldiers} />
-
-      <p className="contacts-hint">Double-click a row to edit, or tap the › button</p>
-
-      <div className="btn-row">
-        <button
-          type="button"
-          className="btn btn-filled"
-          disabled={saveM.isPending || !!jsonError || soldiersQ.isLoading || !dirty}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            saveM.mutate();
-          }}
-        >
-          <Save size={18} strokeWidth={2} />
-          Save soldiers
-        </button>
-        {dirty && (
-          <button
-            type="button"
-            className="btn btn-plain"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              resetToServer();
-            }}
-          >
-            Discard
-          </button>
-        )}
-      </div>
-
       {soldiersQ.isError && <p className="msg-err">{(soldiersQ.error as Error).message}</p>}
-      {saveM.isError && <p className="msg-err">{(saveM.error as Error).message}</p>}
-      {saveM.isSuccess && <p className="msg-ok">Saved.</p>}
       {soldiersQ.data && (
         <p className="meta-line">
           Version {soldiersQ.data.version} · updated {new Date(soldiersQ.data.updated_at).toLocaleString()}
@@ -313,7 +362,7 @@ export function SoldiersView() {
       <SoldierEditorSheet
         open={editorOpen && draft != null}
         mode={editorMode}
-        soldier={draft ?? emptySoldier(0)}
+        soldier={draft ?? emptySoldier(doc.soldiers)}
         onChange={setDraft}
         onDone={commitEditor}
         onCancel={() => {

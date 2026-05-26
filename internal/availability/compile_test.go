@@ -30,6 +30,26 @@ func TestCompileDayAvailability_partialReturn(t *testing.T) {
 	}
 }
 
+func TestCompileDayAvailability_absentList(t *testing.T) {
+	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
+	roster := []string{"s0", "s3"}
+	entries := []Entry{
+		{
+			SoldierID: "s3",
+			StartAt: anchor.AddDate(0, 0, -1).Add(5 * time.Hour),
+			EndAt:   nil,
+			Status:  StatusSick,
+		},
+	}
+	day := CompileDayAvailability(anchor, 0, 5, roster, entries)
+	if len(day.AvailAbsent) != 1 || day.AvailAbsent[0] != "s3" {
+		t.Fatalf("avail_absent: %+v", day.AvailAbsent)
+	}
+	if day.Summary.AbsentFull != 1 {
+		t.Fatalf("summary absent_full: %+v", day.Summary)
+	}
+}
+
 func TestChecker_availRotatingNightBlocks(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	roster := make([]string, 12)

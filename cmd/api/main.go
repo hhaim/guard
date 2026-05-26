@@ -16,6 +16,7 @@ import (
 	"guard/internal/auth"
 	"guard/internal/db"
 	"guard/internal/httpapi"
+	"guard/internal/repo"
 )
 
 func main() {
@@ -33,6 +34,12 @@ func main() {
 		log.Fatalf("db: %v", err)
 	}
 	defer pool.Close()
+
+	if dropped, err := repo.RunRetentionMaintenance(ctx, pool, 30, 7); err != nil {
+		log.Printf("retention: %v", err)
+	} else if dropped > 0 {
+		log.Printf("retention: dropped %d old partition(s)", dropped)
+	}
 
 	planDebugOffset := 0
 	if v := strings.TrimSpace(os.Getenv("PLAN_DEBUG_DAY_OFFSET")); v != "" {

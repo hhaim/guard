@@ -1,4 +1,8 @@
-import type { ScheduleAssignment } from "./planDoc";
+import type { PlanDaySoldiersDoc, ScheduleAssignment } from "./planDoc";
+import {
+  calendarDateForPlanDay,
+  isSoldierUnavailableForBlock,
+} from "./soldierAvailability";
 import type { ZonesDoc } from "./zones";
 import {
   blockStartHour,
@@ -61,12 +65,24 @@ export type MatrixDay = {
 export type ScheduleMatrixOpts = {
   planDayStartHour?: number;
   anchorDate?: string;
+  /** Roster order (cfg soldiers); used for cell labels when soldier_id is missing. */
+  soldierIds?: string[];
 };
 
 export type TimelineSegment = {
   startHour: number;
   duration: number;
   onDuty: boolean;
+  /** Away/sick/training — not assignable (yellow when not on duty). */
+  unavailable?: boolean;
+};
+
+export type BuildTimelineOpts = {
+  planDayStartHour?: number;
+  shiftHours?: number;
+  anchorDate?: string;
+  soldierIds?: string[];
+  soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
 };
 
 export function calendarBlocksPerDay(shiftHours: number): number {
@@ -89,7 +105,14 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-export function soldierLabel(a: { soldier_idx: number }): string {
+export function soldierLabel(
+  a: { soldier_idx: number; soldier_id?: string },
+  soldierIds?: string[],
+): string {
+  const sid = a.soldier_id?.trim();
+  if (sid) return sid;
+  const fromRoster = soldierIds?.[a.soldier_idx];
+  if (fromRoster) return fromRoster;
   return `S${a.soldier_idx}`;
 }
 
@@ -187,9 +210,10 @@ export function buildScheduleMatrices(
   const lookupRot = new Map<string, { soldierIdx: number; label: string }>();
   const merged = new Map<string, { soldierIdx: number; label: string; rowspan: number; startBlock: number }>();
 
+  const soldierIds = opts?.soldierIds;
   for (const a of assignments) {
     const k = a.kind || "rotating";
-    const label = soldierLabel(a);
+    const label = soldierLabel(a, soldierIds);
     if (k === "rotating") {
       lookupRot.set(`${a.day}:${a.calendar_block}:${a.slot}`, { soldierIdx: a.soldier_idx, label });
     } else if (k === "full_day" || k === "windowed") {
@@ -318,21 +342,46 @@ export function buildTimelineLanes(
   blockHours: number,
   soldierCount: number,
   planDayStartHour = 0,
+  opts?: BuildTimelineOpts,
 ): { soldierIdx: number; label: string; segments: TimelineSegment[] }[] {
+  const soldierIds = opts?.soldierIds;
+  const soldiersByDay = opts?.soldiersByDay;
+  const anchorDate = opts?.anchorDate?.trim() ?? "";
   const days = busy.length;
   const lanes: { soldierIdx: number; label: string; segments: TimelineSegment[] }[] = [];
   for (let s = soldierCount - 1; s >= 0; s--) {
     const segments: TimelineSegment[] = [];
+    const soldierId = soldierIds?.[s];
     for (let d = 0; d < days; d++) {
+      const cal =
+        anchorDate && soldierId
+          ? calendarDateForPlanDay(anchorDate, d)
+          : "";
+      const dayDoc = cal && soldiersByDay ? soldiersByDay[cal] : undefined;
       for (let b = 0; b < (busy[d]?.[s]?.length ?? 0); b++) {
+        const onDuty = !!busy[d]?.[s]?.[b];
+        const unavailable =
+          !onDuty &&
+          !!soldierId &&
+          !!cal &&
+          isSoldierUnavailableForBlock(
+            soldierId,
+            cal,
+            b,
+            planDayStartHour,
+            blockHours,
+            dayDoc,
+          );
         segments.push({
           startHour: blockTimelineStartHour(d, b, planDayStartHour, blockHours),
           duration: blockHours,
-          onDuty: !!busy[d]?.[s]?.[b],
+          onDuty,
+          unavailable,
         });
       }
     }
-    lanes.push({ soldierIdx: s, label: `S${s}`, segments });
+    const label = soldierIds?.[s] ?? `S${s}`;
+    lanes.push({ soldierIdx: s, label, segments });
   }
   return lanes;
 }
@@ -388,7 +437,7 @@ export type ScheduleStatsBundle = {
   maxFreeBarData: { day: number; [key: string]: number }[];
 };
 
-function stddevSample(values: number[]): number {
+export function stddevSample(values: number[]): number {
   const n = values.length;
   if (n < 2) return 0;
   const mean = values.reduce((a, b) => a + b, 0) / n;
@@ -398,6 +447,46 @@ function stddevSample(values: number[]): number {
     sumSq += d * d;
   }
   return Math.sqrt(sumSq / (n - 1));
+}
+
+/** Aggregate duty hours vs roster capacity (soldier-days × 24 h). */
+export type PlanWorkloadMetrics = {
+  totalWorkHours: number;
+  totalCapacityHours: number;
+  loadFactor: number;
+  fairnessStdDevHours: number;
+};
+
+export function computePlanWorkloadMetrics(
+  assignments: ScheduleAssignment[],
+  days: number,
+  soldierCount: number,
+): PlanWorkloadMetrics {
+  const n = Math.max(1, soldierCount);
+  const perSoldier = Array<number>(n).fill(0);
+  let totalWork = 0;
+  for (const a of assignments) {
+    const s = a.soldier_idx;
+    if (s < 0 || s >= n) continue;
+    const h = a.raw_hours;
+    perSoldier[s] += h;
+    totalWork += h;
+  }
+  const capacity = n * Math.max(1, days) * 24;
+  return {
+    totalWorkHours: totalWork,
+    totalCapacityHours: capacity,
+    loadFactor: capacity > 0 ? totalWork / capacity : 0,
+    fairnessStdDevHours: stddevSample(perSoldier),
+  };
+}
+
+/** Load-factor color band: ≤10% green, ≥33% red, between amber. */
+export function loadFactorLevel(loadFactor: number): "low" | "mid" | "high" {
+  const pct = loadFactor * 100;
+  if (pct <= 10) return "low";
+  if (pct >= 33) return "high";
+  return "mid";
 }
 
 /** Busy tensor for rest stats (includes YAML rest_after spans when present). */

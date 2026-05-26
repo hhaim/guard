@@ -1164,6 +1164,61 @@
   min-height: 360px;
 }
 
+.plan-top-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.plan-top-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.plan-top-metric-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.plan-top-metric-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text-primary);
+}
+
+.plan-top-metric-load--low {
+  color: #2e7d32;
+}
+
+.plan-top-metric-load--mid {
+  color: #e65100;
+}
+
+.plan-top-metric-load--high {
+  color: #c62828;
+}
+
+.plan-top-metric-detail {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.plan-top-metric-hint {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
 .plan-slot-picker {
   display: flex;
   flex-direction: column;
@@ -1607,6 +1662,10 @@
   background: #c62828;
 }
 
+.sched-swatch-unavail {
+  background: #f9a825;
+}
+
 .sched-timeline-axis {
   position: relative;
   height: 1.25rem;
@@ -1671,6 +1730,10 @@
 
 .sched-seg-on {
   background: #c62828;
+}
+
+.sched-seg-unavail {
+  background: #f9a825;
 }
 
 .sched-timeline-xlabel {
@@ -2014,9 +2077,41 @@
   padding: 0 0.5rem 0.5rem;
 }
 
+.status-board-table {
+  table-layout: fixed;
+}
+
+.status-board-col-label {
+  width: 5.75rem;
+}
+
+.status-board-col-day {
+  width: 4.25rem;
+}
+
+.status-board-table thead th,
+.status-board-table tbody td,
+.status-board-table tbody th[scope="row"] {
+  padding: 0.35rem 0.4rem;
+  vertical-align: middle;
+}
+
 .status-board-table .status-board-day-th {
   text-align: center;
-  min-width: 4.5rem;
+}
+
+.status-board-cell {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.status-board-table .availability-summary-row-label,
+.status-board-table .status-board-name {
+  text-align: left;
+  vertical-align: middle;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 28px;
 }
 
 .status-board-date {
@@ -2051,11 +2146,42 @@
   padding: 0.25rem 0.5rem;
   border: none;
   border-radius: var(--radius-button);
-  font: inherit;
   font-size: var(--text-xs);
   font-weight: 600;
+  line-height: 1.2;
   cursor: pointer;
   transition: transform var(--ease-hover), box-shadow var(--ease-hover);
+}
+
+/* Status board: compact chips — counts (12/0/0) and labels (Full/Absent) match */
+.status-board-table .status-board-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 4.25rem;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 0.35rem;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.status-board-table button.status-board-chip {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.status-board-table .availability-slash {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 .status-chip:active {
@@ -2156,66 +2282,118 @@
   color: var(--destructive);
 }
 
-.availability-badges {
-  padding: 0.5rem 1.1rem 0.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+.availability-summary {
+  padding: 0 4px 10px;
 }
 
-.availability-badges-title {
-  margin: 0;
-}
-
-.availability-badges-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 0.75rem;
-}
-
-.availability-badge-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+.availability-summary-title {
+  margin: 0 0 6px;
   font-size: var(--text-sm);
-}
-
-.availability-badge-date {
   font-weight: 600;
-  min-width: 2.5rem;
-}
-
-.availability-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.75rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
-  font-weight: 700;
-}
-
-.availability-badge--full {
-  background: color-mix(in srgb, var(--success) 25%, transparent);
-  color: var(--success);
-}
-
-.availability-badge--absent {
-  background: color-mix(in srgb, var(--destructive) 22%, transparent);
-  color: var(--destructive);
-}
-
-.availability-badge--partial {
-  background: color-mix(in srgb, var(--warning) 28%, transparent);
-  color: var(--warning);
-}
-
-.availability-legend {
-  display: flex;
-  gap: 0.5rem;
-  font-size: var(--text-xs);
   color: var(--text-secondary);
+}
+
+.availability-summary-scroll {
+  margin-bottom: 6px;
+}
+
+.availability-summary-table .availability-summary-row-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.availability-slash {
+  cursor: default;
+  pointer-events: none;
+}
+
+.availability-summary-legend {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.soldiers-roster-section {
+  margin-top: 1.25rem;
+}
+
+.soldiers-roster-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.soldiers-roster-save {
+  margin-top: 12px;
+}
+
+.status-board .availability-summary {
+  margin: 0 0 10px;
+}
+
+.status-board-full-details {
+  margin-top: 12px;
+  padding: 0 4px 4px;
+  border-top: 1px solid rgba(60, 60, 67, 0.12);
+}
+
+.status-board-full-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  padding: 10px 4px 8px;
+  color: #636366;
+  list-style: none;
+}
+
+.status-board-full-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.status-board-full-details summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.status-board-full-details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.status-board-full-details[open] summary {
+  margin-bottom: 4px;
+}
+
+.status-board-all-clear {
+  margin: 8px 0;
+}
+
+.sched-availability-report .sched-availability-day {
+  margin-bottom: 1.25rem;
+}
+
+.sched-availability-table th,
+.sched-availability-table td {
+  text-align: left;
+}
+
+.sched-avail-row--full td:nth-child(2) {
+  color: #1b5e20;
+  font-weight: 600;
+}
+
+.sched-avail-row--partial td:nth-child(2) {
+  color: #9a6b00;
+  font-weight: 600;
+}
+
+.sched-avail-row--absent_full td:nth-child(2) {
+  color: #b71c1c;
+  font-weight: 600;
 }
 
 .availability-legend .availability-badge {

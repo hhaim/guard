@@ -3126,10 +3126,11 @@ def build_soldier_timeline_figure(
     block_hours: float,
     title: str,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    unavail: Optional[np.ndarray] = None,
 ) -> "plt.Figure":
     """
-    One horizontal lane per soldier: red = **posted duty** in that block, green = not on a
-    duty row (same cells as the per-soldier HTML block table). YAML ``rest_after`` padding is
+    One horizontal lane per soldier: red = **posted duty** in that block, green = off post and
+    assignable, yellow = away/sick/training (not assignable). YAML ``rest_after`` padding is
     not shown as red here. X-axis is hours along the plan-day timeline (0 = plan day start).
     """
     plt, _, Patch = _get_matplotlib()
@@ -3138,22 +3139,27 @@ def build_soldier_timeline_figure(
     total_h = days * 24.0
     fig_h = max(4.0, 0.38 * n_s + 2.2)
     fig, ax = plt.subplots(figsize=(min(24, max(12, days * 0.45)), fig_h))
-    red, green = "#c62828", "#2e7d32"
+    red, green, yellow = "#c62828", "#2e7d32", "#f9a825"
     for s in range(n_s):
         y_pos = n_s - 1 - s
         y0 = y_pos - 0.36
         h = 0.72
         red_segs: List[Tuple[float, float]] = []
         green_segs: List[Tuple[float, float]] = []
+        yellow_segs: List[Tuple[float, float]] = []
         for d in range(days):
             for b in range(blocks_pd):
                 x0 = d * 24.0 + b * block_hours
                 if busy[d, s, b]:
                     red_segs.append((x0, block_hours))
+                elif unavail is not None and unavail[d, s, b]:
+                    yellow_segs.append((x0, block_hours))
                 else:
                     green_segs.append((x0, block_hours))
         if green_segs:
             ax.broken_barh(green_segs, (y0, h), facecolors=green, edgecolors="white", linewidth=0.3)
+        if yellow_segs:
+            ax.broken_barh(yellow_segs, (y0, h), facecolors=yellow, edgecolors="white", linewidth=0.3)
         if red_segs:
             ax.broken_barh(red_segs, (y0, h), facecolors=red, edgecolors="white", linewidth=0.3)
 
@@ -3164,13 +3170,16 @@ def build_soldier_timeline_figure(
     ps = int(plan_day_start_hour) % 24
     ax.set_xlabel(f"Plan-day timeline (h=0 at {ps:02d}:00 wall clock)")
     ax.set_title(
-        f"Per-soldier schedule (green = off post, red = posted duty)\n{title}", fontsize=10
+        f"Per-soldier schedule (green = off post, yellow = away/sick, red = posted duty)\n{title}",
+        fontsize=10,
     )
     ax.grid(axis="x", alpha=0.25, linestyle=":")
     legend_el = [
         Patch(facecolor=green, edgecolor="white", label="Off post"),
         Patch(facecolor=red, edgecolor="white", label="Posted duty"),
     ]
+    if unavail is not None:
+        legend_el.insert(1, Patch(facecolor=yellow, edgecolor="white", label="Away / sick"))
     ax.legend(handles=legend_el, loc="upper right", fontsize=8)
     step = 4
     for off in range(0, int(total_h) + 1, step):
@@ -4001,6 +4010,7 @@ def main() -> None:
                 out[cal] = {
                     "avail_full": day.avail_full,
                     "avail_partial": day.avail_partial,
+                    "avail_absent": day.avail_absent,
                     "summary": {
                         "full": day.full,
                         "absent_full": day.absent_full,
@@ -4404,8 +4414,24 @@ def main() -> None:
     busy_tl = build_busy_tensor(
         assignments, args.days, args.soldiers, blocks_pd, include_yaml_rest=False
     )
+    unavail_tl = None
+    if scenario_avail is not None:
+        from scenario_loader import build_unavail_timeline_tensor
+
+        unavail_tl = build_unavail_timeline_tensor(
+            scenario_avail,
+            args.days,
+            args.soldiers,
+            blocks_pd,
+            plan_day_start_hour,
+            block_hours_eff,
+        )
     fig_tl = build_soldier_timeline_figure(
-        busy_tl, block_hours_eff, title, plan_day_start_hour=plan_day_start_hour
+        busy_tl,
+        block_hours_eff,
+        title,
+        plan_day_start_hour=plan_day_start_hour,
+        unavail=unavail_tl,
     )
     soldier_timeline_png = _figure_to_png_bytes(fig_tl)
 

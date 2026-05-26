@@ -67,6 +67,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/soldiers", s.handleSoldiersList)
 	mux.HandleFunc("GET /api/soldiers/status", s.handleSoldiersStatusList)
 	mux.HandleFunc("POST /api/soldiers/status", s.handleSoldiersStatusCreate)
+	mux.HandleFunc("POST /api/soldiers/status/clear", s.handleSoldiersStatusClear)
 	mux.HandleFunc("PATCH /api/soldiers/status/{id}", s.handleSoldiersStatusPatch)
 	mux.HandleFunc("DELETE /api/soldiers/status/{id}", s.handleSoldiersStatusDelete)
 	mux.HandleFunc("GET /api/plan/preview-availability", s.handlePlanPreviewAvailability)

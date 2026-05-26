@@ -1,7 +1,5 @@
-1) review the tables 
-2) add soldiers timing + simulation yaml files 
-3) notions of days per slot 
-4) 
+3) notions of days per slot , per slot mask of types (advanced)
+
 
 ================
 

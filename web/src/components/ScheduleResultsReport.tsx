@@ -15,6 +15,7 @@ import {
 import { normalizePlanDoc, type PlanDoc } from "../lib/planDoc";
 import { formatWallClockHour, resolvePlanDayStartHour, timelineChartLayout } from "../lib/planDay";
 import { ScheduleStatsPanel } from "./ScheduleStatsPanel";
+import { PlanSoldierAvailabilitySection } from "./PlanSoldierAvailabilitySection";
 
 export type ScheduleReportSections = {
   matrixShort?: boolean;
@@ -22,6 +23,7 @@ export type ScheduleReportSections = {
   bySoldier?: boolean;
   timeline?: boolean;
   statsPanel?: boolean;
+  availability?: boolean;
 };
 
 const DEFAULT_SECTIONS: Required<ScheduleReportSections> = {
@@ -30,6 +32,7 @@ const DEFAULT_SECTIONS: Required<ScheduleReportSections> = {
   bySoldier: true,
   timeline: true,
   statsPanel: true,
+  availability: true,
 };
 
 type Props = {
@@ -233,8 +236,9 @@ function SoldierTimelineChart({
     <div className="sched-timeline-wrap">
       <h4 className="sched-subtitle">Soldier timelines (full simulation)</h4>
       <p className="sched-hint">
-        Green = off post, red = posted duty. X-axis is wall-clock time from plan day start (
-        {formatWallClockHour(planDayStartHour)}); dashed lines mark the next plan day.
+        Green = off post and assignable, yellow = away/sick/training, red = posted duty. X-axis
+        is wall-clock time from plan day start ({formatWallClockHour(planDayStartHour)}); dashed
+        lines mark the next plan day.
       </p>
       <p className="sched-hint sched-timeline-caption">
         {days}d — {lanes.length} soldiers, {slotsPerBlock} slots/block, shift_hours={blockHours}h
@@ -243,6 +247,9 @@ function SoldierTimelineChart({
         <div className="sched-timeline-legend" aria-hidden>
           <span>
             <i className="sched-swatch sched-swatch-off" /> Off post
+          </span>
+          <span>
+            <i className="sched-swatch sched-swatch-unavail" /> Away / sick
           </span>
           <span>
             <i className="sched-swatch sched-swatch-on" /> Posted duty
@@ -276,12 +283,20 @@ function SoldierTimelineChart({
                 {lane.segments.map((seg, i) => (
                   <span
                     key={i}
-                    className={seg.onDuty ? "sched-seg sched-seg-on" : "sched-seg sched-seg-off"}
+                    className={
+                      seg.onDuty
+                        ? "sched-seg sched-seg-on"
+                        : seg.unavailable
+                          ? "sched-seg sched-seg-unavail"
+                          : "sched-seg sched-seg-off"
+                    }
                     style={{
                       left: `${layout.segmentLeftPct(seg.startHour)}%`,
                       width: `${layout.segmentWidthPct(seg.duration)}%`,
                     }}
-                    title={`${lane.label}: ${seg.onDuty ? "duty" : "free"} ${formatTimelineSegmentRange(seg, planDayStartHour)}`}
+                    title={`${lane.label}: ${
+                      seg.onDuty ? "duty" : seg.unavailable ? "away/sick" : "off post"
+                    } ${formatTimelineSegmentRange(seg, planDayStartHour)}`}
                   />
                 ))}
               </div>
@@ -325,13 +340,19 @@ export function ScheduleResultsReport({
       matrices: buildScheduleMatrices(assignments, days, zone, {
         planDayStartHour,
         anchorDate,
+        soldierIds,
       }),
       busy,
-      lanes: buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour),
+      lanes: buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
+        soldierIds,
+        anchorDate,
+        shiftHours: zone.shiftHours,
+        soldiersByDay: plan.soldiers,
+      }),
       totalHours: days * 24,
       stats: buildScheduleStats(assignments, days, zone, soldierCount),
     };
-  }, [assignments, days, shiftHours, zones, anchorDate, planDayStartHour]);
+  }, [assignments, days, shiftHours, zones, anchorDate, planDayStartHour, soldierIds, plan.soldiers]);
 
   const display = useMemo(
     () => buildSoldierDisplay(soldierIds, soldiers, report.soldierCount),
@@ -455,6 +476,10 @@ export function ScheduleResultsReport({
           shiftHours={report.zone.shiftHours}
           slotsPerBlock={report.zone.slotsPerBlock}
         />
+      )}
+
+      {sections.availability && (
+        <PlanSoldierAvailabilitySection plan={plan} soldiers={soldiers} />
       )}
     </div>
   );

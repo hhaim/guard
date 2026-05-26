@@ -32,6 +32,7 @@ func (s *Server) buildPlanAvailability(
 		out[cal] = model.PlanDaySoldiers{
 			AvailFull:    append([]string(nil), day.AvailFull...),
 			AvailPartial: day.AvailPartial,
+			AvailAbsent:  append([]string(nil), day.AvailAbsent...),
 			Summary: &model.PlanSoldiersSummary{
 				Full:          day.Summary.Full,
 				AbsentFull:    day.Summary.AbsentFull,

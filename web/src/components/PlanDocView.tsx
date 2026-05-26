@@ -4,7 +4,9 @@ import type { PlanDoc } from "../lib/planDoc";
 import { normalizePlanDoc } from "../lib/planDoc";
 import type { Soldier } from "../lib/soldiers";
 import { PlanChangeTable } from "./PlanChangeTable";
+import { PlanTopMetrics } from "./PlanTopMetrics";
 import { ScheduleResultsReport, type ScheduleReportSections } from "./ScheduleResultsReport";
+import { inferSoldierCount } from "../lib/scheduleReport";
 
 export type PlanDocViewProps = {
   plan: PlanDoc;
@@ -30,9 +32,13 @@ export function PlanDocView({
   readOnly = false,
 }: PlanDocViewProps) {
   const doc = useMemo(() => normalizePlanDoc(plan), [plan]);
+  const rosterSize = Math.max(soldierIds.length, inferSoldierCount(doc.assignments));
 
   return (
     <>
+      {doc.assignments.length > 0 && (
+        <PlanTopMetrics plan={doc} soldierCount={rosterSize} />
+      )}
       {onPlanChange && (
         <PlanChangeTable
           plan={doc}
