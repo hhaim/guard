@@ -3,12 +3,14 @@ import { Trash2 } from "lucide-react";
 import { fetchPlanContext } from "../api/plan";
 import { parsePlanDayStart } from "../lib/planDay";
 import { soldierInitials, type Soldier } from "../lib/soldiers";
+import type { SoldierType } from "../lib/soldierTypes";
 import { SoldierStatusTimeline } from "./SoldierStatusTimeline";
 
 type SoldierEditorSheetProps = {
   open: boolean;
   mode: "edit" | "new";
   soldier: Soldier;
+  types: SoldierType[];
   onChange: (s: Soldier) => void;
   onDone: () => void;
   onCancel: () => void;
@@ -51,6 +53,7 @@ export function SoldierEditorSheet({
   open,
   mode,
   soldier,
+  types,
   onChange,
   onDone,
   onCancel,
@@ -116,6 +119,26 @@ export function SoldierEditorSheet({
             placeholder="e.g. s0 or s12"
             autoCapitalize="none"
           />
+          <div className="settings-row">
+            <label className="settings-row-label">
+              <span className="title">Type</span>
+            </label>
+            <select
+              className="settings-input settings-input-wide"
+              value={soldier.type_code ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                onChange({ ...soldier, type_code: v || undefined });
+              }}
+            >
+              <option value="">— None —</option>
+              {types.map((t) => (
+                <option key={t.code} value={t.code}>
+                  {t.code} — {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </section>
 
         {mode === "edit" && anchor && soldier.id.trim() && (

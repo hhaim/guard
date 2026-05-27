@@ -1,7 +1,10 @@
+import { type SoldierTypesDoc, typeByCode } from "./soldierTypes";
+
 export type Soldier = {
   id: string;
   key?: string;
   full_name: string;
+  type_code?: string;
   /** @deprecated use status board entries; read-only from legacy cfg */
   state?: string;
 };
@@ -53,6 +56,9 @@ function normalizeSoldier(raw: Record<string, unknown>): Soldier {
     ...(raw.state != null && String(raw.state).trim()
       ? { state: String(raw.state).trim() }
       : {}),
+    ...(raw.type_code != null && String(raw.type_code).trim()
+      ? { type_code: String(raw.type_code).trim() }
+      : {}),
   };
 }
 
@@ -80,6 +86,7 @@ export function deriveJsonFromDoc(doc: SoldiersDoc): Record<string, unknown> {
         full_name: s.full_name,
       };
       if (s.key && s.key !== s.id) row.key = s.key;
+      if (s.type_code?.trim()) row.type_code = s.type_code.trim();
       return row;
     }),
   };
@@ -89,16 +96,15 @@ export function parseDocFromJson(raw: unknown): SoldiersDoc {
   return docFromServer(raw);
 }
 
+/** Avatar label from soldier ID only (e.g. s12 → S12). */
 export function soldierInitials(s: Soldier): string {
-  const name = s.full_name.trim();
-  if (name) {
-    const parts = name.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-    }
-    return name.slice(0, 2).toUpperCase();
+  const rawId = s.id.trim();
+  const numericId = /^s(\d+)$/i.exec(rawId);
+  if (numericId) {
+    const n = Math.max(0, Math.min(99, Number.parseInt(numericId[1], 10)));
+    return `S${String(n).padStart(2, "0")}`;
   }
-  return (s.id || "?").slice(0, 2).toUpperCase();
+  return (rawId || "?").slice(0, 3).toUpperCase();
 }
 
 export function sortSoldiers(list: Soldier[]): Soldier[] {
@@ -109,12 +115,16 @@ export function sortSoldiers(list: Soldier[]): Soldier[] {
   });
 }
 
-export function validateDoc(doc: SoldiersDoc): string | null {
+export function validateDoc(doc: SoldiersDoc, types?: SoldierTypesDoc): string | null {
   const ids = new Set<string>();
   for (const s of doc.soldiers) {
     if (!s.id.trim()) return "Every soldier needs an ID.";
     if (ids.has(s.id)) return `Duplicate soldier ID: ${s.id}`;
     ids.add(s.id);
+    const tc = s.type_code?.trim();
+    if (tc && types && !typeByCode(types, tc)) {
+      return `Soldier ${s.id}: unknown type_code "${tc}"`;
+    }
   }
   return null;
 }

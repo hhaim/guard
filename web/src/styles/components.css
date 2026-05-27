@@ -754,6 +754,11 @@
   letter-spacing: 0.02em;
 }
 
+.contacts-avatar-soldier-id {
+  font-size: 0.76rem;
+  letter-spacing: 0;
+}
+
 .contacts-avatar-lg {
   width: 72px;
   height: 72px;
@@ -2133,6 +2138,33 @@
   text-overflow: ellipsis;
 }
 
+.status-board-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.status-board-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.status-board-nav .btn {
+  min-height: 32px;
+  padding: 0.2rem 0.55rem;
+  font-size: var(--text-xs);
+}
+
+.status-board-nav-btn {
+  min-width: 36px;
+  width: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .status-board-foot {
   padding: 0 1rem 1rem;
 }
@@ -2329,6 +2361,74 @@
 
 .soldiers-roster-save {
   margin-top: 12px;
+}
+
+.soldiers-search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.soldiers-search-input {
+  flex: 1;
+}
+
+.soldiers-section-accordion {
+  margin-top: 1rem;
+  border-top: 1px solid rgba(60, 60, 67, 0.12);
+}
+
+.soldiers-section-accordion > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  padding: 10px 4px 8px;
+  color: #636366;
+  list-style: none;
+}
+
+.soldiers-section-accordion > summary::-webkit-details-marker {
+  display: none;
+}
+
+.soldiers-section-accordion > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.soldiers-section-accordion[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.soldiers-section-accordion[open] > summary {
+  margin-bottom: 4px;
+}
+
+.soldiers-types-section {
+  margin-top: 0.5rem;
+}
+
+.soldiers-th-type,
+.soldiers-type-cell {
+  width: 3rem;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.soldier-type-badge {
+  display: inline-block;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 4px;
+  background: rgba(60, 60, 67, 0.1);
+}
+
+.soldiers-type-empty {
+  color: rgba(60, 60, 67, 0.35);
+  font-size: 0.85rem;
 }
 
 .status-board .availability-summary {

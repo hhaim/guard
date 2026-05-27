@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -463,6 +464,100 @@ func piecesOutsideWindow(s time.Time, e *time.Time, winStart, winEnd time.Time) 
 		out = append(out, intervalPiece{start: start, end: end})
 	}
 	return out
+}
+
+// ImportSoldierStatus replaces hot and resolved status rows overlapping [from, to) for the
+// given soldiers, then inserts entries as new hot rows (YAML roster restore).
+func ImportSoldierStatus(
+	ctx context.Context,
+	pool *db.Pool,
+	from, to time.Time,
+	soldierIDs []string,
+	entries []CreateStatusEntryParams,
+) error {
+	if err := EnsurePartitions(ctx, pool, 30, 400); err != nil {
+		return err
+	}
+	from = from.UTC()
+	to = to.UTC()
+	if !to.After(from) {
+		return fmt.Errorf("invalid import range")
+	}
+	if len(soldierIDs) == 0 {
+		return fmt.Errorf("soldier_ids required")
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM soldier_status_resolved
+		WHERE soldier_id = ANY($1)
+		  AND start_at < $3 AND (end_at IS NULL OR end_at > $2)
+	`, soldierIDs, from, to); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM soldier_status_entry
+		WHERE soldier_id = ANY($1)
+		  AND compacted_at IS NULL
+		  AND start_at < $3 AND (end_at IS NULL OR end_at > $2)
+	`, soldierIDs, from, to); err != nil {
+		return err
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].SoldierID != entries[j].SoldierID {
+			return entries[i].SoldierID < entries[j].SoldierID
+		}
+		return entries[i].StartAt.Before(entries[j].StartAt)
+	})
+
+	for _, p := range entries {
+		p.Status = availability.NormalizeStatus(p.Status)
+		if !availability.IsBlockingStatus(p.Status) {
+			continue
+		}
+		if p.EndAt != nil && !p.EndAt.After(p.StartAt) {
+			return fmt.Errorf("end_at must be after start_at for soldier %s", p.SoldierID)
+		}
+		if err := closeOpenStatusBeforeTx(ctx, tx, p.SoldierID, p.StartAt); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO soldier_status_entry (soldier_id, start_at, end_at, status, note, actor)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''))
+		`, p.SoldierID, p.StartAt.UTC(), p.EndAt, p.Status, p.Note, p.Actor); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func closeOpenStatusBeforeTx(ctx context.Context, tx pgx.Tx, soldierID string, newStart time.Time) error {
+	newStart = newStart.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE soldier_status_entry
+		SET end_at = $2
+		WHERE soldier_id = $1
+		  AND compacted_at IS NULL
+		  AND end_at IS NULL
+		  AND start_at < $2
+	`, soldierID, newStart); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE soldier_status_resolved
+		SET end_at = $2, is_open = false
+		WHERE soldier_id = $1
+		  AND is_open = true
+		  AND start_at < $2
+	`, soldierID, newStart)
+	return err
 }
 
 // ClearStatusForWindow removes blocking status during [winStart, winEnd) by trimming or deleting entries.

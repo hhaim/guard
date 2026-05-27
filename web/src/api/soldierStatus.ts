@@ -63,3 +63,19 @@ export async function clearSoldierStatusWindow(body: {
 }): Promise<void> {
   await apiPost("/api/soldiers/status/clear", body);
 }
+
+export type SoldierStatusImportPayload = {
+  range: { from: string; to: string };
+  soldier_ids: string[];
+  entries: Array<{
+    soldier_id: string;
+    start_at: string;
+    end_at?: string | null;
+    status: SoldierStatusKind | string;
+    note?: string;
+  }>;
+};
+
+export async function importSoldierStatus(payload: SoldierStatusImportPayload): Promise<void> {
+  await apiPost("/api/soldiers/status/import", payload);
+}

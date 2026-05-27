@@ -15,6 +15,9 @@ func TestAuthorizeReadonly(t *testing.T) {
 	if !Authorize("readonly", "GET", "/api/cfg/soldiers") {
 		t.Fatal("soldiers")
 	}
+	if !Authorize("readonly", "GET", "/api/cfg/soldier_types") {
+		t.Fatal("soldier_types")
+	}
 	if !Authorize("readonly", "GET", "/api/cfg/slots") {
 		t.Fatal("slots")
 	}

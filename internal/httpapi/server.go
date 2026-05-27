@@ -70,6 +70,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/soldiers/status/clear", s.handleSoldiersStatusClear)
 	mux.HandleFunc("PATCH /api/soldiers/status/{id}", s.handleSoldiersStatusPatch)
 	mux.HandleFunc("DELETE /api/soldiers/status/{id}", s.handleSoldiersStatusDelete)
+	mux.HandleFunc("POST /api/soldiers/status/import", s.handleSoldiersStatusImport)
 	mux.HandleFunc("GET /api/plan/preview-availability", s.handlePlanPreviewAvailability)
 	mux.HandleFunc("GET /api/me", s.handleMe)
 	mux.HandleFunc("GET /api/admin/invites", s.handleAdminListInvites)

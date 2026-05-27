@@ -24,7 +24,7 @@ func Authorize(role, method, path string) bool {
 		return true
 	case strings.HasPrefix(path, "/api/reports/"):
 		return true
-	case path == "/api/cfg/soldiers", path == "/api/cfg/slots":
+	case path == "/api/cfg/soldiers", path == "/api/cfg/soldier_types", path == "/api/cfg/slots":
 		return true
 	case strings.HasPrefix(path, "/api/soldiers/status"):
 		return true

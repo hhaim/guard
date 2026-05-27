@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, LocateFixed, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { apiGet } from "../api";
 import { fetchPlanContext } from "../api/plan";
@@ -141,26 +141,32 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
     queryFn: () => fetchPlanContext(),
   });
   const anchor = planCtxQ.data?.plan_anchor ?? "";
+  const [anchorOffsetDays, setAnchorOffsetDays] = useState(0);
+  const viewAnchor = useMemo(
+    () => (anchor ? calendarDateForDay(anchor, anchorOffsetDays) : ""),
+    [anchor, anchorOffsetDays],
+  );
+  const isNowView = anchorOffsetDays === 0;
   const startParsed = parsePlanDayStart(planCtxQ.data?.plan_day_start ?? planDayStart);
   const planDayStartHour = startParsed.ok ? startParsed.hour : 5;
   const startLabel = startParsed.ok ? startParsed.value : planDayStart;
 
   const sorted = useMemo(() => sortSoldiers(soldiers), [soldiers]);
   const dayColumns = useMemo(() => {
-    if (!anchor) return [];
+    if (!viewAnchor) return [];
     return Array.from({ length: 7 }, (_, i) => ({
       offset: i,
-      date: calendarDateForDay(anchor, i),
+      date: calendarDateForDay(viewAnchor, i),
     }));
-  }, [anchor]);
+  }, [viewAnchor]);
 
   const previewsQ = useQuery({
-    queryKey: ["plan", "preview-availability", anchor, planDayStartHour],
-    enabled: Boolean(anchor),
+    queryKey: ["plan", "preview-availability", viewAnchor, planDayStartHour],
+    enabled: Boolean(viewAnchor),
     queryFn: async () => {
       const out: Record<string, PlanDaySoldiers> = {};
       for (let i = 0; i < 7; i++) {
-        const date = calendarDateForDay(anchor, i);
+        const date = calendarDateForDay(viewAnchor, i);
         out[date] = await apiGet<PlanDaySoldiers>(
           `/api/plan/preview-availability?date=${encodeURIComponent(date)}`,
         );
@@ -201,9 +207,9 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
       <section className="glass-card contacts-list-card status-board" aria-label="Status board">
         <header className="status-board-header">
           <div>
-            <h3 className="contacts-title">Status board</h3>
             <p className="contacts-count">
-              Next 7 plan days from {anchor || "…"} · {startLabel} → {startLabel} next day
+              Next 7 plan days from {viewAnchor || "…"} · {startLabel} → {startLabel} next day
+              {!isNowView ? " · custom week view" : ""}
               {!previewsQ.isLoading && sorted.length > 0 ? (
                 <>
                   {" "}
@@ -213,18 +219,52 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
               ) : null}
             </p>
           </div>
-          <button
-            type="button"
-            className="contacts-add-btn status-board-fab"
-            aria-label="Add absence"
-            title="Add absence"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              setFabOpen(true);
-            }}
-          >
-            <Plus size={22} strokeWidth={2.5} />
-          </button>
+          <div className="status-board-actions">
+            <div className="status-board-nav">
+              <button
+                type="button"
+                className="btn btn-tinted status-board-nav-btn"
+                onClick={() => setAnchorOffsetDays((d) => d - 7)}
+                disabled={!anchor}
+                aria-label="Previous week"
+                title="Previous week"
+              >
+                <ChevronLeft size={18} strokeWidth={2.5} />
+              </button>
+              <button
+                type="button"
+                className="btn btn-tinted status-board-nav-btn"
+                onClick={() => setAnchorOffsetDays(0)}
+                disabled={!anchor || isNowView}
+                aria-label="Now"
+                title="Now"
+              >
+                <LocateFixed size={17} strokeWidth={2.5} />
+              </button>
+              <button
+                type="button"
+                className="btn btn-tinted status-board-nav-btn"
+                onClick={() => setAnchorOffsetDays((d) => d + 7)}
+                disabled={!anchor}
+                aria-label="Next week"
+                title="Next week"
+              >
+                <ChevronRight size={18} strokeWidth={2.5} />
+              </button>
+            </div>
+            <button
+              type="button"
+              className="contacts-add-btn status-board-fab"
+              aria-label="Add absence"
+              title="Add absence"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                setFabOpen(true);
+              }}
+            >
+              <Plus size={22} strokeWidth={2.5} />
+            </button>
+          </div>
         </header>
 
         <AvailabilityBadges
@@ -234,6 +274,9 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
         />
 
         {previewsQ.isLoading && <p className="contacts-empty">Loading availability…</p>}
+        {!previewsQ.isLoading && sorted.length === 0 && (
+          <p className="contacts-empty">No soldiers match the current search.</p>
+        )}
         {!previewsQ.isLoading && sorted.length > 0 && (
           <>
             {problematic.length === 0 ? (
@@ -275,7 +318,7 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
       <AddAbsenceSheet
         open={fabOpen}
         soldiers={sorted}
-        anchorDate={anchor}
+        anchorDate={viewAnchor}
         planDayStartHour={planDayStartHour}
         onClose={() => setFabOpen(false)}
         onSaved={invalidate}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPut } from "../api";
 import { useDevPanel } from "../context/AppStateContext";
 import { formatApiError } from "../lib/apiError";
+import { useSoldierTypesDocument } from "../hooks/useSoldierTypesDocument";
 import {
   deriveJsonFromDoc,
   docFromServer,
@@ -14,19 +15,28 @@ import {
   type Soldier,
   type SoldiersDoc,
 } from "../lib/soldiers";
+import { importSoldierStatus } from "../api/soldierStatus";
+import { typeLabel } from "../lib/soldierTypes";
 import { downloadText, pickTextFile } from "../lib/fileIo";
 import { ContactsRowEditButton } from "./ContactsRowEdit";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { SoldierEditorSheet } from "./SoldierEditorSheet";
+import { SoldierTypesSection } from "./SoldierTypesSection";
 import { SoldiersStatusBoard } from "./SoldiersStatusBoard";
+import { SoldiersYamlToolbar } from "./SoldiersYamlToolbar";
 
 type CfgResp = { key: string; value: unknown; version: number; updated_at: string };
 
 const ROSTER_AUTOSAVE_MS = 600;
 
+type DevJsonSource = "soldiers" | "types";
+
 export function SoldiersView() {
   const qc = useQueryClient();
   const { openPanel } = useDevPanel();
+  const typesCfg = useSoldierTypesDocument();
+  const [devJsonSource, setDevJsonSource] = useState<DevJsonSource>("soldiers");
+  const [searchText, setSearchText] = useState("");
 
   const soldiersQ = useQuery({
     queryKey: ["cfg", "soldiers"],
@@ -72,29 +82,43 @@ export function SoldiersView() {
   }, [doc, jsonOverride]);
 
   const jsonError = useMemo(() => {
-    if (jsonOverride == null) return validateDoc(doc);
+    if (jsonOverride == null) return validateDoc(doc, typesCfg.doc);
     try {
       const parsed = parseDocFromJson(JSON.parse(jsonOverride));
-      return validateDoc(parsed);
+      return validateDoc(parsed, typesCfg.doc);
     } catch (e) {
       return e instanceof Error ? e.message : "Invalid JSON";
     }
-  }, [jsonOverride, doc]);
+  }, [jsonOverride, doc, typesCfg.doc]);
 
   const editorText = jsonOverride ?? JSON.stringify(liveJson, null, 2);
 
-  const sortedRows = useMemo(() => {
+  const normalizedSearch = searchText.trim().toLowerCase();
+  const filteredSoldierRows = useMemo(() => {
     const rows = doc.soldiers.map((s, index) => ({ s, index }));
+    if (!normalizedSearch) return rows;
+    return rows.filter(({ s }) => {
+      const id = s.id.trim();
+      const fullName = s.full_name.trim();
+      const code = s.type_code?.trim() ?? "";
+      const label = code ? typeLabel(typesCfg.doc, code) : "";
+      const haystack = `${id} ${fullName} ${code} ${label}`.toLowerCase();
+      return haystack.includes(normalizedSearch);
+    });
+  }, [doc.soldiers, normalizedSearch, typesCfg.doc]);
+
+  const sortedRows = useMemo(() => {
+    const rows = [...filteredSoldierRows];
     return rows.sort((a, b) => {
       const na = a.s.full_name.trim() || a.s.id;
       const nb = b.s.full_name.trim() || b.s.id;
       return na.localeCompare(nb, undefined, { sensitivity: "base" });
     });
-  }, [doc.soldiers]);
+  }, [filteredSoldierRows]);
 
   const saveRosterM = useMutation({
     mutationFn: async (payload: SoldiersDoc) => {
-      const err = validateDoc(payload);
+      const err = validateDoc(payload, typesCfg.doc);
       if (err) throw new Error(err);
       const res = (await apiPut("/api/cfg/soldiers", {
         value: deriveJsonFromDoc(payload),
@@ -239,7 +263,10 @@ export function SoldiersView() {
             type="button"
             className="btn btn-tinted contacts-json-btn"
             aria-label="Show JSON debug panel"
-            onClick={() => openPanel("json")}
+            onClick={() => {
+              setDevJsonSource("soldiers");
+              openPanel("json");
+            }}
           >
             <Braces size={18} strokeWidth={2} />
             <span className="contacts-json-btn-label">JSON</span>
@@ -283,74 +310,157 @@ export function SoldiersView() {
         </div>
       </header>
 
-      <SoldiersStatusBoard soldiers={doc.soldiers} />
+      <div className="soldiers-search-row">
+        <input
+          className="settings-input settings-input-wide soldiers-search-input"
+          type="text"
+          value={searchText}
+          placeholder="Search by soldier name, ID, type code, or type label"
+          aria-label="Search soldiers and types"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          onChange={(e) => setSearchText(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn btn-tinted"
+          onClick={() => setSearchText("")}
+          disabled={!searchText.trim()}
+        >
+          All
+        </button>
+      </div>
 
-      <section className="soldiers-roster-section" aria-labelledby="soldiers-roster-heading">
-        <header className="soldiers-roster-header">
-          <div>
-            <h3 id="soldiers-roster-heading" className="contacts-title">
-              Roster
-            </h3>
-            <p className="contacts-count">Identity only — edits save automatically.</p>
-          </div>
-          <button
-            type="button"
-            className="contacts-add-btn"
-            aria-label="Add soldier"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              openNew();
-            }}
-          >
-            <Plus size={22} strokeWidth={2.5} />
-          </button>
-        </header>
+      <SoldiersYamlToolbar
+        disabled={soldiersQ.isLoading || typesCfg.typesQ.isLoading}
+        typesDoc={typesCfg.doc}
+        soldiersDoc={doc}
+        onImport={async ({ typesDoc, soldiersDoc, statusDoc }) => {
+          if (typesDoc) typesCfg.replaceDoc(typesDoc);
+          if (soldiersDoc) {
+            setDoc(soldiersDoc);
+            setJsonOverride(null);
+            setDirty(true);
+            setSaveState("idle");
+          }
+          if (statusDoc) {
+            const roster = soldiersDoc ?? doc;
+            const soldier_ids = roster.soldiers.map((s) => s.id.trim()).filter(Boolean);
+            await importSoldierStatus({
+              range: statusDoc.range,
+              soldier_ids,
+              entries: statusDoc.entries,
+            });
+            void qc.invalidateQueries({ queryKey: ["soldiers", "status"] });
+            void qc.invalidateQueries({ queryKey: ["plan", "preview-availability"] });
+          }
+        }}
+      />
 
-        <div className="glass-card contacts-list-card">
-          {soldiersQ.isLoading && <p className="contacts-empty">Loading…</p>}
-          {!soldiersQ.isLoading && sortedRows.length === 0 && (
-            <p className="contacts-empty">No soldiers yet. Tap + to add one.</p>
-          )}
-          <table className="contacts-table">
-            <thead>
-              <tr>
-                <th className="contacts-th-avatar" scope="col" />
-                <th scope="col">Name</th>
-                <th scope="col">ID</th>
-                <th className="contacts-th-chevron" scope="col" />
-              </tr>
-            </thead>
-            <tbody>
-              {sortedRows.map(({ s, index }) => (
-                <tr
-                  key={`${s.id}-${index}`}
-                  className="contacts-row"
-                  onDoubleClick={() => openEditor(index)}
-                >
-                  <td>
-                    <div className="contacts-avatar" aria-hidden>
-                      {soldierInitials(s)}
-                    </div>
-                  </td>
-                  <td className="contacts-name">{s.full_name.trim() || "(No name)"}</td>
-                  <td className="contacts-id">
-                    <code>{s.id}</code>
-                  </td>
-                  <ContactsRowEditButton
-                    label={`Edit ${s.full_name.trim() || s.id}`}
-                    onEdit={() => openEditor(index)}
-                  />
+      <details className="soldiers-section-accordion" open>
+        <summary>Soldier types</summary>
+        <SoldierTypesSection
+          types={typesCfg}
+          soldiers={doc.soldiers}
+          searchTerm={normalizedSearch}
+          onOpenTypesJson={() => {
+            setDevJsonSource("types");
+            openPanel("json");
+          }}
+        />
+      </details>
+
+      <details className="soldiers-section-accordion" open>
+        <summary>Status board</summary>
+        <SoldiersStatusBoard soldiers={sortedRows.map(({ s }) => s)} />
+      </details>
+
+      <details className="soldiers-section-accordion" open>
+        <summary>Roster</summary>
+        <section className="soldiers-roster-section" aria-label="Roster">
+          <header className="soldiers-roster-header">
+            <div>
+              <p className="contacts-count">Identity only — edits save automatically.</p>
+            </div>
+            <button
+              type="button"
+              className="contacts-add-btn"
+              aria-label="Add soldier"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                openNew();
+              }}
+            >
+              <Plus size={22} strokeWidth={2.5} />
+            </button>
+          </header>
+
+          <div className="glass-card contacts-list-card">
+            {soldiersQ.isLoading && <p className="contacts-empty">Loading…</p>}
+            {!soldiersQ.isLoading && sortedRows.length === 0 && (
+              <p className="contacts-empty">
+                {normalizedSearch
+                  ? "No soldiers match the current search."
+                  : "No soldiers yet. Tap + to add one."}
+              </p>
+            )}
+            <table className="contacts-table">
+              <thead>
+                <tr>
+                  <th className="contacts-th-avatar" scope="col" />
+                  <th scope="col" className="soldiers-th-type">
+                    Type
+                  </th>
+                  <th scope="col">Name</th>
+                  <th scope="col">ID</th>
+                  <th className="contacts-th-chevron" scope="col" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {sortedRows.map(({ s, index }) => (
+                  <tr
+                    key={`${s.id}-${index}`}
+                    className="contacts-row"
+                    onDoubleClick={() => openEditor(index)}
+                  >
+                    <td>
+                      <div className="contacts-avatar contacts-avatar-soldier-id" aria-hidden>
+                        {soldierInitials(s)}
+                      </div>
+                    </td>
+                    <td className="soldiers-type-cell">
+                      {s.type_code?.trim() ? (
+                        <code className="soldier-type-badge" title={typeLabel(typesCfg.doc, s.type_code)}>
+                          {s.type_code.trim()}
+                        </code>
+                      ) : (
+                        <span className="soldiers-type-empty" aria-hidden>
+                          —
+                        </span>
+                      )}
+                    </td>
+                    <td className="contacts-name">{s.full_name.trim() || "(No name)"}</td>
+                    <td className="contacts-id">
+                      <code>{s.id}</code>
+                    </td>
+                    <ContactsRowEditButton
+                      label={`Edit ${s.full_name.trim() || s.id}`}
+                      onEdit={() => openEditor(index)}
+                    />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-        <p className="contacts-hint">Double-click a row to edit, or tap the › button</p>
+          <p className="contacts-hint">Double-click a row to edit, or tap the › button</p>
 
-        {saveError && <p className="msg-err">{saveError}</p>}
-        {jsonError && dirty && <p className="msg-err">{jsonError}</p>}
-      </section>
+          {saveError && <p className="msg-err">{saveError}</p>}
+          {jsonError && dirty && <p className="msg-err">{jsonError}</p>}
+        </section>
+      </details>
 
       {soldiersQ.isError && <p className="msg-err">{(soldiersQ.error as Error).message}</p>}
       {soldiersQ.data && (
@@ -363,6 +473,7 @@ export function SoldiersView() {
         open={editorOpen && draft != null}
         mode={editorMode}
         soldier={draft ?? emptySoldier(doc.soldiers)}
+        types={typesCfg.doc.types}
         onChange={setDraft}
         onDone={commitEditor}
         onCancel={() => {
@@ -373,12 +484,25 @@ export function SoldiersView() {
         onDelete={editorMode === "edit" ? deleteFromEditor : undefined}
       />
 
-      <DevPanelTrigger onOpen={() => openPanel("json")} />
+      <DevPanelTrigger
+        onOpen={() => {
+          setDevJsonSource("soldiers");
+          openPanel("json");
+        }}
+      />
       <DeveloperPanel
-        jsonText={editorText}
-        onJsonTextChange={syncJsonToForm}
-        jsonError={typeof jsonError === "string" ? jsonError : null}
-        onResetDefaults={resetToServer}
+        jsonText={devJsonSource === "types" ? typesCfg.editorText : editorText}
+        onJsonTextChange={devJsonSource === "types" ? typesCfg.syncJson : syncJsonToForm}
+        jsonError={
+          devJsonSource === "types"
+            ? typeof typesCfg.jsonError === "string"
+              ? typesCfg.jsonError
+              : null
+            : typeof jsonError === "string"
+              ? jsonError
+              : null
+        }
+        onResetDefaults={devJsonSource === "types" ? typesCfg.resetToServer : resetToServer}
       />
     </>
   );

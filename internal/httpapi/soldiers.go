@@ -335,6 +335,95 @@ func (s *Server) handleSoldiersStatusPatch(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type statusImportEntryBody struct {
+	SoldierID string  `json:"soldier_id"`
+	StartAt   string  `json:"start_at"`
+	EndAt     *string `json:"end_at"`
+	Status    string  `json:"status"`
+	Note      string  `json:"note"`
+}
+
+type statusImportBody struct {
+	Range struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	} `json:"range"`
+	SoldierIDs []string                `json:"soldier_ids"`
+	Entries    []statusImportEntryBody `json:"entries"`
+}
+
+func (s *Server) handleSoldiersStatusImport(w http.ResponseWriter, r *http.Request) {
+	if !s.auth(w, r) {
+		return
+	}
+	var body statusImportBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	from, err := time.Parse(time.RFC3339, strings.TrimSpace(body.Range.From))
+	if err != nil {
+		http.Error(w, `{"error":"invalid range.from"}`, http.StatusBadRequest)
+		return
+	}
+	to, err := time.Parse(time.RFC3339, strings.TrimSpace(body.Range.To))
+	if err != nil {
+		http.Error(w, `{"error":"invalid range.to"}`, http.StatusBadRequest)
+		return
+	}
+	soldierIDs := body.SoldierIDs
+	if len(soldierIDs) == 0 {
+		seen := make(map[string]struct{})
+		for _, e := range body.Entries {
+			id := strings.TrimSpace(e.SoldierID)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				soldierIDs = append(soldierIDs, id)
+			}
+		}
+	}
+	var entries []repo.CreateStatusEntryParams
+	for _, e := range body.Entries {
+		start, err := time.Parse(time.RFC3339, strings.TrimSpace(e.StartAt))
+		if err != nil {
+			http.Error(w, `{"error":"invalid entry start_at"}`, http.StatusBadRequest)
+			return
+		}
+		var end *time.Time
+		if e.EndAt != nil && strings.TrimSpace(*e.EndAt) != "" {
+			t, err := time.Parse(time.RFC3339, strings.TrimSpace(*e.EndAt))
+			if err != nil {
+				http.Error(w, `{"error":"invalid entry end_at"}`, http.StatusBadRequest)
+				return
+			}
+			end = &t
+		}
+		st := availability.NormalizeStatus(e.Status)
+		if !availability.IsBlockingStatus(st) {
+			continue
+		}
+		entries = append(entries, repo.CreateStatusEntryParams{
+			SoldierID: strings.TrimSpace(e.SoldierID),
+			StartAt:   start,
+			EndAt:     end,
+			Status:    st,
+			Note:      strings.TrimSpace(e.Note),
+		})
+	}
+	actor := r.Header.Get("X-Actor")
+	for i := range entries {
+		entries[i].Actor = actor
+	}
+	if err := repo.ImportSoldierStatus(r.Context(), s.Pool, from, to, soldierIDs, entries); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleSoldiersStatusDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
 		return
