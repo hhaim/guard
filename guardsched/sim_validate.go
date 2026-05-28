@@ -62,16 +62,25 @@ func dutyBlocksHalfOpenWallHours(sh float64, h0, h1Excl int) (b0, b1 int) {
 	return b0, b1
 }
 
-func linearBusySpanDutyHoursPlusRest(day, B int, sh float64, hDuty0, hDuty1 int, halfOpen bool, restAfterH float64) (L0, span int) {
-	var b0, b1 int
-	if halfOpen {
-		b0, b1 = dutyBlocksHalfOpenWallHours(sh, hDuty0, hDuty1)
-	} else {
-		b0, b1 = dutyBlocksInclusiveWallHours(sh, hDuty0, hDuty1)
+func linearBusySpanDutyHoursPlusRest(day, B int, sh float64, hDuty0, hDuty1 int, halfOpen bool, restAfterH float64, planStartHour int) (L0, span int) {
+	_ = halfOpen // unified end+rest mapping.
+	endExcl := int(math.Floor(float64(hDuty1) + restAfterH + 1e-9))
+	if endExcl <= hDuty0 {
+		endExcl = hDuty0 + 1
 	}
-	dutyW := b1 - b0 + 1
-	restBlk := restBlocksAligned(restAfterH, sh)
-	span = dutyW + restBlk
+	shi := int(sh)
+	startRel := (hDuty0 - planStartHour) % 24
+	if startRel < 0 {
+		startRel += 24
+	}
+	durH := endExcl - hDuty0
+	if durH <= 0 {
+		durH = 1
+	}
+	endRel := startRel + durH
+	b0 := startRel / shi
+	b1 := (endRel - 1) / shi
+	span = b1 - b0 + 1
 	L0 = day*B + b0
 	return L0, span
 }
@@ -195,7 +204,7 @@ func validateScheduleRest(maxFree [][]float64, minFreeHours float64, assignments
 					if k == "" {
 						k = "rotating"
 					}
-					if k == "full_day" || k == "windowed" {
+					if k == "full_day" || k == "full_day_team" || k == "windowed" {
 						skip = true
 						break
 					}

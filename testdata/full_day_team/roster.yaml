@@ -1,0 +1,20 @@
+schema_version: 2
+soldier_types:
+  types:
+    - { code: A, label: Type A }
+    - { code: B, label: Type B }
+    - { code: C, label: Type C }
+soldiers:
+  soldiers:
+    - { id: s0, name: S0, type_code: A }
+    - { id: s1, name: S1, type_code: B }
+    - { id: s2, name: S2, type_code: B }
+    - { id: s3, name: S3, type_code: C }
+    - { id: s4, name: S4, type_code: A }
+    - { id: s5, name: S5, type_code: B }
+    - { id: s6, name: S6, type_code: C }
+    - { id: s7, name: S7, type_code: A }
+    - { id: s8, name: S8, type_code: B }
+    - { id: s9, name: S9, type_code: C }
+    - { id: s10, name: S10, type_code: A }
+    - { id: s11, name: S11, type_code: B }

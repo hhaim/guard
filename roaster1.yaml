@@ -1,0 +1,27 @@
+schema_version: 2
+exported_at: "2026-05-28T00:00:00Z"
+soldier_types:
+  types:
+    - { code: A, label: Type A }
+    - { code: B, label: Type B }
+    - { code: C, label: Type C }
+    - { code: D, label: Type D }
+soldiers:
+  - { id: s0, full_name: Soldier 0, type_code: A }
+  - { id: s1, full_name: Soldier 1, type_code: B }
+  - { id: s2, full_name: Soldier 2, type_code: B }
+  - { id: s3, full_name: Soldier 3, type_code: C }
+  - { id: s4, full_name: Soldier 4, type_code: D }
+  - { id: s5, full_name: Soldier 5, type_code: D }
+  - { id: s6, full_name: Soldier 6, type_code: D }
+  - { id: s7, full_name: Soldier 7, type_code: D }
+  - { id: s8, full_name: Soldier 8, type_code: D }
+  - { id: s9, full_name: Soldier 9, type_code: D }
+  - { id: s10, full_name: Soldier 10, type_code: D }
+  - { id: s11, full_name: Soldier 11, type_code: D }
+  - { id: s12, full_name: Soldier 12, type_code: D }
+  - { id: s13, full_name: Soldier 13, type_code: D }
+  - { id: s14, full_name: Soldier 14, type_code: D }
+  - { id: s15, full_name: Soldier 15, type_code: D }
+  - { id: s16, full_name: Soldier 16, type_code: D }
+  - { id: s17, full_name: Soldier 17, type_code: D }

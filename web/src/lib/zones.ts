@@ -1,12 +1,25 @@
 import YAML from "yaml";
 
-export type SlotTypePattern = "rotating" | "full_day" | "windowed_slots";
+export type SlotTypePattern = "rotating" | "full_day" | "full_day_team" | "windowed_slots";
+
+export const WEEKDAY_NAMES = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+] as const;
+
+export type WeekdayName = (typeof WEEKDAY_NAMES)[number];
 
 export type FullDayConfig = {
   start: string;
   end: string;
   rest_after_hours: number;
   weight_multiplier: number;
+  headcount: number;
 };
 
 export type WindowedWindow = {
@@ -18,6 +31,7 @@ export type WindowedWindow = {
 
 export type WindowedSlotsConfig = {
   slots: WindowedWindow[];
+  headcount: number;
 };
 
 export const DEFAULT_FULL_DAY_CONFIG: FullDayConfig = {
@@ -25,6 +39,7 @@ export const DEFAULT_FULL_DAY_CONFIG: FullDayConfig = {
   end: "22:00",
   rest_after_hours: 6,
   weight_multiplier: 1,
+  headcount: 1,
 };
 
 export const DEFAULT_WINDOWED_WINDOW: WindowedWindow = {
@@ -36,6 +51,18 @@ export const DEFAULT_WINDOWED_WINDOW: WindowedWindow = {
 
 export const DEFAULT_WINDOWED_SLOTS_CONFIG: WindowedSlotsConfig = {
   slots: [DEFAULT_WINDOWED_WINDOW],
+  headcount: 1,
+};
+
+export type FullDayTeamConfig = FullDayConfig & {
+  headcount: number;
+  type_quotas: Record<string, number>;
+};
+
+export const DEFAULT_FULL_DAY_TEAM_CONFIG: FullDayTeamConfig = {
+  ...DEFAULT_FULL_DAY_CONFIG,
+  headcount: 1,
+  type_quotas: {},
 };
 
 export type SlotType = {
@@ -44,6 +71,7 @@ export type SlotType = {
   pattern: SlotTypePattern;
   full_day_shift?: number;
   rest_after_hours?: number;
+  disabled_weekdays?: WeekdayName[];
   config?: Record<string, unknown>;
 };
 
@@ -71,6 +99,7 @@ export function parseFullDayConfig(config: Record<string, unknown> | undefined):
       c.weight_multiplier ?? c.weight_mult ?? c.w_mult,
       DEFAULT_FULL_DAY_CONFIG.weight_multiplier
     ),
+    headcount: Math.max(1, Math.round(asConfigNum(c.headcount, DEFAULT_FULL_DAY_CONFIG.headcount))),
   };
 }
 
@@ -80,13 +109,47 @@ export function fullDayConfigToRecord(cfg: FullDayConfig): Record<string, unknow
     end: cfg.end,
     rest_after_hours: cfg.rest_after_hours,
     weight_multiplier: cfg.weight_multiplier,
+    headcount: cfg.headcount,
   };
+}
+
+export function parseFullDayTeamConfig(config: Record<string, unknown> | undefined): FullDayTeamConfig {
+  const base = parseFullDayConfig(config);
+  const c = config ?? {};
+  const rawQuotas = c.type_quotas;
+  const type_quotas: Record<string, number> = {};
+  if (rawQuotas != null && typeof rawQuotas === "object" && !Array.isArray(rawQuotas)) {
+    for (const [k, v] of Object.entries(rawQuotas as Record<string, unknown>)) {
+      const code = String(k).trim();
+      if (!code) continue;
+      const q = asConfigNum(v, 0);
+      if (q >= 1) type_quotas[code] = Math.round(q);
+    }
+  }
+  return {
+    ...base,
+    headcount: Math.max(1, Math.round(asConfigNum(c.headcount, DEFAULT_FULL_DAY_TEAM_CONFIG.headcount))),
+    type_quotas,
+  };
+}
+
+export function fullDayTeamConfigToRecord(cfg: FullDayTeamConfig): Record<string, unknown> {
+  const row: Record<string, unknown> = fullDayConfigToRecord(cfg);
+  row.headcount = cfg.headcount;
+  if (Object.keys(cfg.type_quotas).length > 0) {
+    row.type_quotas = cfg.type_quotas;
+  }
+  return row;
 }
 
 export function parseWindowedSlotsConfig(config: Record<string, unknown> | undefined): WindowedSlotsConfig {
   const raw = config?.slots;
+  const c = config ?? {};
   if (!Array.isArray(raw) || raw.length === 0) {
-    return structuredClone(DEFAULT_WINDOWED_SLOTS_CONFIG);
+    return {
+      ...structuredClone(DEFAULT_WINDOWED_SLOTS_CONFIG),
+      headcount: Math.max(1, Math.round(asConfigNum(c.headcount, DEFAULT_WINDOWED_SLOTS_CONFIG.headcount))),
+    };
   }
   const slots = raw
     .filter((x): x is Record<string, unknown> => x != null && typeof x === "object" && !Array.isArray(x))
@@ -96,11 +159,15 @@ export function parseWindowedSlotsConfig(config: Record<string, unknown> | undef
       end: asConfigTime(w.end, DEFAULT_WINDOWED_WINDOW.end),
       weight_multiplier: asConfigNum(w.weight_multiplier ?? w.weight_mult, DEFAULT_WINDOWED_WINDOW.weight_multiplier),
     }));
-  return { slots: slots.length > 0 ? slots : structuredClone(DEFAULT_WINDOWED_SLOTS_CONFIG.slots) };
+  return {
+    slots: slots.length > 0 ? slots : structuredClone(DEFAULT_WINDOWED_SLOTS_CONFIG.slots),
+    headcount: Math.max(1, Math.round(asConfigNum(c.headcount, DEFAULT_WINDOWED_SLOTS_CONFIG.headcount))),
+  };
 }
 
 export function windowedSlotsConfigToRecord(cfg: WindowedSlotsConfig): Record<string, unknown> {
   return {
+    headcount: cfg.headcount,
     slots: cfg.slots.map((w) => ({
       name: w.name,
       start: w.start,
@@ -126,6 +193,7 @@ export type ZoneSlot = {
   location_id: string;
   name: string;
   full_name: string;
+  soldiers_required?: number;
 };
 
 export type TimeBand = {
@@ -204,17 +272,43 @@ export const PATTERN_WALL_CLOCK_HINT =
 export function validateSlotTypePattern(st: SlotType): string | null {
   const label = st.name.trim() || st.id || "slot type";
 
-  if (st.pattern === "full_day") {
-    const cfg = parseFullDayConfig(st.config);
+  if (st.pattern === "full_day" || st.pattern === "full_day_team") {
+    const cfg =
+      st.pattern === "full_day_team" ? parseFullDayTeamConfig(st.config) : parseFullDayConfig(st.config);
     const start = parseWallClockHour(cfg.start);
-    if (!start.ok) return `full_day "${label}": start — ${start.error}`;
+    if (!start.ok) return `${st.pattern} "${label}": start — ${start.error}`;
     const end = parseWallClockHour(cfg.end);
-    if (!end.ok) return `full_day "${label}": end — ${end.error}`;
+    if (!end.ok) return `${st.pattern} "${label}": end — ${end.error}`;
+    if (st.pattern === "full_day" && cfg.headcount < 1) {
+      return `full_day "${label}": headcount must be >= 1`;
+    }
+    if (st.pattern === "full_day_team") {
+      const team = cfg as FullDayTeamConfig;
+      let sumQ = 0;
+      for (const q of Object.values(team.type_quotas)) sumQ += q;
+      if (sumQ > team.headcount) {
+        return `full_day_team "${label}": sum(type_quotas)=${sumQ} exceeds headcount=${team.headcount}`;
+      }
+    }
     return null;
+  }
+
+  if (st.disabled_weekdays?.length) {
+    const seen = new Set<string>();
+    for (const d of st.disabled_weekdays) {
+      if (!WEEKDAY_NAMES.includes(d)) {
+        return `slot type "${label}": invalid disabled weekday ${JSON.stringify(d)}`;
+      }
+      if (seen.has(d)) return `slot type "${label}": duplicate disabled weekday ${d}`;
+      seen.add(d);
+    }
   }
 
   if (st.pattern === "windowed_slots") {
     const cfg = parseWindowedSlotsConfig(st.config);
+    if (cfg.headcount < 1) {
+      return `windowed_slots "${label}": headcount must be >= 1`;
+    }
     for (let i = 0; i < cfg.slots.length; i++) {
       const w = cfg.slots[i];
       const wn = w.name.trim() || `window ${i + 1}`;
@@ -249,6 +343,7 @@ export const DEFAULT_ZONES: ZonesDoc = {
 export const SLOT_PATTERNS: { value: SlotTypePattern; label: string }[] = [
   { value: "rotating", label: "Rotating" },
   { value: "full_day", label: "Full day" },
+  { value: "full_day_team", label: "Full day (team)" },
   { value: "windowed_slots", label: "Windowed slots" },
 ];
 
@@ -272,6 +367,21 @@ function zoneLocRaw(raw: Record<string, unknown>): unknown[] {
   return [];
 }
 
+function parseDisabledWeekdays(raw: unknown): WeekdayName[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: WeekdayName[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const d = asStr(item).toLowerCase() as WeekdayName;
+    if (!WEEKDAY_NAMES.includes(d)) continue;
+    if (!seen.has(d)) {
+      seen.add(d);
+      out.push(d);
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 function parseSlotType(raw: Record<string, unknown>): SlotType {
   const pattern = asStr(raw.pattern, "rotating") as SlotTypePattern;
   const st: SlotType = {
@@ -281,6 +391,8 @@ function parseSlotType(raw: Record<string, unknown>): SlotType {
   };
   if (raw.full_day_shift != null) st.full_day_shift = asNum(raw.full_day_shift, 1);
   if (raw.rest_after_hours != null) st.rest_after_hours = asNum(raw.rest_after_hours, 6);
+  const dw = parseDisabledWeekdays(raw.disabled_weekdays);
+  if (dw) st.disabled_weekdays = dw;
   if (raw.config != null && typeof raw.config === "object" && !Array.isArray(raw.config)) {
     st.config = raw.config as Record<string, unknown>;
   }
@@ -328,10 +440,13 @@ export function parseZonesYaml(text: string): ZonesDoc {
       .map((m) => {
         const name = asStr(m.name);
         const full_name = asStr(m.full_name) || name;
+        const soldiers_required =
+          m.soldiers_required != null ? Math.max(1, Math.round(asNum(m.soldiers_required, 1))) : undefined;
         return {
           location_id: asStr(m.location_id),
           name,
           full_name,
+          ...(soldiers_required != null && soldiers_required !== 1 ? { soldiers_required } : {}),
         };
       })
       .filter((s) => s.location_id !== ""),
@@ -356,7 +471,14 @@ function slotTypeToYaml(st: SlotType): Record<string, unknown> {
   };
   if (st.full_day_shift != null) row.full_day_shift = st.full_day_shift;
   if (st.rest_after_hours != null) row.rest_after_hours = st.rest_after_hours;
-  if (st.config && Object.keys(st.config).length > 0) row.config = st.config;
+  if (st.disabled_weekdays?.length) row.disabled_weekdays = [...st.disabled_weekdays];
+  if (st.pattern === "full_day") {
+    row.config = fullDayConfigToRecord(parseFullDayConfig(st.config));
+  } else if (st.pattern === "full_day_team") {
+    row.config = fullDayTeamConfigToRecord(parseFullDayTeamConfig(st.config));
+  } else if (st.config && Object.keys(st.config).length > 0) {
+    row.config = st.config;
+  }
   return row;
 }
 
@@ -367,6 +489,9 @@ function slotToYaml(s: ZoneSlot): Record<string, unknown> {
   };
   if (s.full_name && s.full_name !== s.name) {
     row.full_name = s.full_name;
+  }
+  if (s.soldiers_required != null && s.soldiers_required > 1) {
+    row.soldiers_required = s.soldiers_required;
   }
   return row;
 }
@@ -466,6 +591,9 @@ export function validateZonesDoc(doc: ZonesDoc): string | null {
     if (!sl.location_id) return "Slot missing location_id";
     if (!locIds.has(sl.location_id)) {
       return `Slot ${sl.name} references unknown location ${sl.location_id}`;
+    }
+    if (sl.soldiers_required != null && sl.soldiers_required < 1) {
+      return `Slot ${sl.name}: soldiers_required must be >= 1`;
     }
   }
   const tzIds = new Set<string>();

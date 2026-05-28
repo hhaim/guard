@@ -1,7 +1,12 @@
 export function PlanWorkflowGuide() {
   return (
     <>
-      <p>Up to four draft proposals exist for the planning anchor day. One can be applied to the verified schedule.</p>
+      <p>
+        Up to four draft proposals exist for the planning anchor day. One can be applied to the verified schedule. The
+        run uses <code>anchor_date</code> (YYYY-MM-DD): plan day 0 is that calendar date, and slot types with{" "}
+        <code>disabled_weekdays</code> are skipped on matching weekdays (e.g. no Friday kitchen team when Friday is
+        checked “Off on” in Slots).
+      </p>
 
       <ol>
         <li>

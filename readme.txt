@@ -1,6 +1,9 @@
 3) notions of days per slot , per slot mask of types (advanced)
 
 
+python3 guard_scheduler_sim.py -x 12 -y 4 -d 1 --seed 42 --min-consecutive-free-hours 6 --zones zones_s1.yaml --min-free-shifts-after-duty 2
+
+
 ================
 
 --- Phase 1 local (Clerk + Postgres RBAC) ---
@@ -8,6 +11,9 @@
 2. Fill CLERK_SECRET_KEY, BOOTSTRAP_ADMIN_EMAIL (your Google email), VITE_CLERK_PUBLISHABLE_KEY
 3. Clerk Dashboard: allowed origins http://localhost:8080 and http://localhost:5173; Google sign-in; invitations-only sign-up
 4. docker compose up --build  -> http://localhost:8080
+   Schema is one squashed migration (000001_schema.sql). Migrations never auto-drop tables on restart.
+   One-time reset after squash: DATABASE_URL=postgres://guard:guard@localhost:5432/guard?sslmode=disable ./b cli db reset --yes
+   then docker compose up --build (or fly deploy) so migrations run on empty schema.
 5. Sign in as bootstrap email -> admin; use Users tab to invite readonly/admin
 Native dev: same .env + go run ./cmd/api ; cd web && cp .env.example to .env.local with VITE_CLERK_PUBLISHABLE_KEY && npm run dev
 
@@ -17,8 +23,9 @@ Local DATABASE_URL stays docker @db:5432 (see .env.example). Neon is Fly-only vi
 2. npx neonctl@latest connection-string --pooled  -> fly secrets set DATABASE_URL='...?sslmode=require'
    audit + schedule use 40-day Postgres partition blocks (retain at least 30 days by default).
    Worst case ~two blocks (~30–80 days) until the prior block is dropped; old blocks use DROP TABLE
-   on each partition (fast). Migrations create guard_retention_maintain(); the API runs it on startup.
-   Optional: enable pg_cron in Neon and migration 000004 schedules 03:15 UTC daily, or cron:
+   on each partition (fast). Migration 000001_schema.sql creates guard_retention_maintain(); the API runs it on startup.
+   Reset Neon / local DB when deploying a new squashed schema (data not preserved across squash).
+   Optional: enable pg_cron in Neon (03:15 UTC job in migration), or cron:
    DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" guardcli db retention
 3. fly auth login && fly apps create guard-scheduler  (or fly launch --no-deploy)
 4. fly secrets set CLERK_SECRET_KEY BOOTSTRAP_ADMIN_EMAIL CORS_ORIGIN=https://guard-scheduler.fly.dev

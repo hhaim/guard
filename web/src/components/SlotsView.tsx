@@ -1,7 +1,11 @@
-import { Braces, Plus, Trash2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Braces, Plus, Save, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { apiGet } from "../api";
+import { DecimalNumField } from "./DecimalNumField";
 import { useDevPanel } from "../context/AppStateContext";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
+import { docFromServer, type SoldierType } from "../lib/soldierTypes";
 import {
   ALLOWED_SHIFT_HOURS,
   emptyZoneLoc,
@@ -17,16 +21,22 @@ import {
   zoneLocDisplayLabel,
   zonesDocToYamlObject,
   DEFAULT_FULL_DAY_CONFIG,
+  DEFAULT_FULL_DAY_TEAM_CONFIG,
   DEFAULT_WINDOWED_SLOTS_CONFIG,
   DEFAULT_WINDOWED_WINDOW,
   SLOT_PATTERNS,
+  WEEKDAY_NAMES,
   fullDayConfigToRecord,
+  fullDayTeamConfigToRecord,
   parseFullDayConfig,
+  parseFullDayTeamConfig,
   parseWindowedSlotsConfig,
   windowedSlotsConfigToRecord,
   type FullDayConfig,
+  type FullDayTeamConfig,
   type SlotType,
   type SlotTypePattern,
+  type WeekdayName,
   type WindowedSlotsConfig,
   type WindowedWindow,
   type ZoneLoc,
@@ -34,7 +44,6 @@ import {
   type ZonesDoc,
 } from "../lib/zones";
 import { ContactsRowEditButton } from "./ContactsRowEdit";
-import { ConfigSaveBar } from "./ConfigSaveBar";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { ZoneEditSheet } from "./ZoneEditSheet";
 import { ZonesYamlToolbar } from "./ZonesYamlToolbar";
@@ -43,10 +52,21 @@ function patternLabel(p: string): string {
   return SLOT_PATTERNS.find((x) => x.value === p)?.label ?? p;
 }
 
+type CfgResp = { key: string; value: unknown; version: number; updated_at: string };
+
 export function SlotsView() {
   const { openPanel } = useDevPanel();
   const { slotsQ, doc, dirty, loadError, markDirty, replaceDoc, resetToServer, validationError, saveM } =
     useZonesDocument();
+
+  const typesQ = useQuery({
+    queryKey: ["cfg", "soldier_types"],
+    queryFn: () => apiGet<CfgResp>("/api/cfg/soldier_types"),
+  });
+  const soldierTypes = useMemo((): SoldierType[] => {
+    if (!typesQ.data) return [];
+    return docFromServer(typesQ.data.value).types;
+  }, [typesQ.data]);
 
   const [jsonOverride, setJsonOverride] = useState<string | null>(null);
 
@@ -118,6 +138,19 @@ export function SlotsView() {
   const canDeleteType = (id: string) => zoneLocCountForType(doc, id) === 0;
   const canDeleteLoc = (id: string) => slotCountForLocation(doc, id) === 0;
 
+  const slotsStatusLabel =
+    saveM.isPending
+      ? "Saving slots…"
+      : saveM.isSuccess && !dirty
+        ? "Slots saved"
+        : saveM.isError
+          ? "Slots save failed"
+          : dirty
+            ? "Slots pending save…"
+            : "";
+
+  const saveDisabled = !!jsonError || slotsQ.isLoading || !dirty;
+
   return (
     <>
       <header className="contacts-toolbar">
@@ -125,7 +158,7 @@ export function SlotsView() {
           <h2 className="contacts-title">Slots & zones</h2>
           <p className="contacts-count">
             {doc.slots_types.length} types · {doc.zone_loc.length} zone locs · {doc.slots.length} slots
-            {dirty ? " · unsaved" : ""}
+            {slotsStatusLabel ? ` · ${slotsStatusLabel}` : ""}
           </p>
         </div>
         <div className="contacts-toolbar-actions">
@@ -166,6 +199,37 @@ export function SlotsView() {
           ))}
         </select>
       </div>
+
+      <div className="btn-row">
+        <button
+          type="button"
+          className="btn btn-filled"
+          disabled={saveDisabled || saveM.isPending}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            saveM.mutate();
+          }}
+        >
+          <Save size={18} strokeWidth={2} />
+          Save slots
+        </button>
+        {dirty && (
+          <button
+            type="button"
+            className="btn btn-plain"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              resetToServer();
+            }}
+          >
+            Discard
+          </button>
+        )}
+      </div>
+      {(saveM.isError || jsonError) && (
+        <p className="msg-err">{saveM.isError ? (saveM.error as Error).message : jsonError}</p>
+      )}
+      {saveM.isSuccess && !dirty && <p className="msg-ok">Slots saved.</p>}
 
       {/* Slot types */}
       <SectionHeader
@@ -249,16 +313,6 @@ export function SlotsView() {
         onEdit={(index) => setSlotEdit({ mode: "edit", index, draft: { ...doc.slots[index] } })}
       />
 
-      <ConfigSaveBar
-        label="Save slots"
-        dirty={dirty}
-        disabled={!!jsonError || slotsQ.isLoading}
-        pending={saveM.isPending}
-        error={saveM.isError ? (saveM.error as Error).message : jsonError}
-        success={saveM.isSuccess}
-        onSave={() => saveM.mutate()}
-        onDiscard={resetToServer}
-      />
       {slotsQ.data && (
         <p className="meta-line">
           Version {slotsQ.data.version} · updated {new Date(slotsQ.data.updated_at).toLocaleString()}
@@ -266,6 +320,7 @@ export function SlotsView() {
       )}
 
       <SlotTypeSheet
+        soldierTypes={soldierTypes}
         edit={stEdit}
         onChange={(draft) => stEdit && setStEdit({ ...stEdit, draft })}
         onDone={() => {
@@ -322,6 +377,7 @@ export function SlotsView() {
 
       <SlotSheet
         edit={slotEdit}
+        doc={doc}
         locationOptions={doc.zone_loc.map((l) => ({ id: l.id, label: zoneLocDisplayLabel(l) }))}
         onChange={(draft) => slotEdit && setSlotEdit({ ...slotEdit, draft })}
         onDone={() => {
@@ -441,6 +497,7 @@ function EntityTable({
 }
 
 function SlotTypeSheet({
+  soldierTypes,
   edit,
   onChange,
   onDone,
@@ -448,6 +505,7 @@ function SlotTypeSheet({
   onDelete,
   deleteBlocked,
 }: {
+  soldierTypes: SoldierType[];
   edit: { mode: "new" | "edit"; draft: SlotType } | null;
   onChange: (d: SlotType) => void;
   onDone: () => void;
@@ -492,6 +550,9 @@ function SlotTypeSheet({
               if (pattern === "full_day" && !next.config) {
                 next.config = fullDayConfigToRecord(DEFAULT_FULL_DAY_CONFIG);
               }
+              if (pattern === "full_day_team" && !next.config) {
+                next.config = fullDayTeamConfigToRecord(DEFAULT_FULL_DAY_TEAM_CONFIG);
+              }
               if (pattern === "windowed_slots") {
                 if (!next.config) {
                   next.config = windowedSlotsConfigToRecord(DEFAULT_WINDOWED_SLOTS_CONFIG);
@@ -508,10 +569,27 @@ function SlotTypeSheet({
             ))}
           </select>
         </div>
+        <DisabledWeekdaysField
+          disabled={d.disabled_weekdays ?? []}
+          onChange={(disabled_weekdays) =>
+            onChange({
+              ...d,
+              disabled_weekdays: disabled_weekdays.length > 0 ? disabled_weekdays : undefined,
+            })
+          }
+        />
         {d.pattern === "full_day" && (
           <FullDayConfigFields
+            showHeadcount
             config={parseFullDayConfig(d.config)}
             onChange={(cfg) => onChange({ ...d, config: fullDayConfigToRecord(cfg) })}
+          />
+        )}
+        {d.pattern === "full_day_team" && (
+          <FullDayTeamConfigFields
+            soldierTypes={soldierTypes}
+            config={parseFullDayTeamConfig(d.config)}
+            onChange={(cfg) => onChange({ ...d, config: fullDayTeamConfigToRecord(cfg) })}
           />
         )}
         {d.pattern === "windowed_slots" && (
@@ -529,7 +607,8 @@ function SlotTypeSheet({
             {patternError}
           </p>
         )}
-        {(d.pattern === "full_day" || d.pattern === "windowed_slots") && !patternError && (
+        {(d.pattern === "full_day" || d.pattern === "full_day_team" || d.pattern === "windowed_slots") &&
+          !patternError && (
           <p className="contacts-hint slot-type-grid-hint">{PATTERN_WALL_CLOCK_HINT}</p>
         )}
       </section>
@@ -594,22 +673,21 @@ function LocationSheet({
             ))}
           </select>
         </div>
-        <Field
-          label="Weight"
-          value={String(d.weight)}
-          inputMode="decimal"
-          onChange={(v) => {
-            const n = Number(v);
-            if (Number.isFinite(n)) onChange({ ...d, weight: n });
-          }}
-        />
+        <DecimalNumField label="Weight" value={d.weight} onChange={(weight) => onChange({ ...d, weight })} />
       </section>
     </ZoneEditSheet>
   );
 }
 
+function slotPatternForLocation(doc: ZonesDoc, locationId: string): SlotTypePattern | null {
+  const loc = doc.zone_loc.find((l) => l.id === locationId);
+  if (!loc) return null;
+  return doc.slots_types.find((t) => t.id === loc.type)?.pattern ?? null;
+}
+
 function SlotSheet({
   edit,
+  doc,
   locationOptions,
   onChange,
   onDone,
@@ -617,6 +695,7 @@ function SlotSheet({
   onDelete,
 }: {
   edit: { mode: "new" | "edit"; draft: ZoneSlot } | null;
+  doc: ZonesDoc;
   locationOptions: { id: string; label: string }[];
   onChange: (d: ZoneSlot) => void;
   onDone: () => void;
@@ -625,6 +704,8 @@ function SlotSheet({
 }) {
   if (!edit) return null;
   const d = edit.draft;
+  const locPattern = slotPatternForLocation(doc, d.location_id);
+  const showSoldiersRequired = locPattern === "rotating";
   return (
     <ZoneEditSheet
       open
@@ -657,17 +738,58 @@ function SlotSheet({
             ))}
           </select>
         </div>
+        {showSoldiersRequired && (
+          <>
+            <p className="contacts-hint">Concurrent guards for this slot row (default 1).</p>
+            <NumField
+              label="Soldiers required"
+              value={d.soldiers_required ?? 1}
+              onChange={(soldiers_required) => onChange({ ...d, soldiers_required })}
+            />
+          </>
+        )}
       </section>
     </ZoneEditSheet>
+  );
+}
+
+function DisabledWeekdaysField({
+  disabled,
+  onChange,
+}: {
+  disabled: WeekdayName[];
+  onChange: (days: WeekdayName[]) => void;
+}) {
+  const toggle = (day: WeekdayName) => {
+    const set = new Set(disabled);
+    if (set.has(day)) set.delete(day);
+    else set.add(day);
+    onChange(WEEKDAY_NAMES.filter((d) => set.has(d)));
+  };
+  return (
+    <div className="settings-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+      <span className="settings-row-label title">Off on (weekdays)</span>
+      <span className="hint">No assignments on checked days (uses plan anchor calendar)</span>
+      <div className="slot-weekday-grid">
+        {WEEKDAY_NAMES.map((day) => (
+          <label key={day} className="slot-weekday-check">
+            <input type="checkbox" checked={disabled.includes(day)} onChange={() => toggle(day)} />
+            <span>{day.slice(0, 3)}</span>
+          </label>
+        ))}
+      </div>
+    </div>
   );
 }
 
 function FullDayConfigFields({
   config,
   onChange,
+  showHeadcount = false,
 }: {
   config: FullDayConfig;
   onChange: (cfg: FullDayConfig) => void;
+  showHeadcount?: boolean;
 }) {
   return (
     <>
@@ -690,10 +812,157 @@ function FullDayConfigFields({
         value={config.rest_after_hours}
         onChange={(rest_after_hours) => onChange({ ...config, rest_after_hours })}
       />
-      <NumField
+      <DecimalNumField
         label="Weight multiplier"
+        hint="e.g. 0.3, 1.1"
         value={config.weight_multiplier}
         onChange={(weight_multiplier) => onChange({ ...config, weight_multiplier })}
+      />
+      {showHeadcount && (
+        <NumField
+          label="Headcount"
+          hint="Soldiers assigned to this post per day"
+          value={config.headcount}
+          onChange={(headcount) => onChange({ ...config, headcount: Math.max(1, Math.round(headcount)) })}
+        />
+      )}
+    </>
+  );
+}
+
+function TypeQuotasEditor({
+  headcount,
+  quotas,
+  soldierTypes,
+  onChange,
+}: {
+  headcount: number;
+  quotas: Record<string, number>;
+  soldierTypes: SoldierType[];
+  onChange: (type_quotas: Record<string, number>) => void;
+}) {
+  const [customCode, setCustomCode] = useState("");
+
+  const rows = useMemo(() => {
+    const codes = new Set(soldierTypes.map((t) => t.code.trim()).filter(Boolean));
+    for (const k of Object.keys(quotas)) codes.add(k);
+    return [...codes].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }, [quotas, soldierTypes]);
+
+  const sum = useMemo(() => Object.values(quotas).reduce((a, b) => a + b, 0), [quotas]);
+  const over = sum > headcount;
+
+  const setQuota = (code: string, raw: number) => {
+    const next = { ...quotas };
+    const n = Math.round(raw);
+    if (!Number.isFinite(n) || n < 1) delete next[code];
+    else next[code] = Math.min(n, headcount);
+    onChange(next);
+  };
+
+  const addCustomCode = () => {
+    const code = customCode.trim().toUpperCase();
+    if (!code) return;
+    onChange({ ...quotas, [code]: quotas[code] ?? 1 });
+    setCustomCode("");
+  };
+
+  return (
+    <div className="type-quotas-editor">
+      <p className="settings-row-label title">Type quotas (minimums)</p>
+      <p className="contacts-hint">
+        Minimum soldiers of each rank/role on this post (e.g. A:1). Codes come from Soldiers → Types. Sum must
+        not exceed headcount ({headcount}).
+      </p>
+      {soldierTypes.length === 0 && rows.length === 0 && (
+        <p className="contacts-hint">No soldier types yet — add types under Soldiers, or add a custom code below.</p>
+      )}
+      {rows.length > 0 && (
+        <table className="contacts-table type-quotas-table">
+          <thead>
+            <tr>
+              <th scope="col">Code</th>
+              <th scope="col">Label</th>
+              <th scope="col">Min</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((code) => {
+              const label = soldierTypes.find((t) => t.code === code)?.label ?? "";
+              return (
+                <tr key={code}>
+                  <td className="contacts-id">
+                    <code>{code}</code>
+                  </td>
+                  <td className="contacts-name">{label || "—"}</td>
+                  <td>
+                    <input
+                      className="settings-input type-quotas-min-input"
+                      type="number"
+                      min={0}
+                      max={headcount}
+                      step={1}
+                      value={quotas[code] ?? 0}
+                      aria-label={`Minimum ${code}`}
+                      onChange={(e) => setQuota(code, Number(e.target.value))}
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      <div className="type-quotas-add-row">
+        <input
+          className="settings-input"
+          type="text"
+          placeholder="Custom code (e.g. A)"
+          value={customCode}
+          maxLength={4}
+          autoCapitalize="characters"
+          autoComplete="off"
+          onChange={(e) => setCustomCode(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addCustomCode();
+            }
+          }}
+        />
+        <button type="button" className="btn btn-tinted" onPointerDown={() => addCustomCode()}>
+          Add type
+        </button>
+      </div>
+      <p className={`contacts-hint${over ? " err" : ""}`} role={over ? "alert" : undefined}>
+        Quota total: {sum} / {headcount} headcount
+        {over ? " — reduce quotas or raise headcount" : ""}
+      </p>
+    </div>
+  );
+}
+
+function FullDayTeamConfigFields({
+  soldierTypes,
+  config,
+  onChange,
+}: {
+  soldierTypes: SoldierType[];
+  config: FullDayTeamConfig;
+  onChange: (cfg: FullDayTeamConfig) => void;
+}) {
+  return (
+    <>
+      <FullDayConfigFields
+        showHeadcount
+        config={config}
+        onChange={(base) => onChange({ ...config, ...base })}
+      />
+      <TypeQuotasEditor
+        headcount={config.headcount}
+        quotas={config.type_quotas}
+        soldierTypes={soldierTypes}
+        onChange={(type_quotas) => onChange({ ...config, type_quotas })}
       />
     </>
   );
@@ -716,17 +985,18 @@ function WindowedSlotsConfigFields({
 }) {
   const updateWindow = (index: number, patch: Partial<WindowedWindow>) => {
     const slots = config.slots.map((w, i) => (i === index ? { ...w, ...patch } : w));
-    onChange({ slots });
+    onChange({ ...config, slots });
   };
 
   const removeWindow = (index: number) => {
     if (config.slots.length <= 1) return;
-    onChange({ slots: config.slots.filter((_, i) => i !== index) });
+    onChange({ ...config, slots: config.slots.filter((_, i) => i !== index) });
   };
 
   const addWindow = () => {
     const n = config.slots.length + 1;
     onChange({
+      ...config,
       slots: [
         ...config.slots,
         { ...DEFAULT_WINDOWED_WINDOW, name: `w${n}`, start: "00:00", end: "12:00" },
@@ -738,6 +1008,12 @@ function WindowedSlotsConfigFields({
     <>
       <NumField label="Rest after (hours)" value={restAfterHours} onChange={onRestAfterHours} />
       <NumField label="Full day shift" value={fullDayShift} onChange={onFullDayShift} />
+      <NumField
+        label="Headcount"
+        hint="Soldiers assigned to this post per day (after best window is chosen)"
+        value={config.headcount}
+        onChange={(headcount) => onChange({ ...config, headcount: Math.max(1, Math.round(headcount)) })}
+      />
       <div className="slot-type-windows">
         <div className="slot-type-windows-header">
           <span className="settings-row-label title">Windows</span>
@@ -775,8 +1051,9 @@ function WindowedSlotsConfigFields({
               autoCapitalize="none"
               onChange={(end) => updateWindow(index, { end })}
             />
-            <NumField
+            <DecimalNumField
               label="Weight multiplier"
+              hint="e.g. 0.3, 1.1"
               value={w.weight_multiplier}
               onChange={(weight_multiplier) => updateWindow(index, { weight_multiplier })}
             />
@@ -789,16 +1066,19 @@ function WindowedSlotsConfigFields({
 
 function NumField({
   label,
+  hint,
   value,
   onChange,
 }: {
   label: string;
+  hint?: string;
   value: number;
   onChange: (n: number) => void;
 }) {
   return (
     <Field
       label={label}
+      hint={hint}
       value={String(value)}
       inputMode="decimal"
       onChange={(v) => {

@@ -94,7 +94,7 @@ func TestScenarioYAML(t *testing.T) {
 			seed := sc.Sim.Seed
 			recs, _, _, err := RunSimulationBestOfZoneConfig(
 				zc, len(roster), sc.Sim.Days, 1, &seed,
-				6, true, 0, 2, 0, 0.2, planStart, chk,
+				6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil,
 			)
 			if err != nil {
 				t.Fatal(err)

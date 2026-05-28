@@ -42,6 +42,84 @@ func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
+// PreauthClerkID is stored until the user signs in via Clerk; syncUser rebinds to the real id.
+func PreauthClerkID(email string) string {
+	return "preauth:" + normalizeEmail(email)
+}
+
+// EnsureBootstrapAdmin grants admin for email when the DB has no admins (recovery after db reset).
+func EnsureBootstrapAdmin(ctx context.Context, pool *db.Pool, email string) (*AppUser, error) {
+	email = normalizeEmail(email)
+	if email == "" {
+		return nil, fmt.Errorf("email required")
+	}
+	n, err := CountAdmins(ctx, pool)
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		return nil, fmt.Errorf("database already has %d admin(s); use users invite instead", n)
+	}
+	if u, err := GetUserByEmail(ctx, pool, email); err == nil {
+		if u.Role == "admin" {
+			return u, nil
+		}
+		var out AppUser
+		var invitedBy *string
+		err := pool.QueryRow(ctx,
+			`UPDATE app_users SET role = 'admin' WHERE lower(email) = $1
+			 RETURNING clerk_user_id, email, role, created_at, invited_by`,
+			email,
+		).Scan(&out.ClerkUserID, &out.Email, &out.Role, &out.CreatedAt, &invitedBy)
+		if err != nil {
+			return nil, err
+		}
+		out.InvitedBy = invitedBy
+		return &out, nil
+	} else if !errors.Is(err, ErrUserNotFound) {
+		return nil, err
+	}
+	return CreateAppUser(ctx, pool, PreauthClerkID(email), email, "admin", nil)
+}
+
+func GetUserByEmail(ctx context.Context, pool *db.Pool, email string) (*AppUser, error) {
+	email = normalizeEmail(email)
+	var u AppUser
+	var invitedBy *string
+	err := pool.QueryRow(ctx,
+		`SELECT clerk_user_id, email, role, created_at, invited_by FROM app_users WHERE lower(email) = $1`,
+		email,
+	).Scan(&u.ClerkUserID, &u.Email, &u.Role, &u.CreatedAt, &invitedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	u.InvitedBy = invitedBy
+	return &u, nil
+}
+
+// RebindClerkUserID updates clerk_user_id when the same email signs in with a new Clerk account.
+func RebindClerkUserID(ctx context.Context, pool *db.Pool, email, clerkUserID string) (*AppUser, error) {
+	email = normalizeEmail(email)
+	var u AppUser
+	var invitedBy *string
+	err := pool.QueryRow(ctx,
+		`UPDATE app_users SET clerk_user_id = $2 WHERE lower(email) = $1
+		 RETURNING clerk_user_id, email, role, created_at, invited_by`,
+		email, clerkUserID,
+	).Scan(&u.ClerkUserID, &u.Email, &u.Role, &u.CreatedAt, &invitedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	u.InvitedBy = invitedBy
+	return &u, nil
+}
+
 func GetUserByClerkID(ctx context.Context, pool *db.Pool, clerkUserID string) (*AppUser, error) {
 	var u AppUser
 	var invitedBy *string

@@ -57,11 +57,25 @@ func main() {
 	var authSvc *auth.Service
 	if clerkSecret != "" {
 		clerk.SetKey(clerkSecret)
+		authDebug := strings.TrimSpace(os.Getenv("AUTH_DEBUG"))
+		corsOrigin := strings.TrimSpace(os.Getenv("CORS_ORIGIN"))
+		parties := auth.ParseAuthorizedParties(corsOrigin)
 		authSvc = &auth.Service{
 			Pool:                pool,
 			BootstrapAdminEmail: strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_EMAIL")),
+			Debug:               authDebug == "1" || strings.EqualFold(authDebug, "true"),
+			AuthorizedParties:   parties,
 		}
 		log.Print("auth: Clerk JWT enabled on /api/*")
+		if len(parties) > 0 {
+			log.Printf("auth: JWT authorized parties: %s", strings.Join(parties, ", "))
+		}
+		if authSvc.Debug {
+			log.Print("auth: AUTH_DEBUG=1 (verbose auth logs)")
+		}
+		if !strings.HasPrefix(clerkSecret, "sk_") {
+			log.Print("auth: WARNING: CLERK_SECRET_KEY should start with sk_ (check .env quoting)")
+		}
 	} else {
 		log.Print("auth: legacy mode (API_KEY optional); set CLERK_SECRET_KEY for Clerk")
 	}

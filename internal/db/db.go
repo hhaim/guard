@@ -16,8 +16,8 @@ type Pool struct {
 	*pgxpool.Pool
 }
 
-// Connect opens a pool and applies embedded migrations (each file runs once; tracked in schema_migrations).
-func Connect(ctx context.Context, databaseURL string) (*Pool, error) {
+// OpenPool connects without running migrations (for guardcli db reset).
+func OpenPool(ctx context.Context, databaseURL string) (*Pool, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse database url: %w", err)
@@ -28,10 +28,19 @@ func Connect(ctx context.Context, databaseURL string) (*Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect pool: %w", err)
 	}
-	if err := Migrate(ctx, pool); err != nil {
+	return &Pool{Pool: pool}, nil
+}
+
+// Connect opens a pool and applies embedded migrations (each file runs once; tracked in schema_migrations).
+func Connect(ctx context.Context, databaseURL string) (*Pool, error) {
+	pool, err := OpenPool(ctx, databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := Migrate(ctx, pool.Pool); err != nil {
 		pool.Close()
 		return nil, err
 	}
-	return &Pool{Pool: pool}, nil
+	return pool, nil
 }
 

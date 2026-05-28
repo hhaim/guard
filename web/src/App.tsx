@@ -1,7 +1,8 @@
-import { Show, SignInButton, UserButton } from "@clerk/react";
+import { Show, SignInButton, UserButton, useAuth } from "@clerk/react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiGet } from "./api";
+import { callApi } from "./api";
+import { formatApiError } from "./lib/apiError";
 import { AdminUsersView } from "./components/AdminUsersView";
 import { GlobalConfigView } from "./components/GlobalConfigView";
 import { HelpView } from "./components/HelpView";
@@ -11,11 +12,17 @@ import { SlotsView } from "./components/SlotsView";
 import { SoldiersView } from "./components/SoldiersView";
 import { TimeZonesView } from "./components/TimeZonesView";
 import { ZonesDocumentProvider } from "./context/ZonesDocumentContext";
+import { AccessDeniedDebug, type AuthDiagnostics } from "./components/AccessDeniedDebug";
 import { useApiClient } from "./hooks/useApiClient";
 
 type Tab = "soldiers" | "slots" | "global" | "time_zones" | "plan" | "stats" | "help" | "users";
 
-type MeResponse = { role: string; email: string };
+type MeResponse = {
+  role: string;
+  email: string;
+  clerk_user_id?: string;
+  diagnostics?: AuthDiagnostics;
+};
 
 const ADMIN_TABS: { id: Tab; label: string }[] = [
   { id: "soldiers", label: "Soldiers" },
@@ -35,11 +42,23 @@ const READONLY_TABS: { id: Tab; label: string }[] = [
 ];
 
 function SignedInApp() {
+  const { getToken, isLoaded } = useAuth();
   useApiClient();
   const meQ = useQuery({
     queryKey: ["me"],
-    queryFn: () => apiGet<MeResponse>("/api/me"),
-    retry: false,
+    enabled: isLoaded,
+    queryFn: async () => {
+      const token = await getToken();
+      if (!token) throw new Error("Session not ready — refresh the page");
+      return callApi<MeResponse>("/api/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    },
+    retry: (count, err) => {
+      const msg = formatApiError(err).toLowerCase();
+      if (count >= 2) return false;
+      return msg.includes("unauthorized") || msg.includes("session") || msg.includes("not ready");
+    },
   });
 
   const role = meQ.data?.role ?? "";
@@ -59,13 +78,17 @@ function SignedInApp() {
   }
 
   if (meQ.isError || !role) {
+    const errDetail = meQ.isError ? formatApiError(meQ.error) : "";
+    const emailHint = meQ.data?.email ? ` (${meQ.data.email})` : "";
     return (
       <section className="panel">
         <h2>Access not granted</h2>
         <p className="sub">
-          You are signed in, but this app has no role for your account yet. Ask an admin to invite your email (
-          {meQ.error ? "could not load profile" : "pending invite"}).
+          You are signed in, but this app has no role for your account yet. Ask an admin to invite your email
+          {emailHint || " (must match your Google sign-in)"} (
+          {meQ.isError ? errDetail || "could not load profile" : "pending invite"}).
         </p>
+        <AccessDeniedDebug meError={meQ.error} meData={meQ.data} />
       </section>
     );
   }

@@ -73,6 +73,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/soldiers/status/import", s.handleSoldiersStatusImport)
 	mux.HandleFunc("GET /api/plan/preview-availability", s.handlePlanPreviewAvailability)
 	mux.HandleFunc("GET /api/me", s.handleMe)
+	mux.HandleFunc("GET /api/auth/debug", s.handleAuthDebug)
 	mux.HandleFunc("GET /api/admin/invites", s.handleAdminListInvites)
 	mux.HandleFunc("POST /api/admin/invites", s.handleAdminCreateInvite)
 	mux.HandleFunc("DELETE /api/admin/invites/{id}", s.handleAdminDeleteInvite)
@@ -89,8 +90,20 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{"status": "ok"}
+	if s.Auth != nil {
+		out["auth"] = map[string]any{
+			"clerk_jwt":           true,
+			"authorized_parties":  s.Auth.AuthorizedParties,
+		}
+	} else {
+		out["auth"] = map[string]any{
+			"clerk_jwt": false,
+			"hint":      "Set CLERK_SECRET_KEY on the API (same Clerk app as VITE_CLERK_PUBLISHABLE_KEY)",
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) handleGetCfg(w http.ResponseWriter, r *http.Request) {

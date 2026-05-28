@@ -1,8 +1,10 @@
-# zones_mixed_patterns.yaml — schema v2 (mixed rotating / full_day / windowed_slots).
+# zones_mixed_patterns.yaml — schema v2 (mixed slot patterns).
 #
 # - shift_hours: hours per calendar block (must tile 24 h); set in this file or override with --shift-hours.
-# - zone_loc reference slots_types by id (pattern: rotating | full_day | windowed_slots).
-# - Fill order in sim: full_day → windowed_slots → rotating.
+# - zone_loc reference slots_types by id (pattern: rotating | full_day | full_day_team | windowed_slots).
+# - slots_types may set disabled_weekdays: [friday, saturday] (lowercase English day names).
+# - slots rows may set soldiers_required (default 1) for full_day / windowed / rotating.
+# - Fill order in sim: full_day_team → full_day → windowed_slots → rotating.
 
 schema_version: 2
 shift_hours: 3  # 2 | 3 | 4 — grid for day alignment / table rows / rest padding

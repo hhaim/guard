@@ -26,6 +26,41 @@
   gap: 1rem;
 }
 
+.access-denied-debug {
+  margin-top: 1rem;
+  text-align: left;
+}
+
+.access-denied-debug summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.access-denied-debug-body {
+  margin-top: 0.75rem;
+}
+
+.access-denied-debug-table th {
+  text-align: left;
+  padding-right: 1rem;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.access-denied-debug-list {
+  margin: 0.75rem 0;
+  padding-left: 1.25rem;
+}
+
+.access-denied-debug-probe pre {
+  margin: 0.5rem 0 1rem;
+  padding: 0.75rem;
+  overflow: auto;
+  font-size: 0.75rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
 .sign-in-panel {
   margin-top: 1rem;
 }
@@ -1532,6 +1567,43 @@
   line-height: 1.4;
 }
 
+.sched-matrix-disabled {
+  color: var(--text-secondary, #8e8e93);
+}
+
+.sched-matrix-cell-team {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.sched-matrix-td-team {
+  min-height: 2.5rem;
+  vertical-align: top;
+}
+
+.sched-matrix-cell-team .sched-soldier-badge {
+  font-size: 0.72rem;
+  padding: 1px 4px;
+}
+
+.slot-weekday-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin-top: 0.35rem;
+}
+
+.slot-weekday-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  text-transform: capitalize;
+}
+
 .sched-matrix-block + .sched-matrix-block {
   margin-top: 1.25rem;
 }
@@ -1899,6 +1971,40 @@
 
 .slot-type-remove-window:active {
   opacity: 0.7;
+}
+
+.type-quotas-editor {
+  padding: 0.65rem 1.1rem 0.85rem;
+  box-shadow: 0 -0.5px 0 rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  .type-quotas-editor {
+    box-shadow: 0 -0.5px 0 rgba(255, 255, 255, 0.06);
+  }
+}
+
+.type-quotas-table {
+  margin-top: 0.5rem;
+}
+
+.type-quotas-min-input {
+  width: 4.5rem;
+  min-height: 36px;
+  text-align: center;
+}
+
+.type-quotas-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.type-quotas-add-row .settings-input {
+  flex: 1 1 6rem;
+  min-width: 5rem;
 }
 
 /* Help tab */

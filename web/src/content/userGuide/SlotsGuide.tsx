@@ -36,23 +36,52 @@ export function SlotsGuide() {
               <strong>full_day</strong>
             </td>
             <td>
-              <code>start</code>, <code>end</code> (whole hours, <code>HH:00</code>), <code>rest_after_hours</code>,{" "}
-              <code>weight_multiplier</code>
+              Same as full_day_team time fields, plus <code>headcount</code>; optional{" "}
+              <code>disabled_weekdays</code> on the type (no <code>type_quotas</code>)
             </td>
-            <td>One soldier per day for the duty window; marks busy through rest</td>
+            <td>
+              <code>headcount</code> soldiers per day on each slot row for this type; marks busy through rest
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <strong>full_day_team</strong>
+            </td>
+            <td>
+              Same time/rest fields as full_day, plus <code>headcount</code> and <code>type_quotas</code> (minimum counts
+              per soldier type; sum ≤ headcount)
+            </td>
+            <td>
+              Fills typed minimums first (largest quota first), then generic seats; one assignment record per team
+              member; matrix/PDF list all names in the cell
+            </td>
           </tr>
           <tr>
             <td>
               <strong>windowed_slots</strong>
             </td>
             <td>
-              Window list (<code>start</code>/<code>end</code>, multipliers), <code>rest_after_hours</code>,{" "}
-              <code>full_day_shift</code>
+              Window list (<code>start</code>/<code>end</code>, multipliers), <code>headcount</code>,{" "}
+              <code>rest_after_hours</code>, <code>full_day_shift</code>
             </td>
-            <td>One soldier per day; picks the best window for that post</td>
+            <td>
+              <code>headcount</code> soldiers per day after the best window is chosen; optional{" "}
+              <code>disabled_weekdays</code>
+            </td>
           </tr>
         </tbody>
       </table>
+      <p>
+        <strong>Off on weekdays:</strong> on each slot type, check days under “Off on” to set{" "}
+        <code>disabled_weekdays</code> (e.g. <code>friday</code>, <code>saturday</code>). The weekday is taken at{" "}
+        <strong>plan day start</strong> (global <code>plan_day_start</code>, default 05:00), so a duty that runs
+        05:00→next 05:00 uses the first day&apos;s weekday, not the calendar date after midnight.
+      </p>
+      <p>
+        <strong>Soldiers required:</strong> on each slot row for <code>rotating</code> only.{" "}
+        <code>full_day</code>, <code>full_day_team</code>, and <code>windowed_slots</code> use <code>headcount</code> on
+        the slot type. Default <code>1</code>.
+      </p>
 
       <h3 className="help-subtitle">Examples in the UI (no import required)</h3>
       <ul>
@@ -75,8 +104,8 @@ export function SlotsGuide() {
       </ul>
 
       <p>
-        <strong>Fill order</strong> in the simulator: full_day → windowed_slots → rotating (rotating fills remaining
-        blocks).
+        <strong>Fill order</strong> in the simulator: full_day_team → full_day → windowed_slots → rotating (rotating
+        fills remaining blocks).
       </p>
       <p className="contacts-hint">
         <strong>Wall-clock times</strong> for full day and windowed patterns must be whole hours (<code>HH:00</code>;

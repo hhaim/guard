@@ -15,7 +15,7 @@ func AssignmentOccupiedBlocks(a *AssignmentRecord, blocksPd int) []int {
 		k = "rotating"
 	}
 	switch k {
-	case "full_day", "windowed":
+	case "full_day", "full_day_team", "windowed":
 		_ = blocksPd
 		var blocks []int
 		for b := a.WinStartBlock; b <= a.WinEndBlock; b++ {
@@ -56,7 +56,7 @@ func BuildScheduleCompareMatrixFromRecords(
 				panic("schedule matrix conflict (rotating)")
 			}
 			mat[a.Day][a.CalendarBlock][a.Slot] = a.SoldierIdx
-		case "full_day", "windowed":
+		case "full_day", "full_day_team", "windowed":
 			for _, bb := range AssignmentOccupiedBlocks(a, blocksPd) {
 				cur := mat[a.Day][bb][a.Slot]
 				if cur != -1 && cur != a.SoldierIdx {

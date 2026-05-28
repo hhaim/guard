@@ -12,35 +12,6 @@ slots_types:
     name: Rotating Guard
     pattern: rotating
 
-  - id: windowed_hamal
-    name: Window hamal
-    pattern: windowed_slots
-    full_day_shift: 1
-    config:
-      slots:
-        - name: w1-09
-          start: "00:00"
-          end: "12:00"
-          weight_multiplier: 0.9
-        - name: w2-21
-          start: "12:00"
-          end: "24:00"
-          weight_multiplier: 1.1
-
-  - id: windowed_bet_valero
-    name: Window bet valero
-    pattern: windowed_slots
-    full_day_shift: 1
-    config:
-      slots:
-        - name: w1
-          start: "07:00"
-          end: "13:00"
-          weight_multiplier: 0.9
-        - name: w2
-          start: "13:00"
-          end: "20:00"
-          weight_multiplier: 0.9
 
   - id: full_day_kitchen
     name: Full Day Duty in Kitchen
@@ -51,14 +22,21 @@ slots_types:
       rest_after_hours: 6
       weight_multiplier: 1.1
 
-  - id: full_day_rasar
-    name: Full Day Duty in Rasar
-    pattern: full_day
+
+  - id: kitchen_team_1
+    pattern: full_day_team
+    # optional: skip this slot type on these weekdays
+    disabled_weekdays: []
     config:
-      start: "06:00"
+      start: "05:00"
       end: "22:00"
       rest_after_hours: 6
-      weight_multiplier: 1.1
+      weight_multiplier: 0.3
+      headcount: 5
+      type_quotas:
+        A: 1
+        B: 2
+        C: 1
 
 # One row per concurrent slot (1..Y). location_id must match zone_loc[].id
 slots:
@@ -70,6 +48,9 @@ slots:
     name: g3
   - location_id: loc_gate
     name: g4
+  - location_id: bet_kitchen1
+    name: k1
+
 
 zone_loc:
   - id: loc_gate
@@ -80,17 +61,9 @@ zone_loc:
     type: full_day_kitchen
     name: K
     weight: 1.0
-  - id: loc_rasar
-    type: full_day_rasar
-    name: R
-    weight: 1.0
-  - id: bet_valero
-    type: windowed_bet_valero
-    name: V
-    weight: 1.0
-  - id: hamal
-    type: windowed_hamal
-    name: H
+  - id: bet_kitchen1
+    type: kitchen_team_1
+    name: L
     weight: 1.0
 
 # Used for piecewise fairness (active hours × time_zone weight × pattern multiplier).

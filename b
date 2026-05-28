@@ -19,6 +19,7 @@ Commands:
   sim           Run guardsim CLI (pass args after sim)
   cli           Run guardcli (pass args after cli; e.g. users list)
   test          Run Go unit tests and Python pytest suite
+  py_test       Run Python guard_scheduler_sim pytest suite (builds guardsim)
   run           Start the stack (docker compose up)
   help          Show this help (--help, -h)
 
@@ -28,6 +29,8 @@ Examples:
   ./b build-docker
   ./b build-all
   ./b test
+  ./b py_test
+  ./b py_test -v
   ./b run
   ./b run --build          # pass extra args to docker compose up
   DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" ./b cli users list
@@ -105,16 +108,65 @@ cmd_build_all() {
   cmd_build_docker "$@"
 }
 
+_py_python() {
+  if [[ -x "$ROOT/.venv-verify/bin/python" ]]; then
+    echo "$ROOT/.venv-verify/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    echo python3
+  else
+    echo "error: need python3" >&2
+    return 1
+  fi
+}
+
+_pytest_run() {
+  local py
+  py="$(_py_python)" || return 1
+  if ! "$py" -c "import pytest" 2>/dev/null; then
+    echo "error: pytest not installed (pip install -r requirements-test.txt)" >&2
+    return 1
+  fi
+  echo "==> $py -m pytest $*"
+  "$py" -m pytest "$@"
+}
+
+# Python tests that exercise guard_scheduler_sim / guardsim parity.
+PY_SIM_TEST_FILES=(
+  tests/test_guard_scheduler_sim.py
+  tests/test_python_go_parity.py
+  tests/test_scenario_sim_integration.py
+  tests/test_full_day_team_sim.py
+  tests/test_schedule_report_plan_day.py
+)
+
+cmd_py_test() {
+  if [[ ! -d tests ]]; then
+    echo "error: tests/ not found" >&2
+    exit 1
+  fi
+  echo "==> build guardsim (Go/Python parity)"
+  cmd_build_sim
+  _pytest_run "${PY_SIM_TEST_FILES[@]}" "$@"
+}
+
 cmd_test() {
   echo "==> go test ./..."
   go test ./...
 
-  if [[ -d tests ]] && command -v pytest >/dev/null 2>&1; then
-    echo "==> pytest"
-    pytest
-  elif [[ -d tests ]]; then
-    echo "==> skip pytest (install: pip install -r requirements-test.txt)"
+  if [[ ! -d tests ]]; then
+    return 0
   fi
+  local py
+  py="$(_py_python)" || {
+    echo "==> skip pytest (no python3)" >&2
+    return 0
+  }
+  if ! "$py" -c "import pytest" 2>/dev/null; then
+    echo "==> skip pytest (install: pip install -r requirements-test.txt)" >&2
+    return 0
+  fi
+  echo "==> $py -m pytest tests/"
+  "$py" -m pytest tests/
 }
 
 cmd_run() {
@@ -136,6 +188,7 @@ main() {
     sim)          cmd_sim "$@" ;;
     cli)          cmd_cli "$@" ;;
     test)         cmd_test "$@" ;;
+    py_test)      cmd_py_test "$@" ;;
     run)          cmd_run "$@" ;;
     help|--help|-h)
       usage

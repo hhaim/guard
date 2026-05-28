@@ -10,13 +10,13 @@ import (
 	"guard/internal/availability"
 )
 
-func loadZonesS1(t *testing.T, slots int) *ZoneConfig {
+func loadZonesS1Gate4(t *testing.T) *ZoneConfig {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "zones_s1.yaml"))
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "zones_s1_gate4.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	zc, err := LoadZoneConfigYAML(raw, slots, nil)
+	zc, err := LoadZoneConfigYAML(raw, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestPartialReturn_rotatingBlocksPool(t *testing.T) {
 
 func TestRunSimulation_statusYAML(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
-	zc := loadZonesS1(t, 4)
+	zc := loadZonesS1Gate4(t)
 	planStart, _ := ParsePlanDayStart(DefaultPlanDayStart)
 	sh := zc.ShiftHours
 	seed := int64(42)
@@ -104,7 +104,7 @@ func TestRunSimulation_statusYAML(t *testing.T) {
 			_, chk, _ := prepareScenario(t, filepath.Join("..", "status.yaml"), n, anchor)
 			recs, _, _, err := RunSimulationBestOfZoneConfig(
 				zc, n, 1, 1, &seed,
-				6, true, 0, 2, 0, 0.2, planStart, chk,
+				6, true, 0, 2, 0, 0.2, planStart, chk, &anchor, nil,
 			)
 			if err != nil {
 				t.Fatalf("n=%d: %v", n, err)
@@ -126,13 +126,13 @@ func TestRunSimulation_statusYAML(t *testing.T) {
 
 func TestRunSimulation_partialReturn_noS2Morning(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
-	zc := loadZonesS1(t, 4)
+	zc := loadZonesS1Gate4(t)
 	planStart, _ := ParsePlanDayStart(DefaultPlanDayStart)
 	sc, chk, roster := prepareScenario(t, filepath.Join("..", "testdata", "scenarios", "partial_return.yaml"), 12, anchor)
 	seed := sc.Sim.Seed
 	recs, _, _, err := RunSimulationBestOfZoneConfig(
 		zc, len(roster), sc.Sim.Days, 1, &seed,
-		6, true, 0, 2, 0, 0.2, planStart, chk,
+		6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +153,7 @@ func TestRunSimulation_partialReturn_noS2Morning(t *testing.T) {
 
 func TestRunSimulation_sickAndOuting(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
-	zc := loadZonesS1(t, 4)
+	zc := loadZonesS1Gate4(t)
 	planStart, _ := ParsePlanDayStart(DefaultPlanDayStart)
 	sh := zc.ShiftHours
 
@@ -162,7 +162,7 @@ func TestRunSimulation_sickAndOuting(t *testing.T) {
 		seed := sc.Sim.Seed
 		recs, _, _, err := RunSimulationBestOfZoneConfig(
 			zc, len(roster), 1, 1, &seed,
-			6, true, 0, 2, 0, 0.2, planStart, chk,
+			6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -183,7 +183,7 @@ func TestRunSimulation_sickAndOuting(t *testing.T) {
 		seed := sc.Sim.Seed
 		recs, _, _, err := RunSimulationBestOfZoneConfig(
 			zc, len(roster), 1, 1, &seed,
-			6, true, 0, 2, 0, 0.2, planStart, chk,
+			6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -257,12 +257,12 @@ func TestMultiSoldier_compileAndSim(t *testing.T) {
 		t.Fatalf("compile: %+v", day.Summary)
 	}
 
-	zc := loadZonesS1(t, 4)
+	zc := loadZonesS1Gate4(t)
 	planStart := 5
 	seed := int64(123)
 	recs, _, _, err := RunSimulationBestOfZoneConfig(
 		zc, 14, 1, 1, &seed,
-		6, true, 0, 2, 0, 0.2, planStart, chk,
+		6, true, 0, 2, 0, 0.2, planStart, chk, &anchor, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

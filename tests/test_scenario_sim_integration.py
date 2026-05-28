@@ -65,7 +65,7 @@ PARTIAL_RETURN_BLOCKS: Tuple[BlockExpect, ...] = (
 
 @pytest.fixture(scope="module")
 def zones_s1() -> sim.ZoneConfig:
-    return sim.load_zone_config(ROOT / "zones_s1.yaml", SLOTS)
+    return sim.load_zone_config(ROOT / "testdata" / "zones_s1_gate4.yaml", SLOTS)
 
 
 def _blocks_pd() -> int:
@@ -273,7 +273,7 @@ class TestDFSAndRegression:
     def test_dfs_mask_exists_with_partial_return_checker(self) -> None:
         """Rotating DFS + availability must find a feasible mask (not empty night pools)."""
         _, chk, _ = _prepare(ROOT / "status.yaml")
-        zone = sim.load_zone_config(ROOT / "zones_s1.yaml", SLOTS)
+        zone = sim.load_zone_config(ROOT / "testdata" / "zones_s1_gate4.yaml", SLOTS)
         soldiers = [sim.make_soldier(i, 24.0, zone.n_loc, zone.n_time) for i in range(12)]
         blocks = _blocks_pd()
         busy = sim.np.zeros((1, 12, blocks), dtype=bool)

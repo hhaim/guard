@@ -8,7 +8,7 @@ import (
 
 func TestRunSimulationZoneConfig_allRotatingZonesS1(t *testing.T) {
 	root := findRepoRoot(t)
-	raw, err := os.ReadFile(filepath.Join(root, "zones_s1.yaml"))
+	raw, err := os.ReadFile(filepath.Join(root, "testdata", "zones_s1_gate4.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,8 +16,12 @@ func TestRunSimulationZoneConfig_allRotatingZonesS1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := NewPyRandom(42)
-	_, _, err = RunSimulationZoneConfig(z, 10, 5, r, 8, true, 0, 2, 0, 0.2, 0, nil)
+	planStart, err := ParsePlanDayStart(DefaultPlanDayStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewPyRandom(1)
+	_, _, err = RunSimulationZoneConfig(z, 12, 5, r, 8, true, 0, 2, 2, 0.2, planStart, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +29,7 @@ func TestRunSimulationZoneConfig_allRotatingZonesS1(t *testing.T) {
 
 func TestRunSimulationZoneConfig_twelveSoldiersFourRotatingSlots(t *testing.T) {
 	root := findRepoRoot(t)
-	raw, err := os.ReadFile(filepath.Join(root, "zones_s1.yaml"))
+	raw, err := os.ReadFile(filepath.Join(root, "testdata", "zones_s1_gate4.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,8 +37,12 @@ func TestRunSimulationZoneConfig_twelveSoldiersFourRotatingSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	planStart, err := ParsePlanDayStart(DefaultPlanDayStart)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := NewPyRandom(1)
-	_, _, err = RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, 0, nil)
+	_, _, err = RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, planStart, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +59,12 @@ func TestRunSimulationZoneConfig_mixedPatternsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	planStart, err := ParsePlanDayStart(DefaultPlanDayStart)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := NewPyRandom(7)
-	_, _, err = RunSimulationZoneConfig(z, 50, 2, r, 8, true, 0, 2, 0, 0.2, 0, nil)
+	_, _, err = RunSimulationZoneConfig(z, 50, 2, r, 8, true, 0, 2, 2, 0.2, planStart, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +72,7 @@ func TestRunSimulationZoneConfig_mixedPatternsFile(t *testing.T) {
 
 func TestRunSimulationZoneConfig_planDayStartRotatingHour(t *testing.T) {
 	root := findRepoRoot(t)
-	raw, err := os.ReadFile(filepath.Join(root, "zones_s1.yaml"))
+	raw, err := os.ReadFile(filepath.Join(root, "testdata", "zones_s1_gate4.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +81,7 @@ func TestRunSimulationZoneConfig_planDayStartRotatingHour(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPyRandom(7)
-	recs, _, err := RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, 5, nil)
+	recs, _, err := RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, 5, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

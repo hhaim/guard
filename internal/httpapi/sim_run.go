@@ -90,14 +90,15 @@ func (s *Server) validatePlanAnchor(anchor time.Time, offset int) error {
 	return nil
 }
 
-func buildPlanDaysMeta(anchor time.Time, days int) []map[string]any {
+func buildPlanDaysMeta(anchor time.Time, days, planStartHour int) []map[string]any {
 	out := make([]map[string]any, days)
 	for d := 0; d < days; d++ {
 		dt := anchor.AddDate(0, 0, d)
+		wd := guardsched.WeekdayAtPlanDayStart(anchor, d, planStartHour)
 		out[d] = map[string]any{
 			"day":            d,
 			"calendar_date":  dt.Format("2006-01-02"),
-			"weekday":        guardsched.WeekdayLongName(int(dt.Weekday())),
+			"weekday":        guardsched.WeekdayLongName(wd),
 		}
 	}
 	return out
@@ -249,12 +250,14 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			Key      string `json:"key"`
 			FullName string `json:"full_name"`
 			State    string `json:"state"`
+			TypeCode string `json:"type_code"`
 		} `json:"soldiers"`
 	}
 	if err := json.Unmarshal(soldiersRow.Value, &soldiersDoc); err != nil {
 		return nil, 400, err.Error(), err
 	}
 	var keys []string
+	idToType := map[string]string{}
 	for _, sol := range soldiersDoc.Soldiers {
 		id := sol.ID
 		if id == "" {
@@ -264,8 +267,12 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			continue
 		}
 		keys = append(keys, id)
+		if tc := strings.TrimSpace(sol.TypeCode); tc != "" {
+			idToType[id] = tc
+		}
 	}
 	keys = availability.RosterFromIDs(keys)
+	typeCodes := guardsched.TypeCodesForRoster(keys, idToType)
 	if len(keys) < 1 {
 		return nil, 400, `{"error":"need at least one soldier"}`, fmt.Errorf("no soldiers")
 	}
@@ -291,7 +298,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	recs, stats, trialMeta, err := guardsched.RunSimulationBestOfZoneConfig(
 		zc, len(keys), body.Days, trials, seedPtr,
 		minFreeH, true, 0, 2, minCool, bandRel,
-		planDayStartHour, availChecker,
+		planDayStartHour, availChecker, &anchor, typeCodes,
 	)
 	if err != nil {
 		return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
@@ -326,7 +333,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
 			"plan_day_start":                 planDayStartStr,
 			"plan_day_start_hour":            planDayStartHour,
-			"plan_days":                      buildPlanDaysMeta(anchor, body.Days),
+			"plan_days":                      buildPlanDaysMeta(anchor, body.Days, planDayStartHour),
 		},
 	}, 0, "", nil
 }

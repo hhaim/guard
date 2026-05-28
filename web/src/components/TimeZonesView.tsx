@@ -1,10 +1,10 @@
-import { Braces, Plus } from "lucide-react";
+import { Braces, Plus, Save } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { DecimalNumField } from "./DecimalNumField";
 import { useDevPanel } from "../context/AppStateContext";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
 import { emptyTimeBand, zonesDocToYamlObject, type TimeBand } from "../lib/zones";
 import { ContactsRowEditButton } from "./ContactsRowEdit";
-import { ConfigSaveBar } from "./ConfigSaveBar";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { ZoneEditSheet } from "./ZoneEditSheet";
 import { ZonesYamlToolbar } from "./ZonesYamlToolbar";
@@ -73,6 +73,19 @@ export function TimeZonesView() {
     );
   }
 
+  const tzStatusLabel =
+    saveM.isPending
+      ? "Saving time zones…"
+      : saveM.isSuccess && !dirty
+        ? "Time zones saved"
+        : saveM.isError
+          ? "Time zones save failed"
+          : dirty
+            ? "Time zones pending save…"
+            : "";
+
+  const saveDisabled = !!jsonError || slotsQ.isLoading || !dirty;
+
   return (
     <>
       <header className="contacts-toolbar">
@@ -80,7 +93,7 @@ export function TimeZonesView() {
           <h2 className="contacts-title">Time zones</h2>
           <p className="contacts-count">
             Fairness bands (YAML) · {doc.time_zones.length} zones
-            {dirty ? " · unsaved" : ""}
+            {tzStatusLabel ? ` · ${tzStatusLabel}` : ""}
           </p>
         </div>
         <div className="contacts-toolbar-actions">
@@ -111,6 +124,37 @@ export function TimeZonesView() {
       </header>
 
       <ZonesYamlToolbar disabled={slotsQ.isLoading} doc={doc} onImport={(d) => replaceDoc(d)} />
+
+      <div className="btn-row">
+        <button
+          type="button"
+          className="btn btn-filled"
+          disabled={saveDisabled || saveM.isPending}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            saveM.mutate();
+          }}
+        >
+          <Save size={18} strokeWidth={2} />
+          Save time zones
+        </button>
+        {dirty && (
+          <button
+            type="button"
+            className="btn btn-plain"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              resetToServer();
+            }}
+          >
+            Discard
+          </button>
+        )}
+      </div>
+      {(saveM.isError || jsonError) && (
+        <p className="msg-err">{saveM.isError ? (saveM.error as Error).message : jsonError}</p>
+      )}
+      {saveM.isSuccess && !dirty && <p className="msg-ok">Time zones saved.</p>}
 
       {loadError && <div className="err glass-card">{loadError}</div>}
 
@@ -160,16 +204,6 @@ export function TimeZonesView() {
 
       <p className="contacts-hint">Double-click a row to edit, or tap the › button</p>
 
-      <ConfigSaveBar
-        label="Save time zones"
-        dirty={dirty}
-        disabled={!!jsonError || slotsQ.isLoading}
-        pending={saveM.isPending}
-        error={saveM.isError ? (saveM.error as Error).message : jsonError}
-        success={saveM.isSuccess}
-        onSave={() => saveM.mutate()}
-        onDiscard={resetToServer}
-      />
       {slotsQ.data && (
         <p className="meta-line">
           Slots config v{slotsQ.data.version} · updated {new Date(slotsQ.data.updated_at).toLocaleString()}
@@ -258,20 +292,12 @@ export function TimeZonesView() {
                 }}
               />
             </div>
-            <div className="settings-row">
-              <label className="settings-row-label">
-                <span className="title">Weight</span>
-              </label>
-              <input
-                className="settings-input"
-                inputMode="decimal"
-                value={String(edit.draft.weight)}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  if (Number.isFinite(n)) setEdit({ ...edit, draft: { ...edit.draft, weight: n } });
-                }}
-              />
-            </div>
+            <DecimalNumField
+              label="Weight"
+              value={edit.draft.weight}
+              inputClassName="settings-input"
+              onChange={(weight) => setEdit({ ...edit, draft: { ...edit.draft, weight } })}
+            />
           </section>
         </ZoneEditSheet>
       )}

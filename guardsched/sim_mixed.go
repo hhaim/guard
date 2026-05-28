@@ -3,9 +3,10 @@ package guardsched
 import (
 	"fmt"
 	"math"
+	"time"
 )
 
-// RunSimulationZoneConfig runs the mixed-pattern scheduler (full_day → windowed → rotating).
+// RunSimulationZoneConfig runs full_day_team → full_day → windowed → rotating.
 func RunSimulationZoneConfig(
 	zone *ZoneConfig,
 	numSoldiers, days int,
@@ -18,6 +19,8 @@ func RunSimulationZoneConfig(
 	bandRelative float64,
 	planDayStartHour int,
 	avail AvailabilityChecker,
+	anchor *time.Time,
+	typeCodes []string,
 ) ([]*AssignmentRecord, *SimulationStats, error) {
 	slotsPerBlock := zone.SlotsPerBlock()
 	if numSoldiers < slotsPerBlock {
@@ -73,6 +76,31 @@ func RunSimulationZoneConfig(
 		kRest = 0
 	}
 
+	// --- full_day_team ---
+	for day := 0; day < days; day++ {
+		clear2D(deltasLoc)
+		clear1D(deltasG)
+		clear2D(deltasTime)
+		for sidx := 0; sidx < slotsPerBlock; sidx++ {
+			if zone.Slots[sidx].Pattern != "full_day_team" {
+				continue
+			}
+			if slotDisabledForDay(zone, sidx, day, planDayStartHour, anchor) {
+				continue
+			}
+			locI := zone.Slots[sidx].LocationIndex
+			tid := zone.Locations[locI].TypeID
+			cfg := zone.FullDayTeamSpecs[tid]
+			if err := fillFullDayTeamPost(
+				zone, day, sidx, locI, cfg, soldiers, typeCodes, busy,
+				dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
+				B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, &assignments,
+			); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
 	// --- full_day ---
 	for day := 0; day < days; day++ {
 		clear2D(deltasLoc)
@@ -82,53 +110,71 @@ func RunSimulationZoneConfig(
 			if zone.Slots[sidx].Pattern != "full_day" {
 				continue
 			}
+			if slotDisabledForDay(zone, sidx, day, planDayStartHour, anchor) {
+				continue
+			}
 			locI := zone.Slots[sidx].LocationIndex
 			tid := zone.Locations[locI].TypeID
 			cfg := zone.FullDaySpecs[tid]
 			sh0, sh1 := cfg.StartH, cfg.EndH
-			L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, sh0, sh1, false, cfg.RestAfterH)
+			L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, sh0, sh1, false, cfg.RestAfterH, planDayStartHour)
 			lw := zone.Locations[locI].Weight
 			wm := cfg.WeightMult
 			rawActive := float64(sh1 - sh0 + 1)
 			b0, b1 := dutyBlocksInclusiveWallHours(sh, sh0, sh1)
 			dutyW := b1 - b0 + 1
-			var pool []*Soldier
-			for _, s := range soldiers {
-				if !anyBusySpan(busy, s.Idx, L0, span, B, days) &&
-					soldierAvail(avail, s.Idx, day, func() bool {
-						return avail.AvailDutyWallHours(s.Idx, day, sh0, sh1+1)
-					}) {
-					pool = append(pool, s)
-				}
-			}
-			if len(pool) == 0 {
-				return nil, nil, fmt.Errorf("%w: full_day cannot fill day %d slot %d", ErrRestConstraint, day+1, sidx+1)
+			nReq := cfg.Headcount
+			if nReq < 1 {
+				nReq = 1
 			}
 			clear2D(deltasLoc)
 			clear2D(deltasTime)
 			clear1D(deltasG)
 			timeMid := timeCategoryForHour((sh0+sh1)/2, simZ)
-			chosen := pickSoldier(pool, locI, timeMid, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, nil)
-			totW := 0.0
-			for h := sh0; h <= sh1; h++ {
-				tj := timeCategoryForHour(h, simZ)
-				tw := zone.TimeBands[tj].Weight
-				wpart := lw * tw * wm
-				totW += wpart
-				chosen.addAssignment(locI, tj, wpart, 1.0)
+			poolFn := func(assigned []*Soldier) []*Soldier {
+				var pool []*Soldier
+				for _, s := range soldiers {
+					if containsSoldier(assigned, s) {
+						continue
+					}
+					if !anyBusySpan(busy, s.Idx, L0, span, B, days) &&
+						soldierAvail(avail, s.Idx, day, func() bool {
+							return avail.AvailDutyWallHours(s.Idx, day, sh0, sh1+1)
+						}) {
+						pool = append(pool, s)
+					}
+				}
+				return pool
 			}
-			busySpanSet(busy, chosen.Idx, L0, span, B, days)
-			dailyRawLoc[day][chosen.Idx][locI] += rawActive
-			for h := sh0; h <= sh1; h++ {
-				tj := timeCategoryForHour(h, simZ)
-				dailyRawTime[day][chosen.Idx][tj] += 1.0
+			chosenList, err := pickSoldiersForSlot(
+				nReq, poolFn, locI, timeMid, deltasLoc, deltasTime, deltasG, r,
+				bandRelative, balanceTotalHours, totalHoursSlack, nil,
+			)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%w: full_day cannot fill day %d slot %d: %v", ErrRestConstraint, day+1, sidx+1, err)
 			}
-			assignments = append(assignments, &AssignmentRecord{
-				Day: day, CalendarBlock: b0, StartHour: int(float64(b0) * sh), Slot: sidx,
-				SoldierIdx: chosen.Idx, LocI: locI, TimeJ: timeMid, Weight: totW, RawHours: rawActive,
-				Kind: "full_day", Rowspan: dutyW, WinStartBlock: b0, WinEndBlock: b1,
-				LinearBusySpanBlocks: span,
-			})
+			for _, chosen := range chosenList {
+				totW := 0.0
+				for h := sh0; h <= sh1; h++ {
+					tj := timeCategoryForHour(h, simZ)
+					tw := zone.TimeBands[tj].Weight
+					wpart := lw * tw * wm
+					totW += wpart
+					chosen.addAssignment(locI, tj, wpart, 1.0)
+				}
+				busySpanSet(busy, chosen.Idx, L0, span, B, days)
+				dailyRawLoc[day][chosen.Idx][locI] += rawActive
+				for h := sh0; h <= sh1; h++ {
+					tj := timeCategoryForHour(h, simZ)
+					dailyRawTime[day][chosen.Idx][tj] += 1.0
+				}
+				assignments = append(assignments, &AssignmentRecord{
+					Day: day, CalendarBlock: b0, StartHour: int(float64(b0) * sh), Slot: sidx,
+					SoldierIdx: chosen.Idx, LocI: locI, TimeJ: timeMid, Weight: totW, RawHours: rawActive,
+					Kind: "full_day", Rowspan: dutyW, WinStartBlock: b0, WinEndBlock: b1,
+					LinearBusySpanBlocks: span,
+				})
+			}
 		}
 	}
 
@@ -141,6 +187,9 @@ func RunSimulationZoneConfig(
 			if zone.Slots[sidx].Pattern != "windowed_slots" {
 				continue
 			}
+			if slotDisabledForDay(zone, sidx, day, planDayStartHour, anchor) {
+				continue
+			}
 			locI := zone.Slots[sidx].LocationIndex
 			tid := zone.Locations[locI].TypeID
 			wins := zone.WindowedSpecs[tid]
@@ -148,7 +197,6 @@ func RunSimulationZoneConfig(
 			lw := zone.Locations[locI].Weight
 			var bestKey []float64
 			var bestWI int
-			var bestSol *Soldier
 			var bestWdef *WindowSpec
 			var bestTotW float64
 			var bestWname string
@@ -161,7 +209,7 @@ func RunSimulationZoneConfig(
 				if rawActive <= 0 {
 					continue
 				}
-				L0w, spanw := linearBusySpanDutyHoursPlusRest(day, B, sh, h0, h1x, true, restH)
+				L0w, spanw := linearBusySpanDutyHoursPlusRest(day, B, sh, h0, h1x, true, restH, planDayStartHour)
 				var pool []*Soldier
 				for _, s := range soldiers {
 					if !anyBusySpan(busy, s.Idx, L0w, spanw, B, days) &&
@@ -197,7 +245,6 @@ func RunSimulationZoneConfig(
 					}
 					bestKey = key
 					bestWI = wi
-					bestSol = cand
 					bestWdef = wdef
 					bestTotW = totW
 					bestWname = wname
@@ -207,44 +254,82 @@ func RunSimulationZoneConfig(
 			if !have {
 				return nil, nil, fmt.Errorf("%w: windowed cannot fill day %d slot %d", ErrRestConstraint, day+1, sidx+1)
 			}
-			chosen := bestSol
 			wdef := bestWdef
 			h0, h1x := wdef.H0, wdef.H1Excl
 			wm := wdef.WeightMult
 			rawActive := float64(max(0, h1x-h0))
-			L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, h0, h1x, true, restH)
-			for h := h0; h < h1x; h++ {
-				tj := timeCategoryForHour(h, simZ)
-				tw := zone.TimeBands[tj].Weight
-				wpart := lw * tw * wm
-				chosen.addAssignment(locI, tj, wpart, 1.0)
+			L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, h0, h1x, true, restH, planDayStartHour)
+			nReq := zone.WindowedHeadcount[tid]
+			if nReq < 1 {
+				nReq = 1
 			}
-			busySpanSet(busy, chosen.Idx, L0, span, B, days)
-			dailyRawLoc[day][chosen.Idx][locI] += rawActive
-			for h := h0; h < h1x; h++ {
-				tj := timeCategoryForHour(h, simZ)
-				dailyRawTime[day][chosen.Idx][tj] += 1.0
+			timeMid := timeCategoryForHour(h0, simZ)
+			if h1x > h0+1 {
+				timeMid = timeCategoryForHour((h0+h1x-1)/2, simZ)
+			}
+			clear2D(deltasLoc)
+			clear2D(deltasTime)
+			clear1D(deltasG)
+			poolFn := func(assigned []*Soldier) []*Soldier {
+				var pool []*Soldier
+				for _, s := range soldiers {
+					if containsSoldier(assigned, s) {
+						continue
+					}
+					if !anyBusySpan(busy, s.Idx, L0, span, B, days) &&
+						soldierAvail(avail, s.Idx, day, func() bool {
+							return avail.AvailDutyWallHours(s.Idx, day, h0, h1x)
+						}) {
+						pool = append(pool, s)
+					}
+				}
+				return pool
+			}
+			chosenList, err := pickSoldiersForSlot(
+				nReq, poolFn, locI, timeMid, deltasLoc, deltasTime, deltasG, r,
+				bandRelative, balanceTotalHours, totalHoursSlack, nil,
+			)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%w: windowed cannot fill day %d slot %d: %v", ErrRestConstraint, day+1, sidx+1, err)
 			}
 			b0, b1 := dutyBlocksHalfOpenWallHours(sh, h0, h1x)
 			rowspan := max(1, b1-b0+1)
-			assignments = append(assignments, &AssignmentRecord{
-				Day: day, CalendarBlock: b0, StartHour: int(float64(b0) * sh), Slot: sidx,
-				SoldierIdx: chosen.Idx, LocI: locI, TimeJ: timeCategoryForHour(h0, simZ),
-				Weight: bestTotW, RawHours: rawActive, Kind: "windowed", Rowspan: rowspan,
-				WinStartBlock: b0, WinEndBlock: b1, WindowName: bestWname, LinearBusySpanBlocks: span,
-			})
+			for _, chosen := range chosenList {
+				for h := h0; h < h1x; h++ {
+					tj := timeCategoryForHour(h, simZ)
+					tw := zone.TimeBands[tj].Weight
+					wpart := lw * tw * wm
+					chosen.addAssignment(locI, tj, wpart, 1.0)
+				}
+				busySpanSet(busy, chosen.Idx, L0, span, B, days)
+				dailyRawLoc[day][chosen.Idx][locI] += rawActive
+				for h := h0; h < h1x; h++ {
+					tj := timeCategoryForHour(h, simZ)
+					dailyRawTime[day][chosen.Idx][tj] += 1.0
+				}
+				assignments = append(assignments, &AssignmentRecord{
+					Day: day, CalendarBlock: b0, StartHour: int(float64(b0) * sh), Slot: sidx,
+					SoldierIdx: chosen.Idx, LocI: locI, TimeJ: timeCategoryForHour(h0, simZ),
+					Weight: bestTotW, RawHours: rawActive, Kind: "windowed", Rowspan: rowspan,
+					WinStartBlock: b0, WinEndBlock: b1, WindowName: bestWname, LinearBusySpanBlocks: span,
+				})
+			}
 		}
 	}
 
 	rotIdx := rotatingSlotIndices(slotPatterns)
+	kRestMask := kRest
+	if len(rotIdx) != slotsPerBlock {
+		kRestMask = 0
+	}
 	dfsRotOk := false
 	rotatingDfsTried := false
-	if xCool > 0 && len(rotIdx) == slotsPerBlock && len(rotIdx) > 0 &&
+	if xCool > 0 && len(rotIdx) > 0 &&
 		nChooseK(numSoldiers, len(rotIdx)) <= maxRotatingDfsCombinations {
 		rotatingDfsTried = true
 		dr := new3DBool(days, numSoldiers, blocksPd)
 		nodes := 0
-		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, blocksPd, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, avail, planDayStartHour, sh, &nodes) {
+		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, blocksPd, len(rotIdx), kRestMask, maxConsecutiveDutyBlocks, xCool, avail, planDayStartHour, sh, &nodes) {
 			copy3D(busyRot, dr)
 			dfsRotOk = true
 			for day := 0; day < days; day++ {
@@ -265,35 +350,47 @@ func RunSimulationZoneConfig(
 					clear1D(deltasG)
 					var rotPf prefixFn
 					if xCool > 0 {
-						rotPf = rotatingPrefixKey(busy, busyRot, day, b, blocksPd, days, kRest)
+						rotPf = rotatingPrefixKey(busy, busyRot, day, b, blocksPd, days, kRestMask)
 					}
 					for _, sidx := range rotIdx {
+						if slotDisabledForDay(zone, sidx, day, planDayStartHour, anchor) {
+							continue
+						}
 						locI := zone.Slots[sidx].LocationIndex
 						lw := zone.Locations[locI].Weight
 						weight := sh * lw * tw
-						var pool []*Soldier
-						for _, s := range inBlock {
-							if !containsSoldier(assigned, s) {
-								pool = append(pool, s)
+						nReq := zone.Slots[sidx].SoldiersRequired
+						poolFn := func(already []*Soldier) []*Soldier {
+							var pool []*Soldier
+							for _, s := range inBlock {
+								if !containsSoldier(already, s) && !containsSoldier(assigned, s) {
+									pool = append(pool, s)
+								}
 							}
+							return pool
 						}
-						if len(pool) == 0 {
-							return nil, nil, fmt.Errorf("%w: rotating DFS fill empty pool day %d block %d", ErrRestConstraint, day+1, b+1)
+						chosenList, err := pickSoldiersForSlot(
+							nReq, poolFn, locI, timeJ, deltasLoc, deltasTime, deltasG, r,
+							bandRelative, balanceTotalHours, totalHoursSlack, rotPf,
+						)
+						if err != nil {
+							return nil, nil, fmt.Errorf("%w: rotating DFS fill day %d block %d slot %d: %v", ErrRestConstraint, day+1, b+1, sidx+1, err)
 						}
-						chosen := pickSoldier(pool, locI, timeJ, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, rotPf)
-						assigned = append(assigned, chosen)
-						chosen.addAssignment(locI, timeJ, weight, sh)
-						busy[day][chosen.Idx][b] = true
-						dailyRawLoc[day][chosen.Idx][locI] += sh
-						dailyRawTime[day][chosen.Idx][timeJ] += sh
-						deltasLoc[chosen.Idx][locI] += weight
-						deltasTime[chosen.Idx][timeJ] += weight
-						deltasG[chosen.Idx] += weight
-						assignments = append(assignments, &AssignmentRecord{
-							Day: day, CalendarBlock: b, StartHour: startH, Slot: sidx, SoldierIdx: chosen.Idx,
-							LocI: locI, TimeJ: timeJ, Weight: weight, RawHours: sh, Kind: "rotating",
-							Rowspan: 1, WinStartBlock: b, WinEndBlock: b,
-						})
+						for _, chosen := range chosenList {
+							assigned = append(assigned, chosen)
+							chosen.addAssignment(locI, timeJ, weight, sh)
+							busy[day][chosen.Idx][b] = true
+							dailyRawLoc[day][chosen.Idx][locI] += sh
+							dailyRawTime[day][chosen.Idx][timeJ] += sh
+							deltasLoc[chosen.Idx][locI] += weight
+							deltasTime[chosen.Idx][timeJ] += weight
+							deltasG[chosen.Idx] += weight
+							assignments = append(assignments, &AssignmentRecord{
+								Day: day, CalendarBlock: b, StartHour: startH, Slot: sidx, SoldierIdx: chosen.Idx,
+								LocI: locI, TimeJ: timeJ, Weight: weight, RawHours: sh, Kind: "rotating",
+								Rowspan: 1, WinStartBlock: b, WinEndBlock: b,
+							})
+						}
 					}
 				}
 			}
@@ -312,73 +409,85 @@ func RunSimulationZoneConfig(
 				clear1D(deltasG)
 				var rotPf prefixFn
 				if xCool > 0 {
-					rotPf = rotatingPrefixKey(busy, busyRot, day, b, blocksPd, days, kRest)
+					rotPf = rotatingPrefixKey(busy, busyRot, day, b, blocksPd, days, kRestMask)
 				}
 				for sidx := 0; sidx < slotsPerBlock; sidx++ {
 					if zone.Slots[sidx].Pattern != "rotating" {
 						continue
 					}
+					if slotDisabledForDay(zone, sidx, day, planDayStartHour, anchor) {
+						continue
+					}
 					locI := zone.Slots[sidx].LocationIndex
 					lw := zone.Locations[locI].Weight
 					weight := sh * lw * tw
-					var base []*Soldier
-					for _, s := range soldiers {
-						if containsSoldier(assigned, s) {
-							continue
-						}
-						if soldierMustRestThisBlock(s.Idx, day, b, blocksPd, kRest) {
-							continue
-						}
-						if busy[day][s.Idx][b] {
-							continue
-						}
-						if maxConsecutiveDutyBlocks > 0 &&
-							consecutiveDutyBlocksBefore(busyRot, day, b, s.Idx, blocksPd) >= maxConsecutiveDutyBlocks {
-							continue
-						}
-						if !soldierAvail(avail, s.Idx, day, func() bool {
-							return avail.AvailRotatingBlock(s.Idx, day, b, planDayStartHour, sh)
-						}) {
-							continue
-						}
-						base = append(base, s)
-					}
-					pool := base
-					if xCool > 0 {
-						stats.ShiftCooldownPoolIterations++
-						var filt []*Soldier
-						for _, s := range base {
-							gap := gapFreeBlocksSinceLastDutyBeforeAssign(busyRot, day, b, s.Idx, blocksPd)
-							if gap >= xCool || gap >= largeLinearGap {
-								filt = append(filt, s)
-							} else {
-								stats.ShiftCooldownExclusions++
+					nReq := zone.Slots[sidx].SoldiersRequired
+					poolFn := func(already []*Soldier) []*Soldier {
+						var base []*Soldier
+						for _, s := range soldiers {
+							if containsSoldier(assigned, s) || containsSoldier(already, s) {
+								continue
 							}
+							if soldierMustRestThisBlock(s.Idx, day, b, blocksPd, kRestMask) {
+								continue
+							}
+							if busy[day][s.Idx][b] {
+								continue
+							}
+							if maxConsecutiveDutyBlocks > 0 &&
+								consecutiveDutyBlocksBefore(busyRot, day, b, s.Idx, blocksPd) >= maxConsecutiveDutyBlocks {
+								continue
+							}
+							if !soldierAvail(avail, s.Idx, day, func() bool {
+								return avail.AvailRotatingBlock(s.Idx, day, b, planDayStartHour, sh)
+							}) {
+								continue
+							}
+							base = append(base, s)
 						}
-						pool = filt
+						pool := base
+						if xCool > 0 {
+							stats.ShiftCooldownPoolIterations++
+							var filt []*Soldier
+							for _, s := range base {
+								gap := gapFreeBlocksSinceLastDutyBeforeAssign(busyRot, day, b, s.Idx, blocksPd)
+								if gap >= xCool || gap >= largeLinearGap {
+									filt = append(filt, s)
+								} else {
+									stats.ShiftCooldownExclusions++
+								}
+							}
+							pool = filt
+						}
+						return pool
 					}
-					if len(pool) == 0 {
+					chosenList, err := pickSoldiersForSlot(
+						nReq, poolFn, locI, timeJ, deltasLoc, deltasTime, deltasG, r,
+						bandRelative, balanceTotalHours, totalHoursSlack, rotPf,
+					)
+					if err != nil {
 						extra := ""
 						if rotatingDfsTried && !dfsRotOk {
-							extra = " (all-rotating DFS found no feasible mask)"
+							extra = " (rotating DFS found no feasible mask)"
 						}
-						return nil, nil, fmt.Errorf("%w: rotating cannot fill day %d block %d slot %d%s", ErrRestConstraint, day+1, b+1, sidx+1, extra)
+						return nil, nil, fmt.Errorf("%w: rotating cannot fill day %d block %d slot %d%s: %v", ErrRestConstraint, day+1, b+1, sidx+1, extra, err)
 					}
-					chosen := pickSoldier(pool, locI, timeJ, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, rotPf)
-					assigned = append(assigned, chosen)
-					chosen.addAssignment(locI, timeJ, weight, sh)
-					busy[day][chosen.Idx][b] = true
-					busyRot[day][chosen.Idx][b] = true
-					dailyRawLoc[day][chosen.Idx][locI] += sh
-					dailyRawTime[day][chosen.Idx][timeJ] += sh
-					deltasLoc[chosen.Idx][locI] += weight
-					deltasTime[chosen.Idx][timeJ] += weight
-					deltasG[chosen.Idx] += weight
-					assignments = append(assignments, &AssignmentRecord{
-						Day: day, CalendarBlock: b, StartHour: startH, Slot: sidx, SoldierIdx: chosen.Idx,
-						LocI: locI, TimeJ: timeJ, Weight: weight, RawHours: sh, Kind: "rotating",
-						Rowspan: 1, WinStartBlock: b, WinEndBlock: b,
-					})
+					for _, chosen := range chosenList {
+						assigned = append(assigned, chosen)
+						chosen.addAssignment(locI, timeJ, weight, sh)
+						busy[day][chosen.Idx][b] = true
+						busyRot[day][chosen.Idx][b] = true
+						dailyRawLoc[day][chosen.Idx][locI] += sh
+						dailyRawTime[day][chosen.Idx][timeJ] += sh
+						deltasLoc[chosen.Idx][locI] += weight
+						deltasTime[chosen.Idx][timeJ] += weight
+						deltasG[chosen.Idx] += weight
+						assignments = append(assignments, &AssignmentRecord{
+							Day: day, CalendarBlock: b, StartHour: startH, Slot: sidx, SoldierIdx: chosen.Idx,
+							LocI: locI, TimeJ: timeJ, Weight: weight, RawHours: sh, Kind: "rotating",
+							Rowspan: 1, WinStartBlock: b, WinEndBlock: b,
+						})
+					}
 				}
 			}
 		}

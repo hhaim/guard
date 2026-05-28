@@ -10,9 +10,19 @@ import (
 
 // FullDaySpec holds parsed full_day slots_types config.
 type FullDaySpec struct {
-	StartH, EndH     int
-	RestAfterH       float64
-	WeightMult       float64
+	StartH, EndH int
+	RestAfterH   float64
+	WeightMult   float64
+	Headcount    int // soldiers per day for each slot row of this type (default 1)
+}
+
+// FullDayTeamSpec holds parsed full_day_team slots_types config.
+type FullDayTeamSpec struct {
+	StartH, EndH int
+	RestAfterH   float64
+	WeightMult   float64
+	Headcount    int
+	TypeQuotas   map[string]int
 }
 
 // WindowSpec is one window in windowed_slots.
@@ -42,9 +52,10 @@ type ZoneTimeBand struct {
 
 // ZoneSlot is one concurrent slot row from YAML `slots` (order = slot index).
 type ZoneSlot struct {
-	LocationIndex int    // index into Locations
-	DisplayName   string // slot label: full_name or name from YAML
-	Pattern       string // rotating | full_day | windowed_slots (from location type)
+	LocationIndex    int    // index into Locations
+	DisplayName      string // slot label: full_name or name from YAML
+	Pattern          string // rotating | full_day | full_day_team | windowed_slots
+	SoldiersRequired int    // per-slot demand for rotating only (default 1); full_day/windowed use type headcount
 }
 
 // ZoneConfig is schema v2 YAML (mixed patterns).
@@ -55,8 +66,12 @@ type ZoneConfig struct {
 	ShiftHours        float64
 	SchemaVersion     int
 	FullDaySpecs      map[string]FullDaySpec
-	WindowedSpecs     map[string][]WindowSpec
-	WindowedRestHours map[string]float64
+	FullDayTeamSpecs  map[string]FullDayTeamSpec
+	WindowedSpecs      map[string][]WindowSpec
+	WindowedRestHours  map[string]float64
+	WindowedHeadcount  map[string]int
+	// DisabledWeekdays[typeID] = weekday indices 0=Sunday..6=Saturday when slot type is off.
+	DisabledWeekdays map[string][]int
 }
 
 // ToZone builds the minimal Zone used by timeCategoryForHour and rotating sim.
@@ -108,8 +123,11 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 	}
 	typePattern := map[string]string{}
 	fullDay := map[string]FullDaySpec{}
+	fullDayTeam := map[string]FullDayTeamSpec{}
+	disabledWD := map[string][]int{}
 	windowed := map[string][]WindowSpec{}
 	winRest := map[string]float64{}
+	winHeadcount := map[string]int{}
 	for _, row := range stypes {
 		m, ok := row.(map[string]any)
 		if !ok {
@@ -120,34 +138,54 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		if tid == "" {
 			return nil, fmt.Errorf("slots_types: missing id")
 		}
+		if dw, ok := m["disabled_weekdays"]; ok {
+			wds, err := ParseDisabledWeekdays(dw)
+			if err != nil {
+				return nil, fmt.Errorf("slots_types %q: %w", tid, err)
+			}
+			if len(wds) > 0 {
+				disabledWD[tid] = wds
+			}
+		}
 		switch pat {
 		case "rotating":
 			typePattern[tid] = pat
 		case "full_day":
 			typePattern[tid] = pat
+			fd, err := parseFullDaySpecFromConfig(m["config"], tid, "full_day", true)
+			if err != nil {
+				return nil, err
+			}
+			fullDay[tid] = fd
+		case "full_day_team":
+			typePattern[tid] = pat
 			cfg, _ := m["config"].(map[string]any)
 			if cfg == nil {
-				return nil, fmt.Errorf("full_day %q: missing config", tid)
+				return nil, fmt.Errorf("full_day_team %q: missing config", tid)
 			}
-			sh0, sh1, err := parseInclusiveFullDayHours(fmt.Sprint(cfg["start"]), fmt.Sprint(cfg["end"]))
+			fd, err := parseFullDaySpecFromConfig(cfg, tid, "full_day_team", false)
 			if err != nil {
-				return nil, fmt.Errorf("full_day %q: %w", tid, err)
+				return nil, err
 			}
-			ra := 6.0
-			if v, ok := cfg["rest_after_hours"]; ok {
-				ra = floatFromAny(v)
-			} else if v, ok := cfg["rest_after"]; ok {
-				ra = floatFromAny(v)
+			hc := int(intFromAny(cfg["headcount"], 0))
+			if hc < 1 {
+				return nil, fmt.Errorf("full_day_team %q: headcount must be >= 1", tid)
 			}
-			wm := 1.0
-			if v, ok := cfg["weight_multiplier"]; ok {
-				wm = floatFromAny(v)
-			} else if v, ok := cfg["weight_mult"]; ok {
-				wm = floatFromAny(v)
-			} else if v, ok := cfg["w_mult"]; ok {
-				wm = floatFromAny(v)
+			quotas, err := parseTypeQuotas(cfg["type_quotas"])
+			if err != nil {
+				return nil, fmt.Errorf("full_day_team %q: %w", tid, err)
 			}
-			fullDay[tid] = FullDaySpec{StartH: sh0, EndH: sh1, RestAfterH: ra, WeightMult: wm}
+			sumQ := 0
+			for _, q := range quotas {
+				sumQ += q
+			}
+			if sumQ > hc {
+				return nil, fmt.Errorf("full_day_team %q: sum(type_quotas)=%d exceeds headcount=%d", tid, sumQ, hc)
+			}
+			fullDayTeam[tid] = FullDayTeamSpec{
+				StartH: fd.StartH, EndH: fd.EndH, RestAfterH: fd.RestAfterH, WeightMult: fd.WeightMult,
+				Headcount: hc, TypeQuotas: quotas,
+			}
 		case "windowed_slots":
 			typePattern[tid] = pat
 			cfg, _ := m["config"].(map[string]any)
@@ -178,6 +216,11 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 				wl = append(wl, WindowSpec{Name: name, H0: h0, H1Excl: h1x, WeightMult: wm})
 			}
 			windowed[tid] = wl
+			hc := int(intFromAny(cfg["headcount"], 1))
+			if hc < 1 {
+				return nil, fmt.Errorf("windowed_slots %q: headcount must be >= 1", tid)
+			}
+			winHeadcount[tid] = hc
 			rh := 6.0
 			if v, ok := m["rest_after_hours"]; ok {
 				rh = floatFromAny(v)
@@ -223,17 +266,22 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		locIDToIdx[zid] = i
 	}
 
-	slotLoc, slotNames, err := parseSlotLocationIndices(data, slotsPerBlock, locIDToIdx)
+	slotLoc, slotNames, slotSoldiersReq, err := parseSlotLocationIndices(data, slotsPerBlock, locIDToIdx)
 	if err != nil {
 		return nil, err
 	}
 	slots := make([]ZoneSlot, len(slotLoc))
 	for sidx, li := range slotLoc {
 		ltid := locations[li].TypeID
+		nReq := slotSoldiersReq[sidx]
+		if nReq < 1 {
+			nReq = 1
+		}
 		slots[sidx] = ZoneSlot{
-			LocationIndex: li,
-			DisplayName:   slotNames[sidx],
-			Pattern:       typePattern[ltid],
+			LocationIndex:    li,
+			DisplayName:      slotNames[sidx],
+			Pattern:          typePattern[ltid],
+			SoldiersRequired: nReq,
 		}
 	}
 
@@ -292,10 +340,86 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		ShiftHours:        shEff,
 		SchemaVersion:     int(intFromAny(data["schema_version"], 2)),
 		FullDaySpecs:      fullDay,
-		WindowedSpecs:     windowed,
-		WindowedRestHours: winRest,
+		FullDayTeamSpecs:  fullDayTeam,
+		WindowedSpecs:      windowed,
+		WindowedRestHours:  winRest,
+		WindowedHeadcount:  winHeadcount,
+		DisabledWeekdays:  disabledWD,
 	}
 	return zc, nil
+}
+
+func parseFullDaySpecFromConfig(cfgAny any, tid, kind string, requireHeadcount bool) (FullDaySpec, error) {
+	cfg, _ := cfgAny.(map[string]any)
+	if cfg == nil {
+		return FullDaySpec{}, fmt.Errorf("%s %q: missing config", kind, tid)
+	}
+	sh0, sh1, err := parseInclusiveFullDayHours(fmt.Sprint(cfg["start"]), fmt.Sprint(cfg["end"]))
+	if err != nil {
+		return FullDaySpec{}, fmt.Errorf("%s %q: %w", kind, tid, err)
+	}
+	ra := 6.0
+	if v, ok := cfg["rest_after_hours"]; ok {
+		ra = floatFromAny(v)
+	} else if v, ok := cfg["rest_after"]; ok {
+		ra = floatFromAny(v)
+	}
+	if ra < 0 {
+		return FullDaySpec{}, fmt.Errorf("%s %q: rest_after_hours must be >= 0", kind, tid)
+	}
+	wm := 1.0
+	if v, ok := cfg["weight_multiplier"]; ok {
+		wm = floatFromAny(v)
+	} else if v, ok := cfg["weight_mult"]; ok {
+		wm = floatFromAny(v)
+	} else if v, ok := cfg["w_mult"]; ok {
+		wm = floatFromAny(v)
+	}
+	hc := 1
+	if requireHeadcount {
+		hc = int(intFromAny(cfg["headcount"], 1))
+		if hc < 1 {
+			return FullDaySpec{}, fmt.Errorf("%s %q: headcount must be >= 1", kind, tid)
+		}
+	}
+	return FullDaySpec{StartH: sh0, EndH: sh1, RestAfterH: ra, WeightMult: wm, Headcount: hc}, nil
+}
+
+func parseTypeQuotas(raw any) (map[string]int, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("type_quotas must be a mapping")
+	}
+	out := make(map[string]int, len(m))
+	for k, v := range m {
+		code := strings.TrimSpace(k)
+		if code == "" || code == "*" {
+			return nil, fmt.Errorf("type_quotas: invalid key %q", k)
+		}
+		q := int(intFromAny(v, 0))
+		if q < 1 {
+			return nil, fmt.Errorf("type_quotas[%q]: quota must be >= 1", code)
+		}
+		out[code] = q
+	}
+	return out, nil
+}
+
+// IsSlotTypeDisabledOnWeekday reports whether typeID is off on weekday (0=Sunday..6=Saturday).
+func (z *ZoneConfig) IsSlotTypeDisabledOnWeekday(typeID string, weekday int) bool {
+	wds, ok := z.DisabledWeekdays[typeID]
+	if !ok {
+		return false
+	}
+	for _, w := range wds {
+		if w == weekday {
+			return true
+		}
+	}
+	return false
 }
 
 // zoneLocYAMLList returns zone_loc entries, with legacy keys locations / location_zones.
@@ -309,42 +433,51 @@ func zoneLocYAMLList(data map[string]any) any {
 	return data["location_zones"]
 }
 
-func parseSlotLocationIndices(data map[string]any, slotsPerBlock int, locIDToIdx map[string]int) ([]int, []string, error) {
+func parseSlotLocationIndices(data map[string]any, slotsPerBlock int, locIDToIdx map[string]int) ([]int, []string, []int, error) {
 	raw := data["slots"]
 	if raw == nil {
 		raw = data["slot_locations"]
 	}
 	rows, ok := raw.([]any)
 	if !ok {
-		return nil, nil, fmt.Errorf("slots: must be a list")
+		return nil, nil, nil, fmt.Errorf("slots: must be a list")
 	}
 	if len(rows) != slotsPerBlock {
-		return nil, nil, fmt.Errorf("slots: length %d != slotsPerBlock %d", len(rows), slotsPerBlock)
+		return nil, nil, nil, fmt.Errorf("slots: length %d != slotsPerBlock %d", len(rows), slotsPerBlock)
 	}
 	out := make([]int, slotsPerBlock)
 	names := make([]string, slotsPerBlock)
+	nReq := make([]int, slotsPerBlock)
 	for i, entry := range rows {
 		var lid, disp string
+		req := 1
 		switch e := entry.(type) {
 		case string:
 			lid = strings.TrimSpace(e)
 		case map[string]any:
 			lid = yamlStrField(e, "location_id", "id")
 			disp = yamlStrField(e, "full_name", "name")
+			if v, ok := e["soldiers_required"]; ok {
+				req = int(intFromAny(v, 1))
+				if req < 1 {
+					return nil, nil, nil, fmt.Errorf("slots[%d]: soldiers_required must be >= 1", i)
+				}
+			}
 		default:
-			return nil, nil, fmt.Errorf("slots[%d]: string or mapping", i)
+			return nil, nil, nil, fmt.Errorf("slots[%d]: string or mapping", i)
 		}
 		if lid == "" {
-			return nil, nil, fmt.Errorf("slots[%d]: missing location_id", i)
+			return nil, nil, nil, fmt.Errorf("slots[%d]: missing location_id", i)
 		}
 		li, ok := locIDToIdx[lid]
 		if !ok {
-			return nil, nil, fmt.Errorf("slots[%d]: unknown location_id %q", i, lid)
+			return nil, nil, nil, fmt.Errorf("slots[%d]: unknown location_id %q", i, lid)
 		}
 		out[i] = li
 		names[i] = disp
+		nReq[i] = req
 	}
-	return out, names, nil
+	return out, names, nReq, nil
 }
 
 // yamlStrField returns the first non-empty string field from a YAML mapping (ignores null / "<nil>").

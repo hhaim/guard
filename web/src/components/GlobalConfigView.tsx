@@ -148,8 +148,66 @@ export function GlobalConfigView() {
   });
   const planPreview = planPreviewQ.data;
 
+  const globalStatusLabel =
+    saveM.isPending
+      ? "Saving global…"
+      : saveM.isSuccess && !dirty
+        ? "Global saved"
+        : saveM.isError
+          ? "Global save failed"
+          : dirty
+            ? "Global pending save…"
+            : "";
+
+  const saveDisabled = saveM.isPending || !!jsonError || globalQ.isLoading || !dirty;
+
   return (
     <>
+      <header className="contacts-toolbar">
+        <div className="contacts-toolbar-text">
+          <h2 className="contacts-title">Global</h2>
+          <p className="contacts-count">
+            Simulation, randomness, and plan-day settings
+            {globalStatusLabel ? ` · ${globalStatusLabel}` : ""}
+          </p>
+        </div>
+      </header>
+
+      <div className="btn-row">
+        <button
+          type="button"
+          className="btn btn-filled"
+          disabled={saveDisabled}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            saveM.mutate();
+          }}
+        >
+          <Save size={18} strokeWidth={2} />
+          Save global
+        </button>
+        {dirty && (
+          <button
+            type="button"
+            className="btn btn-plain"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              if (globalQ.data) {
+                setFormData(formFromServerValue(globalQ.data.value));
+                setJsonOverride(null);
+                setDirty(false);
+              }
+            }}
+          >
+            Discard
+          </button>
+        )}
+      </div>
+      {(saveM.isError || jsonError) && (
+        <p className="msg-err">{saveM.isError ? (saveM.error as Error).message : jsonError}</p>
+      )}
+      {saveM.isSuccess && !dirty && <p className="msg-ok">Global saved.</p>}
+
       <div className="global-form-grid">
         <section className="glass-card" aria-label="Simulation">
           <h2 className="settings-section-header">Simulation</h2>
@@ -214,41 +272,8 @@ export function GlobalConfigView() {
         </section>
       </div>
 
-      <div className="btn-row">
-        <button
-          type="button"
-          className="btn btn-filled"
-          disabled={saveM.isPending || !!jsonError || globalQ.isLoading}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            saveM.mutate();
-          }}
-        >
-          <Save size={18} strokeWidth={2} />
-          Save global
-        </button>
-        {dirty && (
-          <button
-            type="button"
-            className="btn btn-plain"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              if (globalQ.data) {
-                setFormData(formFromServerValue(globalQ.data.value));
-                setJsonOverride(null);
-                setDirty(false);
-              }
-            }}
-          >
-            Discard
-          </button>
-        )}
-      </div>
-
       {globalQ.isLoading && <p className="meta-line">Loading configuration…</p>}
       {globalQ.isError && <p className="msg-err">{(globalQ.error as Error).message}</p>}
-      {saveM.isError && <p className="msg-err">{(saveM.error as Error).message}</p>}
-      {saveM.isSuccess && <p className="msg-ok">Saved.</p>}
       {globalQ.data && (
         <p className="meta-line">
           Version {globalQ.data.version} · updated {new Date(globalQ.data.updated_at).toLocaleString()}

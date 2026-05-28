@@ -12,13 +12,13 @@ sys.path.insert(0, str(ROOT))
 
 import guard_scheduler_sim as g  # noqa: E402
 
-ZONES_S1 = ROOT / "zones_s1.yaml"
+ZONES_S1_GATE4 = ROOT / "testdata" / "zones_s1_gate4.yaml"
 PLAN_START = 5
 
 
 def test_block_windows_plan_day_start_s1() -> None:
     """Block grid for zones_s1 (4h shifts, start 05:00): b0=05–09, b5=01–05 next day."""
-    zone = g.load_zone_config(ZONES_S1, 4)
+    zone = g.load_zone_config(ZONES_S1_GATE4, 4)
     sh = zone.shift_hours
     blocks = g.calendar_blocks_per_day(sh)
     wins = [g.format_block_window(g.block_start_hour(PLAN_START, b, sh), sh) for b in range(blocks)]
@@ -28,7 +28,7 @@ def test_block_windows_plan_day_start_s1() -> None:
 
 
 def test_day_schedule_matrix_html_plan_day_start() -> None:
-    zone = g.load_zone_config(ZONES_S1, 4)
+    zone = g.load_zone_config(ZONES_S1_GATE4, 4)
     html = g.build_day_schedule_matrix_html(
         [],
         days=1,

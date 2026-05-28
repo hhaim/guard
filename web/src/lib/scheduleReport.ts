@@ -7,7 +7,7 @@ import type { ZonesDoc } from "./zones";
 import {
   blockStartHour,
   blockTimelineStartHour,
-  calendarDateForDay,
+  weekdayIndexForPlanDayStart,
   formatWallClockHour,
   planDayTitle,
   weekdayLongName,
@@ -24,6 +24,8 @@ export type ZoneReportView = {
   locIds: string[];
   slotLabels: string[];
   slotLocIndices: number[];
+  slotTypeIds: string[];
+  disabledWeekdays: Record<string, number[]>;
   timeNames: string[];
   timeFrom: number[];
   timeTo: number[];
@@ -44,8 +46,11 @@ export type SoldierBlockRow = {
 export type MatrixCell = {
   soldierIdx: number | null;
   label: string;
+  soldierIndices?: number[];
+  labels?: string[];
   rowspan?: number;
   skip?: boolean;
+  disabled?: boolean;
 };
 
 export type MatrixRow = {
@@ -119,22 +124,41 @@ export function soldierLabel(
 export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneReportView {
   const locById = new Map(doc.zone_loc.map((z) => [z.id, z]));
   const patternByType = new Map(doc.slots_types.map((st) => [st.id, st.pattern]));
+  const weekdayNameToIndex: Record<string, number> = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6,
+  };
+  const disabledWeekdays: Record<string, number[]> = {};
+  for (const st of doc.slots_types) {
+    if (st.disabled_weekdays?.length) {
+      disabledWeekdays[st.id] = st.disabled_weekdays.map((n) => weekdayNameToIndex[n] ?? -1).filter((i) => i >= 0);
+    }
+  }
   const locNames = doc.zone_loc.map((z) => z.name || z.id);
   const locIds = doc.zone_loc.map((z) => z.id);
 
   const slotLabels: string[] = [];
   const slotLocIndices: number[] = [];
+  const slotTypeIds: string[] = [];
   for (let j = 0; j < slotsPerBlock; j++) {
     const slot = doc.slots[j];
     if (!slot) {
       slotLabels.push(`Slot ${j + 1}`);
       slotLocIndices.push(0);
+      slotTypeIds.push("");
       continue;
     }
-    const loc = locById.get(slot.location_id);
     const li = doc.zone_loc.findIndex((z) => z.id === slot.location_id);
     slotLocIndices.push(li >= 0 ? li : 0);
     slotLabels.push(slotDisplayLabel(slot));
+    const loc = li >= 0 ? doc.zone_loc[li] : undefined;
+    slotTypeIds.push(loc?.type ?? "");
+    void patternByType;
   }
 
   return {
@@ -145,6 +169,8 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneR
     locIds,
     slotLabels,
     slotLocIndices,
+    slotTypeIds,
+    disabledWeekdays,
     timeNames: doc.time_zones.map((t) => t.name),
     timeFrom: doc.time_zones.map((t) => t.from_hour),
     timeTo: doc.time_zones.map((t) => t.to_hour),
@@ -159,9 +185,24 @@ export function timeCategoryForHour(h: number, zone: ZoneReportView): number {
   return 0;
 }
 
+function isSlotDisabledOnPlanDay(
+  zone: ZoneReportView,
+  slotIndex: number,
+  anchorDate: string,
+  planDayIndex: number,
+  planStartHour: number,
+): boolean {
+  const typeId = zone.slotTypeIds[slotIndex];
+  if (!typeId) return false;
+  const wds = zone.disabledWeekdays[typeId];
+  if (!wds?.length) return false;
+  const wd = weekdayIndexForPlanDayStart(anchorDate, planDayIndex, planStartHour);
+  return wds.includes(wd);
+}
+
 export function assignmentOccupiedBlocks(a: ScheduleAssignment, blocksPd: number): number[] {
   const k = a.kind || "rotating";
-  if (k === "full_day" || k === "windowed") {
+  if (k === "full_day" || k === "full_day_team" || k === "windowed") {
     const b0 = a.win_start_block ?? a.calendar_block;
     const b1 = a.win_end_block ?? a.calendar_block;
     const out: number[] = [];
@@ -207,22 +248,57 @@ export function buildScheduleMatrices(
 ): MatrixDay[] {
   const planStart = opts?.planDayStartHour ?? 0;
   const anchor = opts?.anchorDate?.trim() ?? "";
-  const lookupRot = new Map<string, { soldierIdx: number; label: string }>();
-  const merged = new Map<string, { soldierIdx: number; label: string; rowspan: number; startBlock: number }>();
+  const lookupRot = new Map<string, { soldierIndices: number[]; labels: string[] }>();
+  const merged = new Map<
+    string,
+    { soldierIndices: number[]; labels: string[]; rowspan: number; startBlock: number }
+  >();
 
   const soldierIds = opts?.soldierIds;
+  const addToGroup = (
+    map: Map<string, { soldierIndices: number[]; labels: string[]; rowspan: number; startBlock: number }>,
+    key: string,
+    soldierIdx: number,
+    label: string,
+    rowspan: number,
+    startBlock: number,
+  ) => {
+    const cur = map.get(key);
+    if (!cur) {
+      map.set(key, { soldierIndices: [soldierIdx], labels: [label], rowspan, startBlock });
+      return;
+    }
+    if (!cur.soldierIndices.includes(soldierIdx)) {
+      const pairs = cur.soldierIndices.map((idx, i) => ({ idx, label: cur.labels[i] ?? "" }));
+      pairs.push({ idx: soldierIdx, label });
+      pairs.sort((a, b) => a.idx - b.idx);
+      cur.soldierIndices = pairs.map((p) => p.idx);
+      cur.labels = pairs.map((p) => p.label);
+    }
+  };
+
   for (const a of assignments) {
     const k = a.kind || "rotating";
     const label = soldierLabel(a, soldierIds);
     if (k === "rotating") {
-      lookupRot.set(`${a.day}:${a.calendar_block}:${a.slot}`, { soldierIdx: a.soldier_idx, label });
-    } else if (k === "full_day" || k === "windowed") {
-      merged.set(`${a.day}:${a.slot}`, {
-        soldierIdx: a.soldier_idx,
+      const key = `${a.day}:${a.calendar_block}:${a.slot}`;
+      const cur = lookupRot.get(key);
+      if (!cur) {
+        lookupRot.set(key, { soldierIndices: [a.soldier_idx], labels: [label] });
+      } else if (!cur.soldierIndices.includes(a.soldier_idx)) {
+        cur.soldierIndices.push(a.soldier_idx);
+        cur.labels.push(label);
+        cur.soldierIndices.sort((x, y) => x - y);
+      }
+    } else if (k === "full_day" || k === "full_day_team" || k === "windowed") {
+      addToGroup(
+        merged,
+        `${a.day}:${a.slot}`,
+        a.soldier_idx,
         label,
-        rowspan: a.rowspan ?? assignmentOccupiedBlocks(a, zone.blocksPerDay).length,
-        startBlock: a.win_start_block ?? a.calendar_block,
-      });
+        a.rowspan ?? assignmentOccupiedBlocks(a, zone.blocksPerDay).length,
+        a.win_start_block ?? a.calendar_block,
+      );
     }
   }
 
@@ -249,31 +325,58 @@ export function buildScheduleMatrices(
           cells.push({ soldierIdx: null, label: "", skip: true });
           continue;
         }
+        if (
+          anchor &&
+          isSlotDisabledOnPlanDay(zone, j, anchor, d, planStart)
+        ) {
+          if (b === 0) {
+            cells.push({
+              soldierIdx: null,
+              label: "—",
+              disabled: true,
+              rowspan: zone.blocksPerDay,
+            });
+            skip[j] = zone.blocksPerDay - 1;
+          }
+          continue;
+        }
         const m = merged.get(`${d}:${j}`);
         if (m) {
           if (b === m.startBlock) {
-            cells.push({ soldierIdx: m.soldierIdx, label: m.label, rowspan: m.rowspan });
+            const primary = m.soldierIndices[0] ?? null;
+            cells.push({
+              soldierIdx: primary,
+              label: m.labels.join(", "),
+              soldierIndices: m.soldierIndices,
+              labels: m.labels,
+              rowspan: m.rowspan,
+            });
             skip[j] = m.rowspan - 1;
           } else {
             cells.push({ soldierIdx: null, label: "—" });
           }
         } else {
           const rot = lookupRot.get(`${d}:${b}:${j}`);
-          cells.push(
-            rot
-              ? { soldierIdx: rot.soldierIdx, label: rot.label }
-              : { soldierIdx: null, label: "—" },
-          );
+          if (rot) {
+            const primary = rot.soldierIndices[0] ?? null;
+            cells.push({
+              soldierIdx: primary,
+              label: rot.labels.join(", "),
+              soldierIndices: rot.soldierIndices,
+              labels: rot.labels,
+            });
+          } else {
+            cells.push({ soldierIdx: null, label: "—" });
+          }
         }
       }
       rows.push({ window: formatBlockWindow(sh, zone.shiftHours), cells });
     }
-    const calendarDate = anchor ? calendarDateForDay(anchor, d) : undefined;
-    const weekday = calendarDate ? weekdayLongName(calendarDate) : undefined;
+    const weekday = dayCalendarDate ? weekdayLongName(dayCalendarDate) : undefined;
     matrices.push({
       day: d + 1,
       title: anchor ? planDayTitle(d, anchor) : `Day ${d + 1}`,
-      calendarDate,
+      calendarDate: dayCalendarDate,
       weekday,
       headers,
       rows,

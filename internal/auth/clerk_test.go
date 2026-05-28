@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestAllowWithoutRole(t *testing.T) {
+	if !allowWithoutRole(http.MethodGet, "/api/me") {
+		t.Fatal("GET /api/me should be allowed without role")
+	}
+	if !allowWithoutRole(http.MethodGet, "/api/auth/debug") {
+		t.Fatal("GET /api/auth/debug should be allowed without role")
+	}
+	if allowWithoutRole(http.MethodGet, "/api/cfg/slots") {
+		t.Fatal("other routes must require a role")
+	}
+}
+
 func TestMiddleware_skipsClerkForHealth(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

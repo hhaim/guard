@@ -8,6 +8,7 @@
 //	guardcli users invites
 //	guardcli users debug
 //	guardcli users invite --email ADDR --role admin|readonly [--invited-by CLERK_ID] [--replace]
+//	guardcli users bootstrap-admin --email ADDR
 package main
 
 import (
@@ -55,18 +56,21 @@ func printUsage() {
 
 Usage:
   guardcli db retention [--days 30] [--future-days 7]
+  guardcli db reset --yes
   guardcli schedule clear
   guardcli schedule export --end YYYY-MM-DD --days-back N [-o file.yaml]
   guardcli users list
   guardcli users invites
   guardcli users debug
   guardcli users invite --email ADDR --role admin|readonly [--invited-by CLERK_ID] [--replace]
+  guardcli users bootstrap-admin --email ADDR
 
 Environment:
   DATABASE_URL  Postgres connection string (required; use Neon pooled URL for remote)
 
 Examples:
   guardcli db retention
+  guardcli db reset --yes
   guardcli schedule clear
   guardcli schedule export --end 2026-05-19 --days-back 10 -o verified.yaml
   DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" guardcli users invite --email they@example.com --role readonly
@@ -75,12 +79,14 @@ Examples:
 
 func runDB(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "error: db subcommand required (retention)")
+		fmt.Fprintln(os.Stderr, "error: db subcommand required (retention|reset)")
 		return 2
 	}
 	switch args[0] {
 	case "retention":
 		return cmdDBRetention(args[1:])
+	case "reset":
+		return cmdDBReset(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown db command: %s\n", args[0])
 		return 2
@@ -117,9 +123,45 @@ func cmdDBRetention(args []string) int {
 	return 0
 }
 
+func cmdDBReset(args []string) int {
+	fs := flag.NewFlagSet("reset", flag.ExitOnError)
+	yes := fs.Bool("yes", false, "Confirm destructive drop of all guard app tables")
+	keepMigrations := fs.Bool("keep-migrations", false, "Do not clear schema_migrations")
+	_ = fs.Parse(args)
+	if !*yes {
+		fmt.Fprintln(os.Stderr, `error: db reset is destructive; pass --yes to confirm
+
+Drops: cfg, audit, schedule, app_users, user_invites, soldier_status_*, partition functions.
+By default also clears schema_migrations (omit with --keep-migrations).`)
+		return 2
+	}
+
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		fmt.Fprintln(os.Stderr, "error: DATABASE_URL is required")
+		return 2
+	}
+	pool, err := db.OpenPool(context.Background(), url)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+
+	if err := db.ResetAppSchema(context.Background(), pool.Pool, !*keepMigrations); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintln(os.Stderr, "db reset ok: app tables removed")
+	if !*keepMigrations {
+		fmt.Fprintln(os.Stderr, "schema_migrations cleared; start the API to apply 000001_schema.sql")
+	}
+	return 0
+}
+
 func runUsers(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "error: users subcommand required (list|invites|debug|invite)")
+		fmt.Fprintln(os.Stderr, "error: users subcommand required (list|invites|debug|invite|bootstrap-admin)")
 		return 2
 	}
 	switch args[0] {
@@ -129,12 +171,38 @@ func runUsers(args []string) int {
 		return cmdUsersInvites()
 	case "debug":
 		return cmdUsersDebug()
+	case "bootstrap-admin":
+		return cmdUsersBootstrapAdmin(args[1:])
 	case "invite":
 		return cmdUsersInvite(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown users command: %s\n", args[0])
 		return 2
 	}
+}
+
+func cmdUsersBootstrapAdmin(args []string) int {
+	fs := flag.NewFlagSet("bootstrap-admin", flag.ExitOnError)
+	email := fs.String("email", "", "Admin email (must match Clerk Google sign-in)")
+	_ = fs.Parse(args)
+	if strings.TrimSpace(*email) == "" {
+		fmt.Fprintln(os.Stderr, "error: --email is required")
+		return 2
+	}
+	pool, err := openPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+	u, err := repo.EnsureBootstrapAdmin(context.Background(), pool, *email)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "bootstrap admin: %s role=%s clerk_user_id=%s\n", u.Email, u.Role, u.ClerkUserID)
+	fmt.Fprintln(os.Stderr, "Sign in with that email; Clerk id will rebind on first API request.")
+	return 0
 }
 
 func cmdUsersList() int {

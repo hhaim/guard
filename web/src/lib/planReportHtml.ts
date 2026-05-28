@@ -137,6 +137,20 @@ const REPORT_CSS = `
     border: 1px solid rgba(0, 0, 0, 0.06);
     white-space: nowrap;
   }
+  .sched-matrix-disabled { color: #8e8e93; }
+  .sched-matrix-cell-team {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    page-break-inside: avoid;
+  }
+  .sched-matrix-cell-team .sched-soldier-badge {
+    font-size: 0.75rem;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
   .sched-soldier-title-badge { font-size: 13px; text-decoration: none; }
   .sched-soldier-page {
     margin: 0;
@@ -255,19 +269,35 @@ function soldierBadgeHtml(
 function matrixCellHtml(
   cell: MatrixDay["rows"][0]["cells"][0],
   labelForIdx: (idx: number) => string,
-  display: SoldierDisplay
+  display: SoldierDisplay,
+  useFullNames?: boolean
 ): string {
-  if (cell.soldierIdx != null) {
-    return soldierBadgeHtml(cell.soldierIdx, labelForIdx(cell.soldierIdx), display);
+  if (cell.disabled) {
+    return `<span class="sched-matrix-disabled">—</span>`;
   }
-  return esc(cell.label);
+  const indices =
+    cell.soldierIndices ?? (cell.soldierIdx != null && cell.soldierIdx >= 0 ? [cell.soldierIdx] : []);
+  if (indices.length === 0) {
+    return esc(cell.label);
+  }
+  const labels =
+    cell.labels ??
+    indices.map((idx) => (useFullNames ? display.fullLabel(idx) : labelForIdx(idx)));
+  if (indices.length > 1) {
+    const badges = indices
+      .map((idx, i) => soldierBadgeHtml(idx, labels[i] ?? labelForIdx(idx), display))
+      .join("");
+    return `<div class="sched-matrix-cell-team" title="${esc(labels.join(", "))}">${badges}</div>`;
+  }
+  return soldierBadgeHtml(indices[0], labels[0] ?? labelForIdx(indices[0]), display);
 }
 
 function matrixTableHtml(
   matrix: MatrixDay,
   labelForIdx: (idx: number) => string,
   display: SoldierDisplay,
-  subtitle: string
+  subtitle: string,
+  useFullNames = false
 ): string {
   const head = matrix.headers
     .map(
@@ -280,9 +310,11 @@ function matrixTableHtml(
       const cells = row.cells
         .map((cell, j) => {
           if (cell.skip) return "";
-          const inner = matrixCellHtml(cell, labelForIdx, display);
+          const team =
+            (cell.soldierIndices?.length ?? 0) > 1 ? ' class="sched-matrix-td-team"' : "";
+          const inner = matrixCellHtml(cell, labelForIdx, display, useFullNames);
           const rs = cell.rowspan && cell.rowspan > 1 ? ` rowspan="${cell.rowspan}"` : "";
-          return `<td${rs}>${inner}</td>`;
+          return `<td${team}${rs}>${inner}</td>`;
         })
         .join("");
       return `<tr><th scope="row">${esc(row.window)}</th>${cells}</tr>`;
@@ -606,7 +638,8 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
         m,
         display.fullLabel,
         display,
-        `${m.title} — schedule matrix (full name)`
+        `${m.title} — schedule matrix (full name)`,
+        true
       )
     )
     .join("");

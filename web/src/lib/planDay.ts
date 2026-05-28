@@ -51,6 +51,20 @@ export function blockTimelineStartHour(
   return planDayStartHour + blockTimelineOffset(day, block, shiftHours);
 }
 
+/** Weekday index 0=Sunday..6=Saturday when plan day `dayIndex` begins at `planStartHour` UTC. */
+export function weekdayIndexForPlanDayStart(
+  anchorDate: string,
+  dayIndex: number,
+  planStartHour: number,
+): number {
+  const base = new Date(`${anchorDate}T00:00:00.000Z`);
+  if (Number.isNaN(base.getTime())) return 0;
+  const ps = ((Math.trunc(planStartHour) % 24) + 24) % 24;
+  base.setUTCDate(base.getUTCDate() + dayIndex);
+  base.setUTCHours(ps, 0, 0, 0);
+  return base.getUTCDay();
+}
+
 /** UTC calendar date for plan day index (anchor YYYY-MM-DD + dayIndex). */
 export function calendarDateForDay(anchorDate: string, dayIndex: number): string {
   const base = new Date(`${anchorDate}T00:00:00.000Z`);
@@ -65,9 +79,15 @@ export function weekdayLongName(dateIso: string): string {
   return d.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
 }
 
-export function planDayTitle(dayIndex0: number, anchorDate: string): string {
+export function planDayTitle(
+  dayIndex0: number,
+  anchorDate: string,
+  planStartHour: number = DEFAULT_PLAN_DAY_START_HOUR,
+): string {
   const calendarDate = calendarDateForDay(anchorDate, dayIndex0);
-  const weekday = weekdayLongName(calendarDate);
+  const wd = weekdayIndexForPlanDayStart(anchorDate, dayIndex0, planStartHour);
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const weekday = names[wd] ?? weekdayLongName(calendarDate);
   return `Day ${dayIndex0 + 1} — ${weekday}, ${calendarDate}`;
 }
 

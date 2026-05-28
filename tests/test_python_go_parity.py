@@ -24,7 +24,10 @@ import guard_scheduler_sim as g
 
 ROOT = Path(__file__).resolve().parent.parent
 ZONES_S1 = ROOT / "zones_s1.yaml"
+ZONES_S1_GATE4 = ROOT / "testdata" / "zones_s1_gate4.yaml"
 ZONES_MIXED = ROOT / "zones_mixed_patterns.yaml"
+ZONES_FULL_DAY_TEAM = ROOT / "testdata" / "full_day_team" / "zones.yaml"
+ROSTER_FULL_DAY_TEAM = ROOT / "testdata" / "full_day_team" / "roster.yaml"
 GUARDSIM = ROOT / "bin" / "guardsim"
 
 
@@ -92,6 +95,8 @@ def _run_python(
     min_free_shifts_after_duty: int,
     band_relative: float,
     plan_day_start: str = "05:00",
+    anchor_date: str | None = None,
+    type_codes: list[str] | None = None,
 ) -> tuple[list[g.AssignmentRecord], g.ZoneConfig, int]:
     zone = g.load_zone_config(
         zones_path,
@@ -99,6 +104,11 @@ def _run_python(
         shift_hours_override=shift_hours,
     )
     blocks_pd = g.calendar_blocks_per_day(zone.shift_hours)
+    anchor = None
+    if anchor_date:
+        from datetime import datetime, timezone
+
+        anchor = datetime.strptime(anchor_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     pack, _meta = g.run_simulation_best_of(
         trials=1,
         base_seed=seed,
@@ -111,6 +121,8 @@ def _run_python(
         min_free_shifts_after_duty=min_free_shifts_after_duty,
         band_relative=band_relative,
         plan_day_start_hour=g.parse_plan_day_start(plan_day_start),
+        anchor=anchor,
+        type_codes=type_codes,
     )
     return pack[3], zone, blocks_pd
 
@@ -129,6 +141,8 @@ def _run_guardsim_json(
     band_relative: float,
     compare_json: bool,
     plan_day_start: str = "05:00",
+    anchor_date: str | None = None,
+    roster_path: Path | None = None,
 ) -> dict[str, Any]:
     cmd = [
         str(guardsim_bin),
@@ -161,6 +175,10 @@ def _run_guardsim_json(
     if shift_hours is not None:
         sh = int(shift_hours) if shift_hours == int(shift_hours) else shift_hours
         cmd.extend(["--shift-hours", str(sh)])
+    if anchor_date:
+        cmd.extend(["--anchor-date", anchor_date])
+    if roster_path is not None:
+        cmd.extend(["--roster", str(roster_path)])
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         raise RuntimeError(
@@ -171,7 +189,7 @@ def _run_guardsim_json(
 
 MATRIX_CASES = [
     pytest.param(
-        ZONES_S1,
+        ZONES_S1_GATE4,
         12,
         4,
         1,
@@ -182,7 +200,7 @@ MATRIX_CASES = [
         id="s1-12x4-d1-seed7",
     ),
     pytest.param(
-        ZONES_S1,
+        ZONES_S1_GATE4,
         12,
         4,
         3,
@@ -193,14 +211,14 @@ MATRIX_CASES = [
         id="s1-12x4-d3-seed3",
     ),
     pytest.param(
-        ZONES_S1,
+        ZONES_S1_GATE4,
         16,
         4,
         1,
         4.0,
         42,
         8.0,
-        0,
+        2,
         id="s1-16x4-d1-seed42",
     ),
 ]
@@ -353,6 +371,44 @@ def test_python_go_assignments_parity(
 
     expect = g.expected_assignment_count(zone, days, blocks_pd, slots)
     assert len(py_assignments) == expect
+    assert go_doc["count"] == expect
+    assert _assignment_signature_py(py_assignments) == _assignment_signature_go(
+        go_doc["assignments"]
+    )
+
+
+def test_parity_full_day_team_fixture(guardsim_bin: Path) -> None:
+    type_codes = g.load_roster_type_codes_yaml(ROSTER_FULL_DAY_TEAM, g.roster_keys(12))
+    py_assignments, zone, blocks_pd = _run_python(
+        ZONES_FULL_DAY_TEAM,
+        soldiers=12,
+        slots=1,
+        days=2,
+        seed=42,
+        shift_hours=None,
+        min_consecutive_free_hours=6.0,
+        min_free_shifts_after_duty=2,
+        band_relative=0.2,
+        anchor_date="2026-05-27",
+        type_codes=type_codes,
+    )
+    go_doc = _run_guardsim_json(
+        guardsim_bin,
+        ZONES_FULL_DAY_TEAM,
+        soldiers=12,
+        slots=1,
+        days=2,
+        seed=42,
+        shift_hours=None,
+        min_consecutive_free_hours=6.0,
+        min_free_shifts_after_duty=2,
+        band_relative=0.2,
+        compare_json=False,
+        anchor_date="2026-05-27",
+        roster_path=ROSTER_FULL_DAY_TEAM,
+    )
+    expect = g.expected_assignment_count(zone, 2, blocks_pd, 1, anchor=None)
+    assert len(py_assignments) == expect == 12
     assert go_doc["count"] == expect
     assert _assignment_signature_py(py_assignments) == _assignment_signature_go(
         go_doc["assignments"]

@@ -1,0 +1,17 @@
+schema_version: 2
+shift_hours: 3
+slots_types:
+  - id: team_post
+    pattern: full_day_team
+    config:
+      start: "08:00"
+      end: "16:00"
+      rest_after_hours: 6
+      headcount: 6
+      type_quotas: { A: 1, B: 2, C: 1 }
+zone_loc:
+  - { id: loc_team, type: team_post, name: team, weight: 1.0 }
+slots:
+  - { location_id: loc_team, name: t1, full_name: Team post }
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: 23 }

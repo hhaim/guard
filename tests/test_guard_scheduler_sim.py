@@ -24,6 +24,32 @@ ROOT = Path(__file__).resolve().parent.parent
 ZONES_V1 = ROOT / "zones.yaml"
 ZONES_V2 = ROOT / "zones_mixed_patterns.yaml"
 ZONES_S1 = ROOT / "zones_s1.yaml"
+ZONES_S1_GATE4 = ROOT / "testdata" / "zones_s1_gate4.yaml"
+ZONES_S2 = ROOT / "zones_s2.yaml"
+ROASTER1 = ROOT / "roaster1.yaml"
+
+
+def _load_roaster1_type_codes() -> list[str]:
+    roster = yaml.safe_load(ROASTER1.read_text(encoding="utf-8"))
+    return [str(s["type_code"]).strip() for s in roster["soldiers"]]
+
+
+def _assert_no_per_block_assignment_overlap(assignments: list[g.AssignmentRecord]) -> None:
+    """No soldier may hold two different duties in the same plan-day block."""
+    occ: dict[tuple[int, int, int], tuple[str, int]] = {}
+    for a in assignments:
+        kind = a.kind or "rotating"
+        if kind in ("full_day", "full_day_team", "windowed"):
+            b0, b1 = int(a.win_start_block), int(a.win_end_block)
+        else:
+            b0 = b1 = int(a.calendar_block)
+        for b in range(b0, b1 + 1):
+            key = (a.day, a.soldier_idx, b)
+            cur = (kind, a.slot)
+            assert key not in occ or occ[key] == cur, (
+                f"overlap day={a.day + 1} S{a.soldier_idx} block={b}: {occ[key]} vs {cur}"
+            )
+            occ[key] = cur
 
 
 def test_zones_s1_12_soldiers_4_slots_4h_shift_user_example() -> None:
@@ -36,10 +62,10 @@ def test_zones_s1_12_soldiers_4_slots_4h_shift_user_example() -> None:
     Verifies: assignment volume, four distinct soldiers per block, shift-cooldown on ``busy_rot``,
     and ``min_consecutive_free_hours`` on the full ``busy`` tensor (unified rest: no double k_rest).
     """
-    data = yaml.safe_load(ZONES_S1.read_text(encoding="utf-8"))
+    data = yaml.safe_load(ZONES_S1_GATE4.read_text(encoding="utf-8"))
     y = len(data["slots"])
     assert y == 4
-    zone = g.load_zone_config(ZONES_S1, slots_per_block=y, shift_hours_override=4.0)
+    zone = g.load_zone_config(ZONES_S1_GATE4, slots_per_block=y, shift_hours_override=4.0)
     assert zone.shift_hours == 4.0
     assert all(p == "rotating" for p in zone.slot_patterns)
     sh = 4.0
@@ -116,6 +142,46 @@ def test_resolve_slots_rejects_wrong_y() -> None:
         g.resolve_slots_per_block_for_run(
             slots_arg=21, zones_data=data, zones_path=ZONES_V2
         )
+
+
+# ---------------------------------------------------------------------------
+# Roster type-code loading (UI export + legacy nested)
+# ---------------------------------------------------------------------------
+
+
+def test_load_roster_type_codes_yaml_ui_export_shape(tmp_path: Path) -> None:
+    roster = {
+        "schema_version": 2,
+        "soldier_types": {"types": [{"code": "A", "label": "Type A"}]},
+        "soldiers": [
+            {"id": "s0", "full_name": "S0", "type_code": "A"},
+            {"id": "s1", "full_name": "S1", "type_code": "B"},
+        ],
+    }
+    p = tmp_path / "roster_ui.yaml"
+    p.write_text(yaml.safe_dump(roster), encoding="utf-8")
+    got = g.load_roster_type_codes_yaml(p, g.roster_keys(3))
+    assert got == ["A", "B", ""]
+
+
+def test_load_roster_type_codes_yaml_legacy_nested_shape(tmp_path: Path) -> None:
+    roster = {
+        "soldiers": {
+            "soldiers": [
+                {"id": "s1", "type_code": "B"},
+                {"key": "s0", "type_code": "A"},
+            ]
+        }
+    }
+    p = tmp_path / "roster_legacy.yaml"
+    p.write_text(yaml.safe_dump(roster), encoding="utf-8")
+    got = g.load_roster_type_codes_yaml(p, g.roster_keys(3))
+    assert got == ["A", "B", ""]
+
+
+def test_load_roaster_yaml_root_ui_shape() -> None:
+    got = g.load_roster_type_codes_yaml(ROOT / "roaster.yaml", g.roster_keys(12))
+    assert got[:6] == ["A", "B", "C", "A", "B", "C"]
 
 
 # ---------------------------------------------------------------------------
@@ -375,10 +441,7 @@ def test_expected_assignment_count_mixed_yaml() -> None:
     y = _v2_slots_per_block()
     zone = g.load_zone_config(ZONES_V2, slots_per_block=y)
     B = g.calendar_blocks_per_day(zone.shift_hours)
-    n_rot = sum(1 for p in zone.slot_patterns if p == "rotating")
-    n_fd = sum(1 for p in zone.slot_patterns if p == "full_day")
-    n_wd = sum(1 for p in zone.slot_patterns if p == "windowed_slots")
-    per_day = n_fd + n_wd + n_rot * B
+    per_day = g.expected_assignment_count(zone, 1, B, y)
     assert g.expected_assignment_count(zone, 5, B, y) == 5 * per_day
 
 
@@ -411,9 +474,156 @@ def test_build_busy_tensor_timeline_mode_excludes_yaml_rest() -> None:
 def test_full_day_busy_span_covers_duty_plus_rest_only() -> None:
     """rest_after extends the busy span only after YAML duty hours, not an entire 24 h + rest."""
     L0, span = g._linear_busy_span_duty_hours_plus_rest(
-        0, 8, 3.0, 6, 22, half_open=False, rest_after_h=6.0
+        0,
+        6,
+        4.0,
+        6,
+        22,
+        half_open=False,
+        rest_after_h=6.0,
+        plan_start_hour=5,
     )
-    assert (L0, span) == (2, 8)
+    # Plan day starts 05:00; duty 06:00–22:00 + 6h rest maps to blocks 0..5.
+    assert (L0, span) == (0, 6)
+
+
+def test_busy_span_plan_start_aligned_full_day_team_and_windowed() -> None:
+    """full_day_team and windowed use the same plan-day-aligned busy span as full_day."""
+    team = g._linear_busy_span_duty_hours_plus_rest(
+        0, 6, 4.0, 5, 22, half_open=False, rest_after_h=6.0, plan_start_hour=5
+    )
+    assert team == (0, 6)
+    win = g._linear_busy_span_duty_hours_plus_rest(
+        0, 6, 4.0, 5, 9, half_open=True, rest_after_h=6.0, plan_start_hour=5
+    )
+    assert win == (0, 3)
+
+
+def test_zones_s1_17x5_30d_no_per_block_overlap() -> None:
+    """CLI regression: mixed full_day_team + rotating must not double-book a block.
+
+    Mirrors::
+
+        python3 guard_scheduler_sim.py -x 17 -y 5 -d 30 --seed 42 \\
+          --min-consecutive-free-hours 6 --zones zones_s1.yaml \\
+          --min-free-shifts-after-duty 2 --roster roaster1.yaml \\
+          --anchor-date 2026-05-27
+    """
+    from datetime import datetime, timezone
+
+    zone = g.load_zone_config(ZONES_S1, slots_per_block=5)
+    type_codes = _load_roaster1_type_codes()
+    anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    blocks_pd = g.calendar_blocks_per_day(zone.shift_hours)
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=42,
+        num_soldiers=17,
+        slots_per_block=5,
+        days=30,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        min_consecutive_free_hours=6.0,
+        min_free_shifts_after_duty=2,
+        anchor=anchor,
+        type_codes=type_codes,
+    )
+    assign = pack[3]
+    expect = g.expected_assignment_count(zone, 30, blocks_pd, 5, anchor=anchor)
+    assert len(assign) == expect == 870
+    _assert_no_per_block_assignment_overlap(assign)
+
+
+def test_zones_s2_17x5_30d_disabled_weekdays_no_per_block_overlap() -> None:
+    """CLI regression: full_day_team off Fri/Sat (disabled_weekdays day removal).
+
+    Mirrors::
+
+        python3 guard_scheduler_sim.py -x 17 -y 5 -d 30 --seed 42 \\
+          --min-consecutive-free-hours 6 --zones zones_s2.yaml \\
+          --min-free-shifts-after-duty 2 --roster roaster1.yaml \\
+          --anchor-date 2026-05-27
+    """
+    from datetime import datetime, timezone
+
+    zone = g.load_zone_config(ZONES_S2, slots_per_block=5)
+    type_codes = _load_roaster1_type_codes()
+    anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    blocks_pd = g.calendar_blocks_per_day(zone.shift_hours)
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=42,
+        num_soldiers=17,
+        slots_per_block=5,
+        days=30,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        min_consecutive_free_hours=6.0,
+        min_free_shifts_after_duty=2,
+        anchor=anchor,
+        type_codes=type_codes,
+    )
+    assign = pack[3]
+    expect = g.expected_assignment_count(zone, 30, blocks_pd, 5, anchor=anchor)
+    assert len(assign) == expect == 830
+    _assert_no_per_block_assignment_overlap(assign)
+    for a in assign:
+        if a.kind == "full_day_team":
+            assert not g._slot_disabled_for_day(
+                zone, a.slot, a.day, anchor, g.DEFAULT_PLAN_DAY_START_HOUR
+            ), (
+                f"full_day_team on disabled weekday plan day {a.day + 1}"
+            )
+
+
+def test_disabled_weekdays_use_plan_day_start_not_midnight_portion(tmp_path) -> None:
+    """Saturday off must not drop Friday-started plan day (05:00 → next 05:00 span)."""
+    from datetime import datetime, timezone
+
+    p = tmp_path / "zones_sat_off.yaml"
+    p.write_text(
+        """
+schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: kitchen
+    pattern: full_day_team
+    disabled_weekdays: [saturday]
+    config:
+      start: "05:00"
+      end: "22:00"
+      rest_after_hours: 6
+      headcount: 1
+      type_quotas: { A: 1 }
+zone_loc:
+  - { id: loc_k, type: kitchen, name: kitchen, weight: 1.0 }
+slots:
+  - { location_id: loc_k, name: k1 }
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: 23 }
+""",
+        encoding="utf-8",
+    )
+    zone = g.load_zone_config(p, slots_per_block=1)
+    anchor = datetime(2026, 5, 29, tzinfo=timezone.utc)
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=2,
+        num_soldiers=4,
+        slots_per_block=1,
+        days=2,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        min_consecutive_free_hours=6.0,
+        min_free_shifts_after_duty=2,
+        anchor=anchor,
+        type_codes=["A"],
+        plan_day_start_hour=5,
+    )
+    assign = pack[3]
+    assert any(a.day == 0 and a.kind == "full_day_team" for a in assign), (
+        "expected plan day 0 (Friday 05:00 start) despite Saturday wall hours in span"
+    )
 
 
 def test_assignment_occupied_blocks() -> None:
@@ -910,20 +1120,20 @@ def test_run_simulation_mixed_patterns_cooldown2_regression() -> None:
     zone = g.load_zone_config(ZONES_V2, slots_per_block=y, shift_hours_override=3.0)
     rng = random.Random(7)
     g.run_simulation(
-        num_soldiers=70,
+        num_soldiers=90,
         slots_per_block=y,
         days=4,
         zone=zone,
         block_hours=3.0,
         rng=rng,
         min_free_shifts_after_duty=2,
-        plan_day_start_hour=0,  # pinned: seed 7 + this YAML was validated at midnight grid
+        plan_day_start_hour=g.DEFAULT_PLAN_DAY_START_HOUR,
     )
 
 
 def test_rotating_dfs_spreads_extra_soldiers_zones_s1() -> None:
     """16 soldiers on zones_s1 (4 gate slots): s12–s15 must not be left idle when feasible."""
-    zone = g.load_zone_config(ZONES_S1, slots_per_block=4)
+    zone = g.load_zone_config(ZONES_S1_GATE4, slots_per_block=4)
     rng = random.Random(0)
     soldiers, *_ = g.run_simulation(
         num_soldiers=16,

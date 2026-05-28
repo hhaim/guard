@@ -2,11 +2,18 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const squashedMigrationName = "000001_schema.sql"
+
+// ErrSchemaResetRequired means app tables exist but the squashed migration was never applied.
+// Wipe the database manually (e.g. docker compose down -v) — migrations do not auto-drop data.
+var ErrSchemaResetRequired = errors.New("database schema reset required")
 
 const ensureMigrationsTableSQL = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -15,34 +22,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `
 
-// baselineMigrationsSQL marks all embedded migrations applied when the DB already
-// has the per-day schedule schema but no migration history (upgrade from pre-tracking).
-const baselineMigrationsSQL = `
-INSERT INTO schema_migrations (name)
-SELECT v.name
-FROM (VALUES
-    ('000001_init.sql'),
-    ('000002_users.sql'),
-    ('000003_schedule_per_day_json.sql')
-) AS v(name)
-WHERE EXISTS (
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'schedule'
-      AND column_name = 'plan'
-)
-AND NOT EXISTS (SELECT 1 FROM schema_migrations LIMIT 1)
-ON CONFLICT (name) DO NOTHING;
-`
-
 // Migrate runs embedded SQL files once each, in lexical order.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, ensureMigrationsTableSQL); err != nil {
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}
-	if _, err := pool.Exec(ctx, baselineMigrationsSQL); err != nil {
-		return fmt.Errorf("baseline schema_migrations: %w", err)
+
+	if err := validateSchemaState(ctx, pool); err != nil {
+		return err
 	}
 
 	entries, err := migrationsFS.ReadDir("migrations")
@@ -87,6 +74,68 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	return nil
+}
+
+// validateSchemaState refuses to start when old tables exist without the squashed migration recorded.
+// Empty DB with stale schema_migrations rows only: clear history so 000001_schema.sql can run once.
+func validateSchemaState(ctx context.Context, pool *pgxpool.Pool) error {
+	squashedApplied, err := squashedMigrationApplied(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if squashedApplied {
+		return nil
+	}
+
+	present, err := appSchemaPresent(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if present {
+		return fmt.Errorf(
+			"%w: found existing app tables but %q is not in schema_migrations; "+
+				"reset the database once (local: docker compose down -v && docker compose up --build)",
+			ErrSchemaResetRequired,
+			squashedMigrationName,
+		)
+	}
+
+	// No app tables: drop obsolete migration history from the old incremental chain.
+	if _, err := pool.Exec(ctx, `DELETE FROM schema_migrations`); err != nil {
+		return fmt.Errorf("clear stale schema_migrations: %w", err)
+	}
+	return nil
+}
+
+func squashedMigrationApplied(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	var applied bool
+	err := pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`,
+		squashedMigrationName,
+	).Scan(&applied)
+	if err != nil {
+		return false, fmt.Errorf("check squashed migration: %w", err)
+	}
+	return applied, nil
+}
+
+func appSchemaPresent(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	for _, table := range []string{"cfg", "app_users", "schedule", "audit"} {
+		var exists bool
+		err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM information_schema.tables
+				WHERE table_schema = 'public' AND table_name = $1
+			)`, table).Scan(&exists)
+		if err != nil {
+			return false, fmt.Errorf("check table %s: %w", table, err)
+		}
+		if exists {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // maintainRetention ensures 40-day partition blocks exist and drops blocks past 30-day retention.

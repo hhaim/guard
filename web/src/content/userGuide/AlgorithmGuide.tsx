@@ -14,7 +14,15 @@ export function AlgorithmGuide() {
           Rest arc from <strong>min consecutive free hours</strong> (unless cooldown mode disables the per-soldier rest
           grid when all slots are rotating and cooldown hours cover the rest requirement)
         </li>
-        <li>Busy from full_day, windowed_slots, or prior rotating duty in the run</li>
+        <li>
+          Busy from full_day_team, full_day, windowed_slots, or prior rotating duty in the run (team/full_day spans
+          include post-duty rest on the linear busy grid)
+        </li>
+        <li>
+          Slot types with <code>disabled_weekdays</code> are skipped when the weekday at{" "}
+          <strong>plan day start</strong> (<code>plan_day_start</code>, default 05:00) matches — not the calendar date
+          after midnight inside a long shift
+        </li>
         <li>
           <strong>Max consecutive duty blocks</strong> (if configured)
         </li>

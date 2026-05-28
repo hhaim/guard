@@ -3,6 +3,7 @@ package guardsched
 import (
 	"fmt"
 	"math"
+	"time"
 )
 
 // fairnessScoreFromAssignments returns stddev of per-soldier raw duty hours (lower is fairer).
@@ -44,6 +45,8 @@ func RunSimulationBestOfZoneConfig(
 	bandRelative float64,
 	planDayStartHour int,
 	avail AvailabilityChecker,
+	anchor *time.Time,
+	typeCodes []string,
 ) (recs []*AssignmentRecord, stats *SimulationStats, meta map[string]any, err error) {
 	if trials < 1 {
 		return nil, nil, nil, fmt.Errorf("sim_trials must be >= 1")
@@ -57,7 +60,7 @@ func RunSimulationBestOfZoneConfig(
 			zone, numSoldiers, days, rng,
 			minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 			maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-			planDayStartHour, avail,
+			planDayStartHour, avail, anchor, typeCodes,
 		)
 	}
 	if trials == 1 {

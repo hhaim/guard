@@ -43,7 +43,8 @@ func run() int {
 	daysLong := flag.Int("days", 0, "Alias for -d")
 	zonesPath := flag.String("zones", "", "Zones YAML (schema v2); default zones.yaml, or scenario zones.file")
 	scenarioPath := flag.String("scenario", "", "Scenario YAML (testdata/scenarios/*.yaml): sets zones, days, seed, status")
-	anchorDate := flag.String("anchor-date", "", "Plan anchor YYYY-MM-DD for scenario status (default: scenario sim.anchor_date or 2026-05-27)")
+	anchorDate := flag.String("anchor-date", "", "Plan anchor YYYY-MM-DD (scenario status, weekday-off sim; default: scenario sim.anchor_date or 2026-05-27)")
+	rosterPath := flag.String("roster", "", "Roster YAML for soldier type_code[] (UI export or legacy nested)")
 	checkExpect := flag.Bool("check-expect", true, "With --scenario, fail if expect.* does not match")
 	availabilityOnly := flag.Bool("availability-only", false, "With --scenario, compile availability and check expect.availability only (no schedule run)")
 	shiftHours := flag.Float64("shift-hours", 0, "Calendar block hours: 2, 3, or 4 (overrides YAML)")
@@ -190,6 +191,8 @@ func run() int {
 	}
 
 	roster := guardsched.Roster(nSoldiers)
+	var anchorPtr *time.Time
+	var typeCodes []string
 
 	if sc != nil {
 		anchor, err := resolveAnchor(sc, *anchorDate)
@@ -236,6 +239,28 @@ func run() int {
 			}
 			return 0
 		}
+		anchorPtr = &anchor
+	} else if strings.TrimSpace(*anchorDate) != "" {
+		t, err := time.Parse("2006-01-02", strings.TrimSpace(*anchorDate))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: invalid --anchor-date: %v\n", err)
+			return 2
+		}
+		a := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		anchorPtr = &a
+	}
+
+	if strings.TrimSpace(*rosterPath) != "" {
+		raw, err := os.ReadFile(*rosterPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read roster: %v\n", err)
+			return 2
+		}
+		typeCodes, err = guardsched.LoadRosterTypeCodesYAML(raw, roster)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: roster types: %v\n", err)
+			return 2
+		}
 	}
 
 	if !*quiet {
@@ -252,7 +277,7 @@ func run() int {
 		zc, nSoldiers, nDays, *simTrials, seedPtr,
 		*minFreeHours, true, 0,
 		*maxDutyBlocks, *minFreeShifts, *bandRelative,
-		planStartHour, avail,
+		planStartHour, avail, anchorPtr, typeCodes,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: schedule: %v\n", err)

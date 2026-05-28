@@ -49,12 +49,14 @@ function SoldierLink({
   selected,
   onSelect,
   display,
+  title,
 }: {
   soldierIdx: number;
   label: string;
   selected: boolean;
   onSelect: (idx: number) => void;
   display: SoldierDisplay;
+  title?: string;
 }) {
   return (
     <button
@@ -62,9 +64,65 @@ function SoldierLink({
       className={`sched-soldier-link sched-soldier-badge${selected ? " is-selected" : ""}`}
       style={display.badgeStyle(soldierIdx)}
       onClick={() => onSelect(soldierIdx)}
+      title={title}
     >
       {label}
     </button>
+  );
+}
+
+function MatrixCellContent({
+  cell,
+  labelForIdx,
+  selectedSoldier,
+  onSelectSoldier,
+  display,
+  useFullNames,
+}: {
+  cell: import("../lib/scheduleReport").MatrixCell;
+  labelForIdx: (idx: number) => string;
+  selectedSoldier: number | null;
+  onSelectSoldier: (idx: number) => void;
+  display: SoldierDisplay;
+  useFullNames?: boolean;
+}) {
+  if (cell.disabled) {
+    return <span className="sched-matrix-disabled">—</span>;
+  }
+  const indices =
+    cell.soldierIndices ?? (cell.soldierIdx != null && cell.soldierIdx >= 0 ? [cell.soldierIdx] : []);
+  if (indices.length === 0) {
+    return <>{cell.label}</>;
+  }
+  const labels =
+    cell.labels ??
+    indices.map((idx) => (useFullNames ? display.fullLabel(idx) : labelForIdx(idx)));
+  if (indices.length > 1) {
+    return (
+      <div className="sched-matrix-cell-team" title={labels.join(", ")}>
+        {indices.map((idx, i) => (
+          <SoldierLink
+            key={idx}
+            soldierIdx={idx}
+            label={labels[i] ?? labelForIdx(idx)}
+            title={useFullNames ? undefined : display.fullLabel(idx)}
+            selected={selectedSoldier === idx}
+            onSelect={onSelectSoldier}
+            display={display}
+          />
+        ))}
+      </div>
+    );
+  }
+  const idx = indices[0];
+  return (
+    <SoldierLink
+      soldierIdx={idx}
+      label={labels[0] ?? labelForIdx(idx)}
+      selected={selectedSoldier === idx}
+      onSelect={onSelectSoldier}
+      display={display}
+    />
   );
 }
 
@@ -74,12 +132,14 @@ function ScheduleMatrixTable({
   onSelectSoldier,
   display,
   labelForIdx,
+  useFullNames,
 }: {
   matrix: ReturnType<typeof buildScheduleMatrices>[number];
   selectedSoldier: number | null;
   onSelectSoldier: (idx: number) => void;
   display: SoldierDisplay;
   labelForIdx: (idx: number) => string;
+  useFullNames?: boolean;
 }) {
   return (
     <div className="sched-matrix-block">
@@ -105,38 +165,28 @@ function ScheduleMatrixTable({
                 <th scope="row">{row.window}</th>
                 {row.cells.map((cell, j) => {
                   if (cell.skip) return null;
-                  const cellLabel =
-                    cell.soldierIdx != null ? labelForIdx(cell.soldierIdx) : cell.label;
+                  const teamClass =
+                    (cell.soldierIndices?.length ?? 0) > 1 ? " sched-matrix-td-team" : "";
+                  const inner = (
+                    <MatrixCellContent
+                      cell={cell}
+                      labelForIdx={labelForIdx}
+                      selectedSoldier={selectedSoldier}
+                      onSelectSoldier={onSelectSoldier}
+                      display={display}
+                      useFullNames={useFullNames}
+                    />
+                  );
                   if (cell.rowspan && cell.rowspan > 1) {
                     return (
-                      <td key={`${row.window}-${j}`} rowSpan={cell.rowspan}>
-                        {cell.soldierIdx != null ? (
-                          <SoldierLink
-                            soldierIdx={cell.soldierIdx}
-                            label={cellLabel}
-                            selected={selectedSoldier === cell.soldierIdx}
-                            onSelect={onSelectSoldier}
-                            display={display}
-                          />
-                        ) : (
-                          cellLabel
-                        )}
+                      <td key={`${row.window}-${j}`} rowSpan={cell.rowspan} className={teamClass.trim()}>
+                        {inner}
                       </td>
                     );
                   }
                   return (
-                    <td key={`${row.window}-${j}`}>
-                      {cell.soldierIdx != null ? (
-                        <SoldierLink
-                          soldierIdx={cell.soldierIdx}
-                          label={cellLabel}
-                          selected={selectedSoldier === cell.soldierIdx}
-                          onSelect={onSelectSoldier}
-                          display={display}
-                        />
-                      ) : (
-                        cellLabel
-                      )}
+                    <td key={`${row.window}-${j}`} className={teamClass.trim()}>
+                      {inner}
                     </td>
                   );
                 })}

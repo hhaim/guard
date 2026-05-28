@@ -1,0 +1,43 @@
+# Four concurrent rotating gate slots (zones_s1 without full_day_team k1).
+# Use for scenario / availability tests that assume -y 4 gate-only scheduling.
+
+schema_version: 2
+shift_hours: 4
+
+slots_types:
+  - id: rotating_slot
+    name: Rotating Guard
+    pattern: rotating
+
+slots:
+  - location_id: loc_gate
+    name: g1
+  - location_id: loc_gate
+    name: g2
+  - location_id: loc_gate
+    name: g3
+  - location_id: loc_gate
+    name: g4
+
+zone_loc:
+  - id: loc_gate
+    type: rotating_slot
+    name: G
+    weight: 1.0
+
+time_zones:
+  - id: zt_night
+    name: Night
+    weight: 1.5
+    from_hour: 0
+    to_hour: 5
+  - id: zt_morning
+    name: Morning
+    weight: 0.9
+    from_hour: 6
+    to_hour: 11
+  - id: zt_day
+    name: Day
+    weight: 1.0
+    from_hour: 12
+    to_hour: 23

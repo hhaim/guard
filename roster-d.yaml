@@ -1,0 +1,55 @@
+schema_version: 2
+exported_at: 2026-05-28T12:45:36.597Z
+soldier_types:
+  types:
+    - code: A
+      label: קצין
+    - code: B
+      label: סמל
+    - code: C
+      label: מפקד 08-07
+    - code: E
+      label: לוחם
+    - code: F
+      label: קלע
+    - code: G
+      label: חובש
+    - code: H
+      label: נגביסט
+soldiers:
+  - id: s0
+    full_name: s0
+    type_code: E
+  - id: s1
+    full_name: s1
+    type_code: A
+  - id: s2
+    full_name: s2
+    type_code: E
+  - id: s3
+    full_name: s4
+    type_code: E
+  - id: s4
+    full_name: s4
+    type_code: C
+  - id: s5
+    full_name: s5
+    type_code: F
+  - id: s6
+    full_name: s6
+    type_code: H
+  - id: s7
+    full_name: s7
+    type_code: E
+  - id: s8
+    full_name: s8
+    type_code: C
+  - id: s9
+    full_name: s9
+    type_code: C
+  - id: s10
+    full_name: s10
+    type_code: E
+  - id: s11
+    full_name: s11
+    type_code: E

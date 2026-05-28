@@ -1,6 +1,9 @@
 package guardsched
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParsePlanDayStart(t *testing.T) {
 	h, err := ParsePlanDayStart("05:00")
@@ -16,6 +19,21 @@ func TestParsePlanDayStart(t *testing.T) {
 	empty, err := ParsePlanDayStart("")
 	if err != nil || empty != 5 {
 		t.Fatalf("empty default: %d %v", empty, err)
+	}
+}
+
+func TestWeekdayAtPlanDayStart(t *testing.T) {
+	// 2026-05-29 UTC is Friday; plan day 0 begins Fri 05:00, plan day 1 begins Sat 05:00.
+	anchor := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
+	if got := WeekdayAtPlanDayStart(anchor, 0, 5); got != 5 {
+		t.Fatalf("plan day 0 @05:00: got %d want Friday(5)", got)
+	}
+	if got := WeekdayAtPlanDayStart(anchor, 1, 5); got != 6 {
+		t.Fatalf("plan day 1 @05:00: got %d want Saturday(6)", got)
+	}
+	// Midnight-only helper matches calendar date + offset.
+	if WeekdayForAnchorPlanDay(anchor, 0) != 5 {
+		t.Fatalf("midnight plan day 0: got %d want Friday(5)", WeekdayForAnchorPlanDay(anchor, 0))
 	}
 }
 

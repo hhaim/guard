@@ -105,6 +105,8 @@ MIN_CONSECUTIVE_FREE_HOURS_DEFAULT = 8.0
 # At most this many calendar blocks on duty in a row (simulation time); next block must be free.
 # Default 2 ⇒ no third consecutive duty block (≥ one free block between runs of three shifts).
 MAX_CONSECUTIVE_DUTY_BLOCKS_DEFAULT = 2
+DEFAULT_PLAN_DAY_START = "05:00"
+DEFAULT_PLAN_DAY_START_HOUR = 5
 
 
 class RestConstraintError(RuntimeError):
@@ -391,7 +393,7 @@ def validate_schedule_rest(
 ) -> None:
     """Ensure built schedule meets per-day max consecutive free for every soldier.
 
-    Soldiers with a ``full_day`` or ``windowed`` assignment that day are skipped: their
+    Soldiers with a ``full_day``, ``full_day_team`` or ``windowed`` assignment that day are skipped: their
     duty is a fixed pattern outside the rotating rest-arc model, and the calendar may be
     fully committed (YAML-driven) without a separate 24 h ``min_free`` window.
     """
@@ -406,7 +408,7 @@ def validate_schedule_rest(
                     if a.day != d or a.soldier_idx != s:
                         continue
                     k = getattr(a, "kind", "rotating") or "rotating"
-                    if k in ("full_day", "windowed"):
+                    if k in ("full_day", "full_day_team", "windowed"):
                         skip = True
                         break
                 if skip:
@@ -448,8 +450,12 @@ class ZoneConfig:
     location_type_ids: Tuple[str, ...] = ()
     loc_full_names: Tuple[str, ...] = ()
     full_day_specs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    full_day_team_specs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     windowed_specs: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     windowed_rest_hours: Dict[str, float] = field(default_factory=dict)
+    windowed_headcount: Dict[str, int] = field(default_factory=dict)
+    disabled_weekdays: Dict[str, Tuple[int, ...]] = field(default_factory=dict)
+    slot_soldiers_required: Tuple[int, ...] = ()
 
     @property
     def n_loc(self) -> int:
@@ -490,9 +496,7 @@ class AssignmentRecord:
 def assignment_occupied_blocks(a: AssignmentRecord, blocks_pd: int) -> List[int]:
     """Calendar block indices this assignment occupies on its **duty** row (matrix / rowspan)."""
     k = getattr(a, "kind", "rotating") or "rotating"
-    if k == "full_day":
-        return list(range(int(a.win_start_block), int(a.win_end_block) + 1))
-    if k == "windowed":
+    if k in ("full_day", "full_day_team", "windowed"):
         return list(range(int(a.win_start_block), int(a.win_end_block) + 1))
     return [int(a.calendar_block)]
 
@@ -519,7 +523,7 @@ def build_schedule_compare_matrix(
             if mat[a.day][a.calendar_block][a.slot] not in (-1, a.soldier_idx):
                 raise ValueError("schedule matrix conflict (rotating)")
             mat[a.day][a.calendar_block][a.slot] = int(a.soldier_idx)
-        elif k in ("full_day", "windowed"):
+        elif k in ("full_day", "full_day_team", "windowed"):
             for bb in assignment_occupied_blocks(a, blocks_pd):
                 cur = mat[a.day][bb][a.slot]
                 if cur not in (-1, a.soldier_idx):
@@ -527,14 +531,6 @@ def build_schedule_compare_matrix(
                 mat[a.day][bb][a.slot] = int(a.soldier_idx)
         else:
             raise ValueError(f"unknown assignment kind {k!r}")
-    for d in range(days):
-        for b in range(blocks_pd):
-            for j in range(slots_per_block):
-                if mat[d][b][j] < 0:
-                    raise ValueError(
-                        f"schedule matrix has empty cell day={d} block={b} slot={j}; "
-                        "incomplete assignments?"
-                    )
     return mat
 
 
@@ -862,7 +858,14 @@ def replay_checkpoint_assignments(
             sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
             rest_after = float(cfg["rest_after"])
             L0, span = _linear_busy_span_duty_hours_plus_rest(
-                day, B, sh, sh0, sh1, half_open=False, rest_after_h=rest_after
+                day,
+                B,
+                sh,
+                sh0,
+                sh1,
+                half_open=False,
+                rest_after_h=rest_after,
+                plan_start_hour=plan_start,
             )
             lw = loc_w[loc_i]
             wm = float(cfg["weight_mult"])
@@ -926,14 +929,39 @@ def replay_checkpoint_assignments(
 
 
 def expected_assignment_count(
-    zone: ZoneConfig, days: int, blocks_pd: int, slots_per_block: int
+    zone: ZoneConfig,
+    days: int,
+    blocks_pd: int,
+    slots_per_block: int,
+    anchor: Optional[datetime] = None,
+    plan_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> int:
     if len(zone.slot_patterns) != slots_per_block:
         raise ValueError("slots_per_block does not match loaded zone.slot_patterns length")
-    n_rot = sum(1 for p in zone.slot_patterns if p == "rotating")
-    n_fd = sum(1 for p in zone.slot_patterns if p == "full_day")
-    n_wd = sum(1 for p in zone.slot_patterns if p == "windowed_slots")
-    return int(days * (n_fd + n_wd + n_rot * blocks_pd))
+    total = 0
+    for d in range(days):
+        for sidx in range(slots_per_block):
+            if _slot_disabled_for_day(zone, sidx, d, anchor, plan_start_hour):
+                continue
+            pat = zone.slot_patterns[sidx]
+            n_req = _soldiers_required(zone, sidx)
+            if pat == "rotating":
+                total += n_req * blocks_pd
+            elif pat == "full_day":
+                loc_i = zone.slot_location_indices[sidx]
+                tid = zone.location_type_ids[loc_i]
+                cfg = zone.full_day_specs[tid]
+                total += max(1, int(cfg.get("headcount", 1)))
+            elif pat == "windowed_slots":
+                loc_i = zone.slot_location_indices[sidx]
+                tid = zone.location_type_ids[loc_i]
+                total += max(1, int(zone.windowed_headcount.get(tid, 1)))
+            elif pat == "full_day_team":
+                loc_i = zone.slot_location_indices[sidx]
+                tid = zone.location_type_ids[loc_i]
+                cfg = zone.full_day_team_specs[tid]
+                total += int(cfg["headcount"])
+    return int(total)
 
 
 def validate_shift_hours(block_hours: float) -> float:
@@ -1018,10 +1046,6 @@ def format_block_window(start_hour: int, block_hours: float) -> str:
     return f"{sh:02d}:00 (+{bh:g} h)"
 
 
-DEFAULT_PLAN_DAY_START = "05:00"
-DEFAULT_PLAN_DAY_START_HOUR = 5
-
-
 def parse_plan_day_start(s: str) -> int:
     """Parse HH:MM (whole hours only; minutes must be 00). Default 05:00."""
     s = (s or "").strip()
@@ -1079,11 +1103,256 @@ def _soldier_avail_rotating(
     )
 
 
+_WEEKDAY_INDEX = {name.lower(): i for i, name in enumerate(
+    ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+)}
+
+
+def _parse_disabled_weekdays(raw: Any) -> Tuple[int, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("disabled_weekdays must be a list")
+    seen: set[int] = set()
+    out: List[int] = []
+    for item in raw:
+        key = str(item).strip().lower()
+        if key not in _WEEKDAY_INDEX:
+            raise ValueError(f"invalid weekday name {item!r} (use sunday..saturday)")
+        i = _WEEKDAY_INDEX[key]
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return tuple(sorted(out))
+
+
+def _weekday_for_anchor_plan_day(anchor: datetime, plan_day: int) -> int:
+    return (anchor.weekday() + 1 + plan_day) % 7  # datetime: Mon=0; plan uses Sun=0
+
+
+def _weekday_at_plan_day_start(
+    anchor: datetime, plan_day: int, plan_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR
+) -> int:
+    """Weekday (Sun=0) when plan day ``plan_day`` begins at plan_start_hour UTC."""
+    ps = int(plan_start_hour) % 24
+    start = anchor.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=plan_day)
+    start = start.replace(hour=ps)
+    return (start.weekday() + 1) % 7
+
+
+def _slot_disabled_for_day(
+    zone: ZoneConfig,
+    sidx: int,
+    day: int,
+    anchor: Optional[datetime],
+    plan_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+) -> bool:
+    if anchor is None:
+        return False
+    loc_i = zone.slot_location_indices[sidx]
+    tid = zone.location_type_ids[loc_i]
+    wds = zone.disabled_weekdays.get(tid)
+    if not wds:
+        return False
+    wd = _weekday_at_plan_day_start(anchor, day, plan_start_hour)
+    return wd in wds
+
+
+def _soldiers_required(zone: ZoneConfig, sidx: int) -> int:
+    if sidx < len(zone.slot_soldiers_required):
+        n = int(zone.slot_soldiers_required[sidx])
+        return max(1, n)
+    return 1
+
+
+def _sorted_type_quotas(quotas: Dict[str, int], type_codes: Sequence[str]) -> List[Tuple[str, int]]:
+    if not quotas:
+        return []
+    roster_count: Dict[str, int] = {}
+    for tc in type_codes:
+        roster_count[str(tc).strip()] = roster_count.get(str(tc).strip(), 0) + 1
+
+    def sort_key(item: Tuple[str, int]) -> Tuple[int, int, str]:
+        code, q = item
+        return (-q, roster_count.get(code, 0), code)
+
+    return sorted(quotas.items(), key=sort_key)
+
+
+def _soldier_type_code(type_codes: Optional[Sequence[str]], idx: int) -> str:
+    if not type_codes or idx < 0 or idx >= len(type_codes):
+        return ""
+    return str(type_codes[idx]).strip()
+
+
+def _pick_soldiers_for_slot(
+    n: int,
+    pool_base,
+    loc_i: int,
+    time_mid: int,
+    deltas_loc: np.ndarray,
+    deltas_time: np.ndarray,
+    deltas_g: np.ndarray,
+    rng: random.Random,
+    *,
+    band_relative: float,
+    balance_total_hours: bool,
+    total_hours_slack: float,
+    prefix_key=None,
+) -> List[Soldier]:
+    assigned: List[Soldier] = []
+    for _ in range(n):
+        pool = pool_base(assigned)
+        if not pool:
+            raise ValueError(f"need {n} soldiers, have {len(assigned)} available")
+        chosen = pick_soldier(
+            pool,
+            loc_i,
+            time_mid,
+            deltas_loc,
+            deltas_time,
+            deltas_g,
+            rng,
+            band_relative=band_relative,
+            balance_total_hours=balance_total_hours,
+            total_hours_slack=total_hours_slack,
+            prefix_key=prefix_key,
+        )
+        assigned.append(chosen)
+    return assigned
+
+
+def _fill_full_day_team_post(
+    zone: ZoneConfig,
+    day: int,
+    sidx: int,
+    loc_i: int,
+    cfg: Dict[str, Any],
+    soldiers: List[Soldier],
+    type_codes: Optional[Sequence[str]],
+    busy: np.ndarray,
+    daily_raw_loc: np.ndarray,
+    daily_raw_time: np.ndarray,
+    deltas_loc: np.ndarray,
+    deltas_time: np.ndarray,
+    deltas_g: np.ndarray,
+    B: int,
+    sh: float,
+    days: int,
+    rng: random.Random,
+    *,
+    plan_start_hour: int,
+    band_relative: float,
+    balance_total_hours: bool,
+    total_hours_slack: float,
+    availability: Any,
+    assignments: List[AssignmentRecord],
+) -> None:
+    sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
+    rest_after = float(cfg["rest_after"])
+    L0, span = _linear_busy_span_duty_hours_plus_rest(
+        day,
+        B,
+        sh,
+        sh0,
+        sh1,
+        half_open=False,
+        rest_after_h=rest_after,
+        plan_start_hour=plan_start_hour,
+    )
+    lw = zone.loc_weights[loc_i]
+    wm = float(cfg["weight_mult"])
+    raw_active = float(sh1 - sh0 + 1)
+    b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
+    duty_w = b1 - b0 + 1
+    time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
+    headcount = int(cfg["headcount"])
+    quotas: Dict[str, int] = dict(cfg.get("type_quotas") or {})
+
+    assigned: List[Soldier] = []
+    deltas_loc[:] = 0.0
+    deltas_time[:] = 0.0
+    deltas_g[:] = 0.0
+
+    def pick_n(n: int, type_filter: str) -> None:
+        nonlocal assigned
+        for pick in range(n):
+            pool = [
+                s
+                for s in soldiers
+                if s not in assigned
+                and (not type_filter or _soldier_type_code(type_codes, s.idx) == type_filter)
+                and not _any_busy_span(busy, s.idx, L0, span, B, days)
+                and _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
+            ]
+            if not pool:
+                if type_filter:
+                    raise ValueError(
+                        f"full_day_team: need {n} type {type_filter}, have {pick} available "
+                        f"on day {day + 1} slot {sidx + 1}"
+                    )
+                raise ValueError(
+                    f"full_day_team: cannot fill {n - pick} generic seats on day {day + 1} slot {sidx + 1}"
+                )
+            chosen = pick_soldier(
+                pool,
+                loc_i,
+                time_mid,
+                deltas_loc,
+                deltas_time,
+                deltas_g,
+                rng,
+                band_relative=band_relative,
+                balance_total_hours=balance_total_hours,
+                total_hours_slack=total_hours_slack,
+            )
+            assigned.append(chosen)
+
+    for code, q in _sorted_type_quotas(quotas, type_codes or ()):
+        pick_n(q, code)
+    remaining = headcount - len(assigned)
+    if remaining > 0:
+        pick_n(remaining, "")
+
+    for chosen in assigned:
+        tot_w = 0.0
+        for h in range(sh0, sh1 + 1):
+            tj = time_category_for_hour(h, zone)
+            tw = zone.time_weights[tj]
+            wpart = lw * tw * wm
+            tot_w += wpart
+            chosen.add_assignment(loc_i, tj, wpart, 1.0)
+        _busy_span_set(busy, chosen.idx, L0, span, B, days)
+        daily_raw_loc[day, chosen.idx, loc_i] += raw_active
+        for h in range(sh0, sh1 + 1):
+            tj = time_category_for_hour(h, zone)
+            daily_raw_time[day, chosen.idx, tj] += 1.0
+        assignments.append(
+            AssignmentRecord(
+                day=day,
+                calendar_block=b0,
+                start_hour=int(b0 * sh),
+                slot=sidx,
+                soldier_idx=chosen.idx,
+                loc_i=loc_i,
+                time_j=time_mid,
+                weight=tot_w,
+                raw_hours=raw_active,
+                kind="full_day_team",
+                rowspan=duty_w,
+                win_start_block=b0,
+                win_end_block=b1,
+                window_name=None,
+                linear_busy_span_blocks=span,
+            )
+        )
+
+
 def parse_slot_location_indices(
     data: Dict[str, Any],
     slots_per_block: int,
     loc_id_to_idx: Dict[str, int],
-) -> Tuple[Tuple[int, ...], Tuple[str, ...]]:
+) -> Tuple[Tuple[int, ...], Tuple[str, ...], Tuple[int, ...]]:
     """
     YAML ``slots`` or ``slot_locations``: exactly ``slots_per_block`` entries in order
     (slot 1 .. slot y). Each entry is either ``location_id: <id>`` mapping or a plain string id.
@@ -1105,7 +1374,9 @@ def parse_slot_location_indices(
         )
     out: List[int] = []
     names: List[str] = []
+    n_req: List[int] = []
     for i, entry in enumerate(raw):
+        req = 1
         if isinstance(entry, str):
             lid = entry.strip()
             disp = ""
@@ -1114,6 +1385,10 @@ def parse_slot_location_indices(
             disp = str(entry.get("full_name", "")).strip()
             if not disp:
                 disp = str(entry.get("name", "")).strip()
+            if "soldiers_required" in entry:
+                req = int(entry["soldiers_required"])
+                if req < 1:
+                    raise ValueError(f"slots[{i}]: soldiers_required must be >= 1")
         else:
             raise ValueError(f"slots[{i}] must be a string or a mapping with location_id")
         if not lid:
@@ -1124,7 +1399,8 @@ def parse_slot_location_indices(
             )
         out.append(loc_id_to_idx[lid])
         names.append(disp)
-    return tuple(out), tuple(names)
+        n_req.append(req)
+    return tuple(out), tuple(names), tuple(n_req)
 
 
 def _parse_hhmm_clock(s: str) -> int:
@@ -1223,8 +1499,11 @@ def _load_zone_config(
 
     type_map: Dict[str, Dict[str, Any]] = {}
     full_day_specs: Dict[str, Dict[str, Any]] = {}
+    full_day_team_specs: Dict[str, Dict[str, Any]] = {}
+    disabled_wd: Dict[str, Tuple[int, ...]] = {}
     windowed_specs: Dict[str, List[Dict[str, Any]]] = {}
     windowed_rest: Dict[str, float] = {}
+    windowed_headcount: Dict[str, int] = {}
 
     for row in stypes:
         if not isinstance(row, dict):
@@ -1233,14 +1512,19 @@ def _load_zone_config(
         pat = str(row.get("pattern", "")).strip()
         if not tid:
             raise ValueError("slots_types entry missing id")
-        if pat not in ("rotating", "full_day", "windowed_slots"):
+        if pat not in ("rotating", "full_day", "full_day_team", "windowed_slots"):
             raise ValueError(f"slots_types[{tid!r}]: unknown pattern {pat!r}")
         type_map[tid] = {"pattern": pat, "raw": row}
+        if row.get("disabled_weekdays") is not None:
+            disabled_wd[tid] = tuple(_parse_disabled_weekdays(row["disabled_weekdays"]))
         if pat == "full_day":
             cfg = row.get("config") or {}
             if not isinstance(cfg, dict):
                 raise ValueError(f"full_day {tid!r}: config must be a mapping")
             sh0, sh1 = _parse_inclusive_full_day_hours(str(cfg["start"]), str(cfg["end"]))
+            hc = int(cfg.get("headcount", 1))
+            if hc < 1:
+                raise ValueError(f"full_day {tid!r}: headcount must be >= 1")
             full_day_specs[tid] = {
                 "start_h": sh0,
                 "end_h": sh1,
@@ -1248,6 +1532,46 @@ def _load_zone_config(
                 "weight_mult": float(
                     cfg.get("weight_multiplier", cfg.get("weight_mult", cfg.get("w_mult", 1.0)))
                 ),
+                "headcount": hc,
+            }
+        elif pat == "full_day_team":
+            cfg = row.get("config") or {}
+            if not isinstance(cfg, dict):
+                raise ValueError(f"full_day_team {tid!r}: config must be a mapping")
+            sh0, sh1 = _parse_inclusive_full_day_hours(str(cfg["start"]), str(cfg["end"]))
+            rest_after = float(cfg.get("rest_after_hours", cfg.get("rest_after", 6)))
+            if rest_after < 0:
+                raise ValueError(f"full_day_team {tid!r}: rest_after_hours must be >= 0")
+            hc = int(cfg.get("headcount", 0))
+            if hc < 1:
+                raise ValueError(f"full_day_team {tid!r}: headcount must be >= 1")
+            quotas_raw = cfg.get("type_quotas") or {}
+            if quotas_raw is not None and not isinstance(quotas_raw, dict):
+                raise ValueError(f"full_day_team {tid!r}: type_quotas must be a mapping")
+            quotas: Dict[str, int] = {}
+            sum_q = 0
+            for k, v in (quotas_raw or {}).items():
+                code = str(k).strip()
+                if not code or code == "*":
+                    raise ValueError(f"full_day_team {tid!r}: invalid type_quotas key {k!r}")
+                q = int(v)
+                if q < 1:
+                    raise ValueError(f"full_day_team {tid!r}: type_quotas[{code!r}] must be >= 1")
+                quotas[code] = q
+                sum_q += q
+            if sum_q > hc:
+                raise ValueError(
+                    f"full_day_team {tid!r}: sum(type_quotas)={sum_q} exceeds headcount={hc}"
+                )
+            full_day_team_specs[tid] = {
+                "start_h": sh0,
+                "end_h": sh1,
+                "rest_after": rest_after,
+                "weight_mult": float(
+                    cfg.get("weight_multiplier", cfg.get("weight_mult", cfg.get("w_mult", 1.0)))
+                ),
+                "headcount": hc,
+                "type_quotas": quotas,
             }
         elif pat == "windowed_slots":
             cfg = row.get("config") or {}
@@ -1267,7 +1591,11 @@ def _load_zone_config(
                         "weight_mult": float(sw.get("weight_multiplier", sw.get("weight_mult", 1.0))),
                     }
                 )
+            hc = int(cfg.get("headcount", 1))
+            if hc < 1:
+                raise ValueError(f"windowed_slots {tid!r}: headcount must be >= 1")
             windowed_specs[tid] = wl
+            windowed_headcount[tid] = hc
             windowed_rest[tid] = float(row.get("rest_after_hours", row.get("rest_after", 6.0)))
         # rotating: no extra specs
 
@@ -1289,7 +1617,7 @@ def _load_zone_config(
 
     lp = [parse_zone_row_typed(locs[i], "zone_loc") for i in range(len(locs))]
     loc_id_to_idx = {lp[i][0]: i for i in range(len(lp))}
-    slot_loc, slot_names = parse_slot_location_indices(data, slots_per_block, loc_id_to_idx)
+    slot_loc, slot_names, slot_n_req = parse_slot_location_indices(data, slots_per_block, loc_id_to_idx)
 
     slot_patterns: List[str] = []
     for sidx in range(slots_per_block):
@@ -1343,8 +1671,12 @@ def _load_zone_config(
         slot_display_names=slot_names,
         location_type_ids=tuple(x[4] for x in lp),
         full_day_specs=full_day_specs,
+        full_day_team_specs=full_day_team_specs,
         windowed_specs=windowed_specs,
         windowed_rest_hours=windowed_rest,
+        windowed_headcount=windowed_headcount,
+        disabled_weekdays=disabled_wd,
+        slot_soldiers_required=slot_n_req,
     )
 
 
@@ -1410,6 +1742,47 @@ def resolve_slots_per_block_for_run(
             f"you passed -y {slots_arg}. Use -y {yaml_n}, or omit -y/--slots to use the file's count."
         )
     return slots_arg
+
+
+def roster_keys(num_soldiers: int) -> List[str]:
+    return [f"s{i}" for i in range(int(num_soldiers))]
+
+
+def type_codes_for_roster(keys: Sequence[str], id_to_type: Dict[str, str]) -> List[str]:
+    return [str(id_to_type.get(k, "")).strip() for k in keys]
+
+
+def load_roster_type_codes_yaml(path: Path, keys: Sequence[str]) -> List[str]:
+    """
+    Read ``type_code`` by soldier id from roster YAML and return values in ``keys`` order.
+
+    Supports both UI export shape (``soldiers: [ ... ]``) and legacy nested
+    shape (``soldiers: { soldiers: [ ... ] }``).
+    """
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("roster YAML must be a mapping at top level")
+    raw_soldiers = data.get("soldiers")
+    rows: Optional[List[Any]] = None
+    if isinstance(raw_soldiers, list):
+        rows = raw_soldiers
+    elif isinstance(raw_soldiers, dict):
+        nested = raw_soldiers.get("soldiers")
+        if isinstance(nested, list):
+            rows = nested
+    if rows is None:
+        raise ValueError("roster YAML must include soldiers list")
+    id_to_type: Dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sid = str(row.get("id", "")).strip()
+        if not sid:
+            sid = str(row.get("key", "")).strip()
+        tc = str(row.get("type_code", "")).strip()
+        if sid and tc and tc != "<nil>":
+            id_to_type[sid] = tc
+    return type_codes_for_roster(keys, id_to_type)
 
 
 @dataclass
@@ -1615,19 +1988,28 @@ def _linear_busy_span_duty_hours_plus_rest(
     *,
     half_open: bool,
     rest_after_h: float,
+    plan_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> Tuple[int, int]:
-    """Linear (day,block) index of first busy block and span length: duty blocks + post-duty rest.
+    """Linear (day,block) index of first busy block and span length.
 
-    ``rest_after_h`` applies **after the duty window** (YAML semantics), not as padding for an
-    entire empty calendar day before duty.
+    Simpler policy: extend duty end by ``rest_after_h`` in wall-clock hours first, then
+    map the resulting half-open window to calendar blocks once. This avoids over-padding
+    from separately aligning duty and rest.
     """
-    if half_open:
-        b0, b1 = _duty_blocks_half_open_wall_hours(sh, h_duty0, h_duty1_incl_or_excl)
-    else:
-        b0, b1 = _duty_blocks_inclusive_wall_hours(sh, h_duty0, h_duty1_incl_or_excl)
-    duty_w = b1 - b0 + 1
-    rest_blk = _rest_blocks_aligned(rest_after_h, sh)
-    span = duty_w + rest_blk
+    _ = half_open  # unified end+rest mapping.
+    end_excl = int(math.floor(float(h_duty1_incl_or_excl) + float(rest_after_h) + 1e-9))
+    if end_excl <= int(h_duty0):
+        end_excl = int(h_duty0) + 1
+    sh_i = int(sh)
+    # Map wall-clock hours onto plan-day block grid (block 0 starts at plan_start_hour).
+    start_rel = (int(h_duty0) - int(plan_start_hour)) % 24
+    dur_h = int(end_excl) - int(h_duty0)
+    if dur_h <= 0:
+        dur_h = 1
+    end_rel = start_rel + dur_h
+    b0 = start_rel // sh_i
+    b1 = (end_rel - 1) // sh_i
+    span = b1 - b0 + 1
     L0 = day * B + b0
     return L0, span
 
@@ -1840,6 +2222,8 @@ def run_simulation(
     band_relative: float = BAND_RELATIVE_DEFAULT,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
     availability: Any = None,
+    anchor: Optional[datetime] = None,
+    type_codes: Optional[Sequence[str]] = None,
 ) -> Tuple[
     List[Soldier],
     np.ndarray,
@@ -1902,80 +2286,37 @@ def run_simulation(
         deltas_time[:] = 0.0
         deltas_g[:] = 0.0
         for sidx in range(slots_per_block):
-            if zone.slot_patterns[sidx] != "full_day":
+            if zone.slot_patterns[sidx] != "full_day_team":
+                continue
+            if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
                 continue
             loc_i = zone.slot_location_indices[sidx]
             tid = zone.location_type_ids[loc_i]
-            cfg = zone.full_day_specs[tid]
-            sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
-            rest_after = float(cfg["rest_after"])
-            L0, span = _linear_busy_span_duty_hours_plus_rest(
-                day, B, sh, sh0, sh1, half_open=False, rest_after_h=rest_after
-            )
-            lw = loc_w[loc_i]
-            wm = float(cfg["weight_mult"])
-            tot_w = 0.0
-            raw_active = float(sh1 - sh0 + 1)
-            b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
-            duty_w = b1 - b0 + 1
-            # Do not use the rotating rest-arc here: every soldier has k_rest mandatory-off
-            # blocks per day, so ``_soldier_day_blocks_clear`` would reject everyone for full-day posts.
-            pool = [
-                s
-                for s in soldiers
-                if not _any_busy_span(busy, s.idx, L0, span, B, days)
-                and _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
-            ]
-            if not pool:
-                raise RestConstraintError(
-                    f"full_day: cannot fill day {day + 1} slot {sidx + 1} ({zone.loc_ids[loc_i]}). "
-                    "Try more soldiers or relax rest."
-                )
-            deltas_loc[:] = 0.0
-            deltas_time[:] = 0.0
-            deltas_g[:] = 0.0
-            time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
-            chosen = pick_soldier(
-                pool,
+            cfg = zone.full_day_team_specs[tid]
+            _fill_full_day_team_post(
+                zone,
+                day,
+                sidx,
                 loc_i,
-                time_mid,
+                cfg,
+                soldiers,
+                type_codes,
+                busy,
+                daily_raw_loc,
+                daily_raw_time,
                 deltas_loc,
                 deltas_time,
                 deltas_g,
+                B,
+                sh,
+                days,
                 rng,
+                plan_start_hour=plan_start,
                 band_relative=band_relative,
                 balance_total_hours=balance_total_hours,
                 total_hours_slack=total_hours_slack,
-            )
-            for h in range(sh0, sh1 + 1):
-                tj = time_category_for_hour(h, zone)
-                tw = time_w[tj]
-                wpart = lw * tw * wm
-                tot_w += wpart
-                chosen.add_assignment(loc_i, tj, wpart, 1.0)
-            _busy_span_set(busy, chosen.idx, L0, span, B, days)
-            daily_raw_loc[day, chosen.idx, loc_i] += raw_active
-            for h in range(sh0, sh1 + 1):
-                tj = time_category_for_hour(h, zone)
-                daily_raw_time[day, chosen.idx, tj] += 1.0
-            assignments.append(
-                AssignmentRecord(
-                    day=day,
-                    calendar_block=b0,
-                    start_hour=int(b0 * sh),
-                    slot=sidx,
-                    soldier_idx=chosen.idx,
-                    loc_i=loc_i,
-                    time_j=time_mid,
-                    weight=tot_w,
-                    raw_hours=raw_active,
-                    kind="full_day",
-                    rowspan=duty_w,
-                    win_start_block=b0,
-                    win_end_block=b1,
-                    window_name=None,
-                    linear_busy_span_blocks=span,
-                )
+                availability=availability,
+                assignments=assignments,
             )
 
     for day in range(days):
@@ -1983,7 +2324,104 @@ def run_simulation(
         deltas_time[:] = 0.0
         deltas_g[:] = 0.0
         for sidx in range(slots_per_block):
+            if zone.slot_patterns[sidx] != "full_day":
+                continue
+            if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                continue
+            loc_i = zone.slot_location_indices[sidx]
+            tid = zone.location_type_ids[loc_i]
+            cfg = zone.full_day_specs[tid]
+            sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
+            rest_after = float(cfg["rest_after"])
+            L0, span = _linear_busy_span_duty_hours_plus_rest(
+                day,
+                B,
+                sh,
+                sh0,
+                sh1,
+                half_open=False,
+                rest_after_h=rest_after,
+                plan_start_hour=plan_start,
+            )
+            lw = loc_w[loc_i]
+            wm = float(cfg["weight_mult"])
+            raw_active = float(sh1 - sh0 + 1)
+            b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
+            duty_w = b1 - b0 + 1
+            time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
+            n_req = max(1, int(cfg.get("headcount", 1)))
+
+            def pool_fn(assigned: List[Soldier]) -> List[Soldier]:
+                return [
+                    s
+                    for s in soldiers
+                    if s not in assigned
+                    and not _any_busy_span(busy, s.idx, L0, span, B, days)
+                    and _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
+                ]
+
+            deltas_loc[:] = 0.0
+            deltas_time[:] = 0.0
+            deltas_g[:] = 0.0
+            try:
+                chosen_list = _pick_soldiers_for_slot(
+                    n_req,
+                    pool_fn,
+                    loc_i,
+                    time_mid,
+                    deltas_loc,
+                    deltas_time,
+                    deltas_g,
+                    rng,
+                    band_relative=band_relative,
+                    balance_total_hours=balance_total_hours,
+                    total_hours_slack=total_hours_slack,
+                )
+            except ValueError as e:
+                raise RestConstraintError(
+                    f"full_day: cannot fill day {day + 1} slot {sidx + 1} ({zone.loc_ids[loc_i]}): {e}"
+                ) from e
+            for chosen in chosen_list:
+                tot_w = 0.0
+                for h in range(sh0, sh1 + 1):
+                    tj = time_category_for_hour(h, zone)
+                    tw = time_w[tj]
+                    wpart = lw * tw * wm
+                    tot_w += wpart
+                    chosen.add_assignment(loc_i, tj, wpart, 1.0)
+                _busy_span_set(busy, chosen.idx, L0, span, B, days)
+                daily_raw_loc[day, chosen.idx, loc_i] += raw_active
+                for h in range(sh0, sh1 + 1):
+                    tj = time_category_for_hour(h, zone)
+                    daily_raw_time[day, chosen.idx, tj] += 1.0
+                assignments.append(
+                    AssignmentRecord(
+                        day=day,
+                        calendar_block=b0,
+                        start_hour=int(b0 * sh),
+                        slot=sidx,
+                        soldier_idx=chosen.idx,
+                        loc_i=loc_i,
+                        time_j=time_mid,
+                        weight=tot_w,
+                        raw_hours=raw_active,
+                        kind="full_day",
+                        rowspan=duty_w,
+                        win_start_block=b0,
+                        win_end_block=b1,
+                        window_name=None,
+                        linear_busy_span_blocks=span,
+                    )
+                )
+
+    for day in range(days):
+        deltas_loc[:] = 0.0
+        deltas_time[:] = 0.0
+        deltas_g[:] = 0.0
+        for sidx in range(slots_per_block):
             if zone.slot_patterns[sidx] != "windowed_slots":
+                continue
+            if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
                 continue
             loc_i = zone.slot_location_indices[sidx]
             tid = zone.location_type_ids[loc_i]
@@ -1998,7 +2436,14 @@ def run_simulation(
                 if raw_active <= 0:
                     continue
                 L0w, spanw = _linear_busy_span_duty_hours_plus_rest(
-                    day, B, sh, h0, h1x, half_open=True, rest_after_h=rest_h
+                    day,
+                    B,
+                    sh,
+                    h0,
+                    h1x,
+                    half_open=True,
+                    rest_after_h=rest_h,
+                    plan_start_hour=plan_start,
                 )
                 pool = [
                     s
@@ -2040,50 +2485,93 @@ def run_simulation(
                 raise RestConstraintError(
                     f"windowed: cannot fill day {day + 1} slot {sidx + 1} ({zone.loc_ids[loc_i]})."
                 )
-            _wi, chosen, wdef, tot_w, wname = best[1], best[2], best[3], best[4], best[5]
+            _wi, _cand, wdef, tot_w, wname = best[1], best[2], best[3], best[4], best[5]
             h0, h1x = int(wdef["h0"]), int(wdef["h1_excl"])
             wm = float(wdef["weight_mult"])
             raw_active = float(max(0, h1x - h0))
             L0, span = _linear_busy_span_duty_hours_plus_rest(
-                day, B, sh, h0, h1x, half_open=True, rest_after_h=rest_h
+                day,
+                B,
+                sh,
+                h0,
+                h1x,
+                half_open=True,
+                rest_after_h=rest_h,
+                plan_start_hour=plan_start,
             )
-            for h in range(h0, h1x):
-                tj = time_category_for_hour(h, zone)
-                tw = time_w[tj]
-                wpart = lw * tw * wm
-                chosen.add_assignment(loc_i, tj, wpart, 1.0)
-            _busy_span_set(busy, chosen.idx, L0, span, B, days)
-            daily_raw_loc[day, chosen.idx, loc_i] += raw_active
-            for h in range(h0, h1x):
-                tj = time_category_for_hour(h, zone)
-                daily_raw_time[day, chosen.idx, tj] += 1.0
-            b0, b1 = _duty_blocks_half_open_wall_hours(sh, h0, h1x)
-            assignments.append(
-                AssignmentRecord(
-                    day=day,
-                    calendar_block=b0,
-                    start_hour=int(b0 * sh),
-                    slot=sidx,
-                    soldier_idx=chosen.idx,
-                    loc_i=loc_i,
-                    time_j=time_category_for_hour(h0, zone),
-                    weight=float(tot_w),
-                    raw_hours=raw_active,
-                    kind="windowed",
-                    rowspan=max(1, b1 - b0 + 1),
-                    win_start_block=b0,
-                    win_end_block=b1,
-                    window_name=wname or None,
-                    linear_busy_span_blocks=span,
+            n_req = max(1, int(zone.windowed_headcount.get(tid, 1)))
+            time_mid = time_category_for_hour(h0, zone)
+            if h1x > h0 + 1:
+                time_mid = time_category_for_hour((h0 + h1x - 1) // 2, zone)
+
+            def pool_fn_w(assigned: List[Soldier]) -> List[Soldier]:
+                return [
+                    s
+                    for s in soldiers
+                    if s not in assigned
+                    and not _any_busy_span(busy, s.idx, L0, span, B, days)
+                    and _soldier_avail_wall(availability, s.idx, day, h0, h1x)
+                ]
+
+            deltas_loc[:] = 0.0
+            deltas_time[:] = 0.0
+            deltas_g[:] = 0.0
+            try:
+                chosen_list = _pick_soldiers_for_slot(
+                    n_req,
+                    pool_fn_w,
+                    loc_i,
+                    time_mid,
+                    deltas_loc,
+                    deltas_time,
+                    deltas_g,
+                    rng,
+                    band_relative=band_relative,
+                    balance_total_hours=balance_total_hours,
+                    total_hours_slack=total_hours_slack,
                 )
-            )
+            except ValueError as e:
+                raise RestConstraintError(
+                    f"windowed: cannot fill day {day + 1} slot {sidx + 1}: {e}"
+                ) from e
+            b0, b1 = _duty_blocks_half_open_wall_hours(sh, h0, h1x)
+            for chosen in chosen_list:
+                for h in range(h0, h1x):
+                    tj = time_category_for_hour(h, zone)
+                    tw = time_w[tj]
+                    wpart = lw * tw * wm
+                    chosen.add_assignment(loc_i, tj, wpart, 1.0)
+                _busy_span_set(busy, chosen.idx, L0, span, B, days)
+                daily_raw_loc[day, chosen.idx, loc_i] += raw_active
+                for h in range(h0, h1x):
+                    tj = time_category_for_hour(h, zone)
+                    daily_raw_time[day, chosen.idx, tj] += 1.0
+                assignments.append(
+                    AssignmentRecord(
+                        day=day,
+                        calendar_block=b0,
+                        start_hour=int(b0 * sh),
+                        slot=sidx,
+                        soldier_idx=chosen.idx,
+                        loc_i=loc_i,
+                        time_j=time_category_for_hour(h0, zone),
+                        weight=float(tot_w),
+                        raw_hours=raw_active,
+                        kind="windowed",
+                        rowspan=max(1, b1 - b0 + 1),
+                        win_start_block=b0,
+                        win_end_block=b1,
+                        window_name=wname or None,
+                        linear_busy_span_blocks=span,
+                    )
+                )
 
     rot_slot_indices = _rotating_slot_indices(zone)
+    k_rest_mask = k_rest if len(rot_slot_indices) == slots_per_block else 0
     dfs_rot_ok = False
     rotating_dfs_tried = False
     if (
         x_cool > 0
-        and len(rot_slot_indices) == slots_per_block
         and len(rot_slot_indices) > 0
         and math.comb(num_soldiers, len(rot_slot_indices)) <= _ROTATING_COOLDOWN_DFS_MAX_COMBINATIONS
     ):
@@ -2098,7 +2586,7 @@ def run_simulation(
             days=days,
             blocks_pd=blocks_pd,
             n_rot=len(rot_slot_indices),
-            k_rest=k_rest,
+            k_rest=k_rest_mask,
             max_consecutive_duty_blocks=max_consecutive_duty_blocks,
             x_cool=x_cool,
             nodes=dfs_nodes,
@@ -2119,17 +2607,140 @@ def run_simulation(
                     deltas_time[:] = 0.0
                     deltas_g[:] = 0.0
                     rot_pf = (
-                        _rotating_prefix_key(busy, busy_rot, day, b, blocks_pd, days, k_rest)
+                        _rotating_prefix_key(
+                            busy, busy_rot, day, b, blocks_pd, days, k_rest_mask
+                        )
                         if x_cool > 0
                         else None
                     )
                     for sidx in rot_slot_indices:
+                        if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                            continue
                         loc_i = zone.slot_location_indices[sidx]
                         lw = loc_w[loc_i]
                         weight = sh * lw * tw
-                        pool = [s for s in in_block if s not in assigned]
-                        chosen = pick_soldier(
-                            pool,
+                        n_req = _soldiers_required(zone, sidx)
+
+                        def pool_fn_r(already: List[Soldier]) -> List[Soldier]:
+                            return [
+                                s
+                                for s in in_block
+                                if s not in assigned and s not in already
+                            ]
+
+                        try:
+                            chosen_list = _pick_soldiers_for_slot(
+                                n_req,
+                                pool_fn_r,
+                                loc_i,
+                                time_j,
+                                deltas_loc,
+                                deltas_time,
+                                deltas_g,
+                                rng,
+                                band_relative=band_relative,
+                                balance_total_hours=balance_total_hours,
+                                total_hours_slack=total_hours_slack,
+                                prefix_key=rot_pf,
+                            )
+                        except ValueError as e:
+                            raise RestConstraintError(
+                                f"rotating DFS fill day {day + 1} block {b + 1} slot {sidx + 1}: {e}"
+                            ) from e
+                        for chosen in chosen_list:
+                            assigned.append(chosen)
+                            chosen.add_assignment(loc_i, time_j, weight, sh)
+                            busy[day, chosen.idx, b] = True
+                            daily_raw_loc[day, chosen.idx, loc_i] += sh
+                            daily_raw_time[day, chosen.idx, time_j] += sh
+                            deltas_loc[chosen.idx, loc_i] += weight
+                            deltas_time[chosen.idx, time_j] += weight
+                            deltas_g[chosen.idx] += weight
+                            assignments.append(
+                                AssignmentRecord(
+                                    day=day,
+                                    calendar_block=b,
+                                    start_hour=start_h,
+                                    slot=sidx,
+                                    soldier_idx=chosen.idx,
+                                    loc_i=loc_i,
+                                    time_j=time_j,
+                                    weight=weight,
+                                    raw_hours=sh,
+                                    kind="rotating",
+                                    rowspan=1,
+                                    win_start_block=b,
+                                    win_end_block=b,
+                                    window_name=None,
+                                )
+                            )
+
+    if not dfs_rot_ok:
+        for day in range(days):
+            for b in range(blocks_pd):
+                start_h = block_start_hour(plan_start, b, sh)
+                time_j = time_category_for_hour(start_h, zone)
+                tw = time_w[time_j]
+                assigned: List[Soldier] = []
+                deltas_loc[:] = 0.0
+                deltas_time[:] = 0.0
+                deltas_g[:] = 0.0
+                rot_pf = (
+                    _rotating_prefix_key(
+                        busy, busy_rot, day, b, blocks_pd, days, k_rest_mask
+                    )
+                    if x_cool > 0
+                    else None
+                )
+                for sidx in range(slots_per_block):
+                    if zone.slot_patterns[sidx] != "rotating":
+                        continue
+                    if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                        continue
+                    loc_i = zone.slot_location_indices[sidx]
+                    lw = loc_w[loc_i]
+                    weight = sh * lw * tw
+                    n_req = _soldiers_required(zone, sidx)
+
+                    def pool_fn_rot(already: List[Soldier]) -> List[Soldier]:
+                        base_pool = [
+                            s
+                            for s in soldiers
+                            if s not in assigned
+                            and s not in already
+                            and not soldier_must_rest_this_block(
+                                s.idx, day, b, blocks_pd, k_rest_mask
+                            )
+                            and not busy[day, s.idx, b]
+                            and (
+                                max_consecutive_duty_blocks <= 0
+                                or consecutive_duty_blocks_before(
+                                    busy_rot, day, b, s.idx, blocks_pd
+                                )
+                                < max_consecutive_duty_blocks
+                            )
+                            and _soldier_avail_rotating(
+                                availability, s.idx, day, b, plan_start, sh
+                            )
+                        ]
+                        if x_cool > 0:
+                            stats.shift_cooldown_pool_iterations += 1
+                            filt = []
+                            for s in base_pool:
+                                gap = gap_free_blocks_since_last_duty_before_assign(
+                                    busy_rot, day, b, s.idx, blocks_pd
+                                )
+                                if gap >= x_cool or gap >= LARGE_LINEAR_GAP:
+                                    filt.append(s)
+                                else:
+                                    stats.shift_cooldown_exclusions += 1
+                            return filt
+                        return base_pool
+
+                    try:
+                        chosen_list = _pick_soldiers_for_slot(
+                            n_req,
+                            pool_fn_rot,
                             loc_i,
                             time_j,
                             deltas_loc,
@@ -2141,9 +2752,23 @@ def run_simulation(
                             total_hours_slack=total_hours_slack,
                             prefix_key=rot_pf,
                         )
+                    except ValueError as e:
+                        extra = ""
+                        if rotating_dfs_tried and not dfs_rot_ok:
+                            extra = (
+                                " Rotating DFS found no feasible mask; "
+                                "relax --days, --min-consecutive-free-hours, "
+                                "--min-free-shifts-after-duty, or add soldiers."
+                            )
+                        raise RestConstraintError(
+                            f"rotating: cannot fill day {day + 1} block {b + 1} slot {sidx + 1}: {e}"
+                            + extra
+                        ) from e
+                    for chosen in chosen_list:
                         assigned.append(chosen)
                         chosen.add_assignment(loc_i, time_j, weight, sh)
                         busy[day, chosen.idx, b] = True
+                        busy_rot[day, chosen.idx, b] = True
                         daily_raw_loc[day, chosen.idx, loc_i] += sh
                         daily_raw_time[day, chosen.idx, time_j] += sh
                         deltas_loc[chosen.idx, loc_i] += weight
@@ -2167,108 +2792,6 @@ def run_simulation(
                                 window_name=None,
                             )
                         )
-
-    if not dfs_rot_ok:
-        for day in range(days):
-            for b in range(blocks_pd):
-                start_h = block_start_hour(plan_start, b, sh)
-                time_j = time_category_for_hour(start_h, zone)
-                tw = time_w[time_j]
-                assigned: List[Soldier] = []
-                deltas_loc[:] = 0.0
-                deltas_time[:] = 0.0
-                deltas_g[:] = 0.0
-                rot_pf = (
-                    _rotating_prefix_key(busy, busy_rot, day, b, blocks_pd, days, k_rest)
-                    if x_cool > 0
-                    else None
-                )
-                for sidx in range(slots_per_block):
-                    if zone.slot_patterns[sidx] != "rotating":
-                        continue
-                    loc_i = zone.slot_location_indices[sidx]
-                    lw = loc_w[loc_i]
-                    weight = sh * lw * tw
-                    base_pool = [
-                        s
-                        for s in soldiers
-                        if s not in assigned
-                        and not soldier_must_rest_this_block(s.idx, day, b, blocks_pd, k_rest)
-                        and not busy[day, s.idx, b]
-                        and (
-                            max_consecutive_duty_blocks <= 0
-                            or consecutive_duty_blocks_before(busy_rot, day, b, s.idx, blocks_pd)
-                            < max_consecutive_duty_blocks
-                        )
-                        and _soldier_avail_rotating(
-                            availability, s.idx, day, b, plan_start, sh
-                        )
-                    ]
-                    if x_cool > 0:
-                        stats.shift_cooldown_pool_iterations += 1
-                        pool = []
-                        for s in base_pool:
-                            gap = gap_free_blocks_since_last_duty_before_assign(
-                                busy_rot, day, b, s.idx, blocks_pd
-                            )
-                            if gap >= x_cool or gap >= LARGE_LINEAR_GAP:
-                                pool.append(s)
-                            else:
-                                stats.shift_cooldown_exclusions += 1
-                    else:
-                        pool = base_pool
-                    if not pool:
-                        extra = ""
-                        if rotating_dfs_tried and not dfs_rot_ok:
-                            extra = (
-                                " All-rotating DFS found no feasible mask; "
-                                "relax --days, --min-consecutive-free-hours, "
-                                "--min-free-shifts-after-duty, or add soldiers."
-                            )
-                        raise RestConstraintError(
-                            f"rotating: cannot fill day {day + 1} block {b + 1} slot {sidx + 1}. "
-                            "Try more soldiers or relax constraints." + extra
-                        )
-                    chosen = pick_soldier(
-                        pool,
-                        loc_i,
-                        time_j,
-                        deltas_loc,
-                        deltas_time,
-                        deltas_g,
-                        rng,
-                        band_relative=band_relative,
-                        balance_total_hours=balance_total_hours,
-                        total_hours_slack=total_hours_slack,
-                        prefix_key=rot_pf,
-                    )
-                    assigned.append(chosen)
-                    chosen.add_assignment(loc_i, time_j, weight, sh)
-                    busy[day, chosen.idx, b] = True
-                    busy_rot[day, chosen.idx, b] = True
-                    daily_raw_loc[day, chosen.idx, loc_i] += sh
-                    daily_raw_time[day, chosen.idx, time_j] += sh
-                    deltas_loc[chosen.idx, loc_i] += weight
-                    deltas_time[chosen.idx, time_j] += weight
-                    deltas_g[chosen.idx] += weight
-                    assignments.append(
-                        AssignmentRecord(
-                            day=day,
-                            calendar_block=b,
-                            start_hour=start_h,
-                            slot=sidx,
-                            soldier_idx=chosen.idx,
-                            loc_i=loc_i,
-                            time_j=time_j,
-                            weight=weight,
-                            raw_hours=sh,
-                            kind="rotating",
-                            rowspan=1,
-                            win_start_block=b,
-                            win_end_block=b,
-                            window_name=None,
-                        )
-                    )
 
     raw_loc_mat = np.stack([s.raw_loc for s in soldiers], axis=0)
     raw_time_mat = np.stack([s.raw_time for s in soldiers], axis=0)
@@ -2410,6 +2933,8 @@ def run_simulation_checkpoint_extend(
     days = total_days
     d0, d1 = int(prefix_days), int(total_days)
 
+    rot_slot_count = sum(1 for p in zone.slot_patterns if p == "rotating")
+    k_rest_mask = k_rest if rot_slot_count == slots_per_block else 0
     for day in range(d0, d1):
         deltas_loc[:] = 0.0
         deltas_time[:] = 0.0
@@ -2508,7 +3033,14 @@ def run_simulation_checkpoint_extend(
                 if raw_active <= 0:
                     continue
                 L0w, spanw = _linear_busy_span_duty_hours_plus_rest(
-                    day, B, sh, h0, h1x, half_open=True, rest_after_h=rest_h
+                    day,
+                    B,
+                    sh,
+                    h0,
+                    h1x,
+                    half_open=True,
+                    rest_after_h=rest_h,
+                    plan_start_hour=plan_start,
                 )
                 pool = [
                     s
@@ -2555,7 +3087,14 @@ def run_simulation_checkpoint_extend(
             wm = float(wdef["weight_mult"])
             raw_active = float(max(0, h1x - h0))
             L0, span = _linear_busy_span_duty_hours_plus_rest(
-                day, B, sh, h0, h1x, half_open=True, rest_after_h=rest_h
+                day,
+                B,
+                sh,
+                h0,
+                h1x,
+                half_open=True,
+                rest_after_h=rest_h,
+                plan_start_hour=plan_start,
             )
             for h in range(h0, h1x):
                 tj = time_category_for_hour(h, zone)
@@ -2598,7 +3137,7 @@ def run_simulation_checkpoint_extend(
             deltas_time[:] = 0.0
             deltas_g[:] = 0.0
             rot_pf = (
-                _rotating_prefix_key(busy, busy_rot, day, b, blocks_pd, days, k_rest)
+                _rotating_prefix_key(busy, busy_rot, day, b, blocks_pd, days, k_rest_mask)
                 if x_cool > 0
                 else None
             )
@@ -2612,7 +3151,9 @@ def run_simulation_checkpoint_extend(
                     s
                     for s in soldiers
                     if s not in assigned
-                    and not soldier_must_rest_this_block(s.idx, day, b, blocks_pd, k_rest)
+                    and not soldier_must_rest_this_block(
+                        s.idx, day, b, blocks_pd, k_rest_mask
+                    )
                     and not busy[day, s.idx, b]
                     and (
                         max_consecutive_duty_blocks <= 0
@@ -2802,6 +3343,8 @@ def run_simulation_best_of(
     band_relative: float = BAND_RELATIVE_DEFAULT,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
     availability: Any = None,
+    anchor: Optional[datetime] = None,
+    type_codes: Optional[Sequence[str]] = None,
 ) -> Tuple[
     Tuple[
         List[Soldier],
@@ -2843,6 +3386,8 @@ def run_simulation_best_of(
         band_relative=band_relative,
         plan_day_start_hour=plan_day_start_hour,
         availability=availability,
+        anchor=anchor,
+        type_codes=type_codes,
     )
 
     if trials == 1:
@@ -3771,6 +4316,13 @@ def main() -> None:
         default="zones.yaml",
         help="YAML with locations and time_zones (default: zones.yaml)",
     )
+    p.add_argument(
+        "--roster",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Roster YAML for soldier type_code[] (UI export or legacy nested shape).",
+    )
     p.add_argument("--seed", type=int, default=None, help="RNG seed (optional)")
     p.add_argument(
         "-o",
@@ -3944,6 +4496,12 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    sim_anchor: Optional[datetime] = None
+    if args.anchor_date:
+        sim_anchor = datetime.strptime(args.anchor_date, "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        )
+
     scenario_avail: Any = None
     scenario_doc: Any = None
     if args.scenario:
@@ -3962,6 +4520,7 @@ def main() -> None:
         anchor = scenario_doc.default_anchor()
         if args.anchor_date:
             anchor = datetime.strptime(args.anchor_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        sim_anchor = anchor
         if scenario_doc.status_only:
             scenario_doc.sim["plan_day_start"] = args.plan_day_start
         resolve_scenario_times(scenario_doc, anchor)
@@ -4074,6 +4633,14 @@ def main() -> None:
     block_hours_eff = float(zone.shift_hours)
     plan_day_start_hour = parse_plan_day_start(args.plan_day_start)
     blocks_pd = calendar_blocks_per_day(block_hours_eff)
+    type_codes: Optional[List[str]] = None
+    if args.roster:
+        try:
+            type_codes = load_roster_type_codes_yaml(
+                Path(args.roster), roster_keys(int(args.soldiers))
+            )
+        except Exception as e:
+            raise SystemExit(f"Roster types: {e}") from e
 
     if args.sweep_band_relative is not None:
         raw_vals = [x.strip() for x in args.sweep_band_relative.split(",") if x.strip()]
@@ -4112,6 +4679,8 @@ def main() -> None:
                     min_free_shifts_after_duty=args.min_free_shifts_after_duty,
                     band_relative=br,
                     plan_day_start_hour=plan_day_start_hour,
+                    anchor=sim_anchor,
+                    type_codes=type_codes,
                 )
             except RestConstraintError as e:
                 print(f"ERROR at band_relative={br}: {e}", file=sys.stderr)
@@ -4192,6 +4761,8 @@ def main() -> None:
                 band_relative=args.band_relative,
                 plan_day_start_hour=plan_day_start_hour,
                 availability=scenario_avail,
+                anchor=sim_anchor,
+                type_codes=type_codes,
             )
         (
             soldiers,
@@ -4208,7 +4779,7 @@ def main() -> None:
         print(f"ERROR: {e}", file=sys.stderr)
         raise SystemExit(1) from e
     n_asn = len(assignments)
-    expect = expected_assignment_count(zone, args.days, blocks_pd, slots_eff)
+    expect = expected_assignment_count(zone, args.days, blocks_pd, slots_eff, anchor=sim_anchor)
     if n_asn != expect:
         raise RuntimeError(f"internal: assignment count {n_asn} != expected {expect}")
     if args.scenario and args.check_expect and scenario_doc is not None:
@@ -4239,7 +4810,7 @@ def main() -> None:
         ck_out = Path(args.save_state)
         write_checkpoint_json(ck_out, ck_doc)
         print(f"Wrote checkpoint: {ck_out}")
-    asn_day = expected_assignment_count(zone, 1, blocks_pd, slots_eff)
+    asn_day = expected_assignment_count(zone, 1, blocks_pd, slots_eff, anchor=sim_anchor)
     print(
         f"Schedule: {args.days} days × {asn_day} assignments/day "
         f"= {n_asn} shift rows (schema_version={zone.schema_version})"

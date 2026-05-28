@@ -37,8 +37,10 @@ export function SoldiersGuide() {
       <p className="contacts-hint">
         <strong>IDs matter:</strong> the simulator orders soldiers by roster position (index), but labels and exports
         use your ID strings (<code>s0</code>, <code>s12</code>, etc.). Multi-digit IDs are supported; schedule badges
-        show the ID, not a single-digit <code>Sx</code> index. Type codes appear as a short badge beside each name when
-        assigned.
+        show the ID, not a single-digit <code>Sx</code> index. <strong>Type codes</strong> drive{" "}
+        <code>full_day_team</code> minimum quotas in zones (e.g. <code>type_quotas: {"{B: 2}"}</code>); the simulator
+        matches roster <code>type_code</code> to those minimums before filling generic team seats. Type codes also appear
+        as a short badge beside each name when assigned.
       </p>
     </>
   );
