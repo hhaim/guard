@@ -609,7 +609,69 @@ def build_busy_tensor(
 
 # --- Checkpoint save/load (see guard_sim_checkpoint_state_plan.md) ---
 
-CHECKPOINT_FORMAT_VERSION = 1
+CHECKPOINT_FORMAT_VERSION = 2
+CHECKPOINT_FORMAT_VERSION_LEGACY = 1
+
+
+@dataclass
+class SimWitnessCapture:
+    """Filled during ``run_simulation`` when rotating fill reaches ``split_day``."""
+
+    split_day: int
+    rng_state: Optional[Tuple[Any, ...]] = None
+    suffix_nonrot: List[AssignmentRecord] = field(default_factory=list)
+    captured: bool = False
+
+
+def rng_state_to_json(state: Tuple[Any, ...]) -> Dict[str, Any]:
+    """Serialize ``random.Random.getstate()`` for checkpoint v2."""
+    if len(state) < 2:
+        raise ValueError("invalid RNG state tuple")
+    version = int(state[0])
+    inner = state[1]
+    if not isinstance(inner, (list, tuple)):
+        raise ValueError("RNG state[1] must be a sequence")
+    out: Dict[str, Any] = {
+        "version": version,
+        "state": [int(x) for x in inner],
+    }
+    if len(state) > 2:
+        out["gauss"] = state[2]
+    return out
+
+
+def rng_state_from_json(doc: Dict[str, Any]) -> Tuple[Any, ...]:
+    """Restore state for ``random.Random.setstate()``."""
+    version = int(doc["version"])
+    inner = tuple(int(x) for x in doc["state"])
+    if "gauss" in doc:
+        return (version, inner, doc["gauss"])
+    return (version, inner, None)
+
+
+def suffix_nonrot_from_assignments(
+    records: Sequence[AssignmentRecord], split_day: int
+) -> List[AssignmentRecord]:
+    return [
+        replace(a)
+        for a in records
+        if int(a.day) >= int(split_day)
+        and str(a.kind or "rotating") != "rotating"
+    ]
+
+
+def _maybe_capture_witness_rng(
+    witness: Optional[SimWitnessCapture],
+    day: int,
+    rng: random.Random,
+) -> None:
+    """Capture RNG after rotating fill on day ``split_day - 1`` (before day ``split_day``)."""
+    if witness is None or witness.captured:
+        return
+    if int(day) + 1 != int(witness.split_day):
+        return
+    witness.rng_state = rng.getstate()
+    witness.captured = True
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -738,10 +800,11 @@ def validate_checkpoint_document(
     blocks_pd: int,
     args: Any,
 ) -> None:
-    if int(doc.get("format_version", -1)) != CHECKPOINT_FORMAT_VERSION:
+    fv = int(doc.get("format_version", -1))
+    if fv not in (CHECKPOINT_FORMAT_VERSION, CHECKPOINT_FORMAT_VERSION_LEGACY):
         raise SystemExit(
-            f"Checkpoint format_version must be {CHECKPOINT_FORMAT_VERSION}, "
-            f"got {doc.get('format_version')!r}"
+            f"Checkpoint format_version must be {CHECKPOINT_FORMAT_VERSION} or "
+            f"{CHECKPOINT_FORMAT_VERSION_LEGACY}, got {doc.get('format_version')!r}"
         )
     cur = build_checkpoint_run_meta(zone, zones_path, slots_eff, block_hours, args)
     prev = doc.get("run_meta")
@@ -804,8 +867,13 @@ def build_checkpoint_document(
     num_days: int,
     blocks_pd: int,
     slots_eff: int,
+    seed: Optional[int] = None,
+    rng_state: Optional[Tuple[Any, ...]] = None,
+    rng_state_at: str = "after_prefix_sim_complete",
+    suffix_nonrot: Optional[Sequence[AssignmentRecord]] = None,
+    target_horizon: Optional[int] = None,
 ) -> Dict[str, Any]:
-    return {
+    doc: Dict[str, Any] = {
         "format_version": CHECKPOINT_FORMAT_VERSION,
         "saved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "run_meta": run_meta,
@@ -815,6 +883,18 @@ def build_checkpoint_document(
         "zones_yaml": zones_yaml_text,
         "assignments": [assignment_record_to_dict(a) for a in assignments],
     }
+    if seed is not None:
+        doc["seed"] = int(seed)
+    if rng_state is not None:
+        doc["rng_state"] = rng_state_to_json(rng_state)
+        doc["rng_state_at"] = str(rng_state_at)
+    if suffix_nonrot:
+        doc["suffix_nonrot"] = [
+            assignment_record_to_dict(a) for a in suffix_nonrot
+        ]
+    if target_horizon is not None:
+        doc["target_horizon"] = int(target_horizon)
+    return doc
 
 
 def replay_checkpoint_assignments(
@@ -833,6 +913,7 @@ def replay_checkpoint_assignments(
     sh = float(block_hours)
     B = calendar_blocks_per_day(sh)
     days = int(total_days)
+    plan_start = DEFAULT_PLAN_DAY_START_HOUR
     loc_w = zone.loc_weights
     time_w = zone.time_weights
     ordered = sorted(records, key=checkpoint_replay_sort_key)
@@ -855,6 +936,35 @@ def replay_checkpoint_assignments(
             sidx = int(a.slot)
             tid = zone.location_type_ids[loc_i]
             cfg = zone.full_day_specs[tid]
+            sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
+            rest_after = float(cfg["rest_after"])
+            L0, span = _linear_busy_span_duty_hours_plus_rest(
+                day,
+                B,
+                sh,
+                sh0,
+                sh1,
+                half_open=False,
+                rest_after_h=rest_after,
+                plan_start_hour=plan_start,
+            )
+            lw = loc_w[loc_i]
+            wm = float(cfg["weight_mult"])
+            raw_active = float(sh1 - sh0 + 1)
+            for h in range(sh0, sh1 + 1):
+                tj = time_category_for_hour(h, zone)
+                tw = time_w[tj]
+                wpart = lw * tw * wm
+                s.add_assignment(loc_i, tj, wpart, 1.0)
+            _busy_span_set(busy, s.idx, L0, span, B, days)
+            daily_raw_loc[day, s.idx, loc_i] += raw_active
+            for h in range(sh0, sh1 + 1):
+                tj = time_category_for_hour(h, zone)
+                daily_raw_time[day, s.idx, tj] += 1.0
+        elif k == "full_day_team":
+            loc_i = int(a.loc_i)
+            tid = zone.location_type_ids[loc_i]
+            cfg = zone.full_day_team_specs[tid]
             sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
             rest_after = float(cfg["rest_after"])
             L0, span = _linear_busy_span_duty_hours_plus_rest(
@@ -2207,6 +2317,576 @@ def _dfs_rotating_only_mask(
     return False
 
 
+def advance_rng_to_split_boundary(
+    num_soldiers: int,
+    slots_per_block: int,
+    horizon_days: int,
+    split_day: int,
+    zone: ZoneConfig,
+    block_hours: float,
+    rng: random.Random,
+    prefix_assignments: Sequence[AssignmentRecord],
+    *,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    availability: Any = None,
+    anchor: Optional[datetime] = None,
+    type_codes: Optional[Sequence[str]] = None,
+    band_relative: float = BAND_RELATIVE_DEFAULT,
+    balance_total_hours: bool = True,
+    total_hours_slack: float = 0.0,
+    min_consecutive_free_hours: float = MIN_CONSECUTIVE_FREE_HOURS_DEFAULT,
+    max_consecutive_duty_blocks: int = MAX_CONSECUTIVE_DUTY_BLOCKS_DEFAULT,
+    min_free_shifts_after_duty: int = 0,
+) -> List[AssignmentRecord]:
+    """
+    Advance ``rng`` to the point in ``run_simulation`` just before rotating fill on ``split_day``.
+    Returns non-rotating assignment rows for days ``split_day .. horizon-1`` (to replay on extend).
+    """
+    if split_day < 1 or horizon_days < split_day:
+        return []
+    sh = float(block_hours)
+    plan_start = int(plan_day_start_hour)
+    B = calendar_blocks_per_day(sh)
+    blocks_pd = B
+    days = horizon_days
+    nl, nt = zone.n_loc, zone.n_time
+    soldiers = [make_soldier(i, 0.0, nl, nt) for i in range(num_soldiers)]
+    busy = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
+    busy_rot = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
+    daily_raw_loc = np.zeros((days, num_soldiers, nl), dtype=np.float64)
+    daily_raw_time = np.zeros((days, num_soldiers, nt), dtype=np.float64)
+    nonrot_prefix = _checkpoint_nonrotating_records(prefix_assignments)
+    replay_checkpoint_assignments(
+        nonrot_prefix,
+        soldiers=soldiers,
+        busy=busy,
+        busy_rot=busy_rot,
+        daily_raw_loc=daily_raw_loc,
+        daily_raw_time=daily_raw_time,
+        zone=zone,
+        block_hours=sh,
+        total_days=days,
+    )
+    suffix_nonrot: List[AssignmentRecord] = []
+    soldiers, busy = _scratch_simulate_nonrot_passes(
+        num_soldiers,
+        slots_per_block,
+        horizon_days,
+        zone,
+        block_hours,
+        rng,
+        plan_day_start_hour=plan_start,
+        availability=availability,
+        anchor=anchor,
+        type_codes=type_codes,
+        band_relative=band_relative,
+        balance_total_hours=balance_total_hours,
+        total_hours_slack=total_hours_slack,
+        passes=("team", "full_day", "windowed"),
+        start_day=split_day,
+        soldiers=soldiers,
+        busy=busy,
+        collect_assignments=suffix_nonrot,
+    )
+    consume_rng_rotating_fill_days(
+        num_soldiers,
+        slots_per_block,
+        horizon_days,
+        split_day,
+        zone,
+        block_hours,
+        rng,
+        soldiers=soldiers,
+        busy=busy,
+        plan_day_start_hour=plan_start,
+        availability=availability,
+        anchor=anchor,
+        band_relative=band_relative,
+        balance_total_hours=balance_total_hours,
+        total_hours_slack=total_hours_slack,
+        min_consecutive_free_hours=min_consecutive_free_hours,
+        max_consecutive_duty_blocks=max_consecutive_duty_blocks,
+        min_free_shifts_after_duty=min_free_shifts_after_duty,
+        type_codes=type_codes,
+    )
+    return suffix_nonrot
+
+
+def _checkpoint_nonrotating_records(
+    records: Sequence[AssignmentRecord],
+) -> List[AssignmentRecord]:
+    return [a for a in records if str(a.kind or "rotating") != "rotating"]
+
+
+def _scratch_simulate_nonrot_passes(
+    num_soldiers: int,
+    slots_per_block: int,
+    days: int,
+    zone: ZoneConfig,
+    block_hours: float,
+    rng: random.Random,
+    *,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    availability: Any = None,
+    anchor: Optional[datetime] = None,
+    type_codes: Optional[Sequence[str]] = None,
+    band_relative: float = BAND_RELATIVE_DEFAULT,
+    balance_total_hours: bool = True,
+    total_hours_slack: float = 0.0,
+    passes: Tuple[str, ...] = ("team", "full_day", "windowed"),
+    start_day: int = 0,
+    soldiers: Optional[List[Soldier]] = None,
+    busy: Optional[np.ndarray] = None,
+    collect_assignments: Optional[List[AssignmentRecord]] = None,
+) -> Tuple[List[Soldier], np.ndarray]:
+    """Run non-rotating passes on scratch tensors; returns ``(soldiers, busy)``."""
+    sh = float(block_hours)
+    plan_start = int(plan_day_start_hour)
+    B = calendar_blocks_per_day(sh)
+    nl, nt = zone.n_loc, zone.n_time
+    if soldiers is None:
+        soldiers = [make_soldier(i, 0.0, nl, nt) for i in range(num_soldiers)]
+    if busy is None:
+        busy = np.zeros((days, num_soldiers, B), dtype=np.bool_)
+    daily_raw_loc = np.zeros((days, num_soldiers, nl), dtype=np.float64)
+    daily_raw_time = np.zeros((days, num_soldiers, nt), dtype=np.float64)
+    deltas_loc = np.zeros((num_soldiers, nl), dtype=np.float64)
+    deltas_time = np.zeros((num_soldiers, nt), dtype=np.float64)
+    deltas_g = np.zeros(num_soldiers, dtype=np.float64)
+    scratch_asn: List[AssignmentRecord] = (
+        collect_assignments if collect_assignments is not None else []
+    )
+    loc_w = zone.loc_weights
+    time_w = zone.time_weights
+    do_team = "team" in passes
+    do_full = "full_day" in passes
+    do_window = "windowed" in passes
+    d0 = max(0, int(start_day))
+
+    if do_team:
+        for day in range(d0, days):
+            deltas_loc[:] = 0.0
+            deltas_time[:] = 0.0
+            deltas_g[:] = 0.0
+            for sidx in range(slots_per_block):
+                if zone.slot_patterns[sidx] != "full_day_team":
+                    continue
+                if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                    continue
+                loc_i = zone.slot_location_indices[sidx]
+                tid = zone.location_type_ids[loc_i]
+                cfg = zone.full_day_team_specs[tid]
+                _fill_full_day_team_post(
+                    zone,
+                    day,
+                    sidx,
+                    loc_i,
+                    cfg,
+                    soldiers,
+                    type_codes,
+                    busy,
+                    daily_raw_loc,
+                    daily_raw_time,
+                    deltas_loc,
+                    deltas_time,
+                    deltas_g,
+                    B,
+                    sh,
+                    days,
+                    rng,
+                    plan_start_hour=plan_start,
+                    band_relative=band_relative,
+                    balance_total_hours=balance_total_hours,
+                    total_hours_slack=total_hours_slack,
+                    availability=availability,
+                    assignments=scratch_asn,
+                )
+
+    if do_full:
+        for day in range(d0, days):
+            deltas_loc[:] = 0.0
+            deltas_time[:] = 0.0
+            deltas_g[:] = 0.0
+            for sidx in range(slots_per_block):
+                if zone.slot_patterns[sidx] != "full_day":
+                    continue
+                if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                    continue
+                loc_i = zone.slot_location_indices[sidx]
+                tid = zone.location_type_ids[loc_i]
+                cfg = zone.full_day_specs[tid]
+                sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
+                rest_after = float(cfg["rest_after"])
+                L0, span = _linear_busy_span_duty_hours_plus_rest(
+                    day,
+                    B,
+                    sh,
+                    sh0,
+                    sh1,
+                    half_open=False,
+                    rest_after_h=rest_after,
+                    plan_start_hour=plan_start,
+                )
+                lw = loc_w[loc_i]
+                wm = float(cfg["weight_mult"])
+                raw_active = float(sh1 - sh0 + 1)
+                b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
+                time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
+                n_req = max(1, int(cfg.get("headcount", 1)))
+
+                def pool_fn(assigned: List[Soldier]) -> List[Soldier]:
+                    return [
+                        s
+                        for s in soldiers
+                        if s not in assigned
+                        and not _any_busy_span(busy, s.idx, L0, span, B, days)
+                        and _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
+                    ]
+
+                deltas_loc[:] = 0.0
+                deltas_time[:] = 0.0
+                deltas_g[:] = 0.0
+                chosen_list = _pick_soldiers_for_slot(
+                    n_req,
+                    pool_fn,
+                    loc_i,
+                    time_mid,
+                    deltas_loc,
+                    deltas_time,
+                    deltas_g,
+                    rng,
+                    band_relative=band_relative,
+                    balance_total_hours=balance_total_hours,
+                    total_hours_slack=total_hours_slack,
+                )
+                for chosen in chosen_list:
+                    for h in range(sh0, sh1 + 1):
+                        tj = time_category_for_hour(h, zone)
+                        tw = time_w[tj]
+                        wpart = lw * tw * wm
+                        chosen.add_assignment(loc_i, tj, wpart, 1.0)
+                    _busy_span_set(busy, chosen.idx, L0, span, B, days)
+
+    if do_window:
+        for day in range(d0, days):
+            deltas_loc[:] = 0.0
+            deltas_time[:] = 0.0
+            deltas_g[:] = 0.0
+            for sidx in range(slots_per_block):
+                if zone.slot_patterns[sidx] != "windowed_slots":
+                    continue
+                if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                    continue
+                loc_i = zone.slot_location_indices[sidx]
+                tid = zone.location_type_ids[loc_i]
+                wins = zone.windowed_specs[tid]
+                rest_h = float(zone.windowed_rest_hours.get(tid, 6.0))
+                lw = loc_w[loc_i]
+                best = None
+                for wi, wdef in enumerate(wins):
+                    h0, h1x = int(wdef["h0"]), int(wdef["h1_excl"])
+                    wm = float(wdef["weight_mult"])
+                    raw_active = float(max(0, h1x - h0))
+                    if raw_active <= 0:
+                        continue
+                    L0w, spanw = _linear_busy_span_duty_hours_plus_rest(
+                        day,
+                        B,
+                        sh,
+                        h0,
+                        h1x,
+                        half_open=True,
+                        rest_after_h=rest_h,
+                        plan_start_hour=plan_start,
+                    )
+                    pool = [
+                        s
+                        for s in soldiers
+                        if not _any_busy_span(busy, s.idx, L0w, spanw, B, days)
+                        and _soldier_avail_wall(availability, s.idx, day, h0, h1x)
+                    ]
+                    if not pool:
+                        continue
+                    deltas_loc[:] = 0.0
+                    deltas_time[:] = 0.0
+                    deltas_g[:] = 0.0
+                    h_mid = h0 if h1x <= h0 + 1 else (h0 + h1x - 1) // 2
+                    time_mid = time_category_for_hour(h_mid, zone)
+                    cand = pick_soldier(
+                        pool,
+                        loc_i,
+                        time_mid,
+                        deltas_loc,
+                        deltas_time,
+                        deltas_g,
+                        rng,
+                        band_relative=band_relative,
+                        balance_total_hours=balance_total_hours,
+                        total_hours_slack=total_hours_slack,
+                    )
+                    key = hybrid_sort_key(
+                        cand, loc_i, time_mid, deltas_loc, deltas_time, float(deltas_g[cand.idx])
+                    )
+                    wname = str(wdef.get("name", f"w{wi}"))
+                    cand_rank = (key, wi)
+                    if best is None or cand_rank < best[0]:
+                        tot_w = 0.0
+                        for h in range(h0, h1x):
+                            tj = time_category_for_hour(h, zone)
+                            tw = time_w[tj]
+                            tot_w += lw * tw * wm
+                        best = (cand_rank, wi, cand, wdef, tot_w, wname)
+                if best is None:
+                    raise RestConstraintError(
+                        f"windowed (rng advance): cannot fill day {day + 1} slot {sidx + 1}"
+                    )
+                _wi, chosen, wdef, tot_w, wname = best[1], best[2], best[3], best[4], best[5]
+                h0, h1x = int(wdef["h0"]), int(wdef["h1_excl"])
+                wm = float(wdef["weight_mult"])
+                L0, span = _linear_busy_span_duty_hours_plus_rest(
+                    day, B, sh, h0, h1x, half_open=True, rest_after_h=rest_h, plan_start_hour=plan_start
+                )
+                for h in range(h0, h1x):
+                    tj = time_category_for_hour(h, zone)
+                    tw = time_w[tj]
+                    chosen.add_assignment(loc_i, tj, lw * tw * wm, 1.0)
+                _busy_span_set(busy, chosen.idx, L0, span, B, days)
+
+    return soldiers, busy
+
+
+def consume_rng_for_nonrot_days(
+    num_soldiers: int,
+    slots_per_block: int,
+    nonrot_days: int,
+    zone: ZoneConfig,
+    block_hours: float,
+    rng: random.Random,
+    *,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    availability: Any = None,
+    anchor: Optional[datetime] = None,
+    type_codes: Optional[Sequence[str]] = None,
+    band_relative: float = BAND_RELATIVE_DEFAULT,
+    balance_total_hours: bool = True,
+    total_hours_slack: float = 0.0,
+    passes: Tuple[str, ...] = ("team", "full_day", "windowed"),
+) -> None:
+    """Advance ``rng`` through selected non-rotating passes (same order as ``run_simulation``)."""
+    if nonrot_days < 1:
+        return
+    _scratch_simulate_nonrot_passes(
+        num_soldiers,
+        slots_per_block,
+        nonrot_days,
+        zone,
+        block_hours,
+        rng,
+        plan_day_start_hour=plan_day_start_hour,
+        availability=availability,
+        anchor=anchor,
+        type_codes=type_codes,
+        band_relative=band_relative,
+        balance_total_hours=balance_total_hours,
+        total_hours_slack=total_hours_slack,
+        passes=passes,
+    )
+
+
+def consume_rng_rotating_fill_days(
+    num_soldiers: int,
+    slots_per_block: int,
+    horizon_days: int,
+    fill_through_day: int,
+    zone: ZoneConfig,
+    block_hours: float,
+    rng: random.Random,
+    *,
+    soldiers: List[Soldier],
+    busy: np.ndarray,
+    plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    availability: Any = None,
+    anchor: Optional[datetime] = None,
+    type_codes: Optional[Sequence[str]] = None,
+    band_relative: float = BAND_RELATIVE_DEFAULT,
+    balance_total_hours: bool = True,
+    total_hours_slack: float = 0.0,
+    min_consecutive_free_hours: float = MIN_CONSECUTIVE_FREE_HOURS_DEFAULT,
+    max_consecutive_duty_blocks: int = MAX_CONSECUTIVE_DUTY_BLOCKS_DEFAULT,
+    min_free_shifts_after_duty: int = 0,
+) -> None:
+    """Advance ``rng`` through rotating DFS (no draws) then fill for days ``0 .. fill_through_day-1``."""
+    if fill_through_day < 1 or horizon_days < fill_through_day:
+        return
+    sh = float(block_hours)
+    plan_start = int(plan_day_start_hour)
+    B = calendar_blocks_per_day(sh)
+    blocks_pd = B
+    days = horizon_days
+    nl, nt = zone.n_loc, zone.n_time
+    loc_w = zone.loc_weights
+    time_w = zone.time_weights
+    busy_rot = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
+    deltas_loc = np.zeros((num_soldiers, nl), dtype=np.float64)
+    deltas_time = np.zeros((num_soldiers, nt), dtype=np.float64)
+    deltas_g = np.zeros(num_soldiers, dtype=np.float64)
+    rot_slot_indices = _rotating_slot_indices(zone)
+    k_rest = consecutive_free_blocks_needed(sh, min_consecutive_free_hours)
+    x_cool = min_free_shifts_after_duty
+    if (
+        x_cool > 0
+        and min_consecutive_free_hours > 0
+        and float(x_cool) * sh + 1e-9 >= float(min_consecutive_free_hours)
+        and len(rot_slot_indices) == slots_per_block
+    ):
+        k_rest = 0
+    k_rest_mask = k_rest if len(rot_slot_indices) == slots_per_block else 0
+    dr = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
+    dfs_nodes = [0]
+    if not (
+        x_cool > 0
+        and len(rot_slot_indices) > 0
+        and math.comb(num_soldiers, len(rot_slot_indices))
+        <= _ROTATING_COOLDOWN_DFS_MAX_COMBINATIONS
+        and _dfs_rotating_only_mask(
+            dr,
+            busy,
+            soldiers,
+            L=0,
+            days=days,
+            blocks_pd=blocks_pd,
+            n_rot=len(rot_slot_indices),
+            k_rest=k_rest_mask,
+            max_consecutive_duty_blocks=max_consecutive_duty_blocks,
+            x_cool=x_cool,
+            nodes=dfs_nodes,
+            availability=availability,
+            plan_start_hour=plan_start,
+            shift_hours=sh,
+        )
+    ):
+        return
+    for day in range(fill_through_day):
+        for b in range(blocks_pd):
+            start_h = block_start_hour(plan_start, b, sh)
+            time_j = time_category_for_hour(start_h, zone)
+            tw = time_w[time_j]
+            in_block = [s for s in soldiers if dr[day, s.idx, b]]
+            assigned: List[Soldier] = []
+            deltas_loc[:] = 0.0
+            deltas_time[:] = 0.0
+            deltas_g[:] = 0.0
+            rot_pf = (
+                _rotating_prefix_key(busy, busy_rot, day, b, blocks_pd, days, k_rest_mask)
+                if x_cool > 0
+                else None
+            )
+            for sidx in rot_slot_indices:
+                if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                    continue
+                loc_i = zone.slot_location_indices[sidx]
+                lw = loc_w[loc_i]
+                weight = sh * lw * tw
+                n_req = _soldiers_required(zone, sidx)
+
+                def pool_fn_r(already: List[Soldier]) -> List[Soldier]:
+                    return [
+                        s for s in in_block if s not in assigned and s not in already
+                    ]
+
+                _pick_soldiers_for_slot(
+                    n_req,
+                    pool_fn_r,
+                    loc_i,
+                    time_j,
+                    deltas_loc,
+                    deltas_time,
+                    deltas_g,
+                    rng,
+                    band_relative=band_relative,
+                    balance_total_hours=balance_total_hours,
+                    total_hours_slack=total_hours_slack,
+                    prefix_key=rot_pf,
+                )
+
+
+def _frozen_rotating_lookup(
+    records: Sequence[AssignmentRecord],
+    through_day: int,
+) -> Dict[Tuple[int, int, int], AssignmentRecord]:
+    out: Dict[Tuple[int, int, int], AssignmentRecord] = {}
+    for a in records:
+        if int(a.day) >= through_day:
+            continue
+        if str(a.kind or "rotating") != "rotating":
+            continue
+        out[(int(a.day), int(a.calendar_block), int(a.slot))] = a
+    return out
+
+
+def _replay_frozen_rot_soldier_weights(
+    records: Sequence[AssignmentRecord],
+    *,
+    soldiers: List[Soldier],
+    zone: ZoneConfig,
+    block_hours: float,
+) -> None:
+    """Update soldier fairness counters for prefix rotating rows without touching ``busy``."""
+    sh = float(block_hours)
+    for a in records:
+        if str(a.kind or "rotating") != "rotating":
+            continue
+        s = soldiers[int(a.soldier_idx)]
+        loc_i, time_j = int(a.loc_i), int(a.time_j)
+        weight, rh = float(a.weight), float(a.raw_hours)
+        if rh <= 0:
+            rh = sh
+        s.add_assignment(loc_i, time_j, weight, rh)
+
+
+def _apply_frozen_rot_busy(
+    a: AssignmentRecord,
+    *,
+    busy: np.ndarray,
+    busy_rot: np.ndarray,
+) -> None:
+    day = int(a.day)
+    sidx = int(a.soldier_idx)
+    b = int(a.calendar_block)
+    busy[day, sidx, b] = True
+    busy_rot[day, sidx, b] = True
+
+
+def _append_frozen_rotating_assignment(
+    a: AssignmentRecord,
+    *,
+    soldiers: List[Soldier],
+    busy: np.ndarray,
+    busy_rot: np.ndarray,
+    daily_raw_loc: np.ndarray,
+    daily_raw_time: np.ndarray,
+    zone: ZoneConfig,
+    block_hours: float,
+    days: int,
+    assignments: List[AssignmentRecord],
+) -> None:
+    sh = float(block_hours)
+    B = calendar_blocks_per_day(sh)
+    s = soldiers[int(a.soldier_idx)]
+    day = int(a.day)
+    b = int(a.calendar_block)
+    loc_i, time_j = int(a.loc_i), int(a.time_j)
+    weight, rh = float(a.weight), float(a.raw_hours)
+    if rh <= 0:
+        rh = sh
+    s.add_assignment(loc_i, time_j, weight, rh)
+    busy[day, s.idx, b] = True
+    busy_rot[day, s.idx, b] = True
+    daily_raw_loc[day, s.idx, loc_i] += rh
+    daily_raw_time[day, s.idx, time_j] += rh
+    assignments.append(replace(a))
+
+
 def run_simulation(
     num_soldiers: int,
     slots_per_block: int,
@@ -2224,6 +2904,11 @@ def run_simulation(
     availability: Any = None,
     anchor: Optional[datetime] = None,
     type_codes: Optional[Sequence[str]] = None,
+    checkpoint_prefix: Optional[Sequence[AssignmentRecord]] = None,
+    checkpoint_prefix_days: int = 0,
+    checkpoint_suffix_nonrot: Optional[Sequence[AssignmentRecord]] = None,
+    witness: Optional[SimWitnessCapture] = None,
+    witness_rot_fill_from_day: Optional[int] = None,
 ) -> Tuple[
     List[Soldier],
     np.ndarray,
@@ -2268,6 +2953,55 @@ def run_simulation(
     deltas_time = np.zeros((num_soldiers, nt), dtype=np.float64)
     deltas_g = np.zeros(num_soldiers, dtype=np.float64)
     assignments: List[AssignmentRecord] = []
+    cp_days = int(checkpoint_prefix_days)
+    rot_fill_from = (
+        int(witness_rot_fill_from_day)
+        if witness_rot_fill_from_day is not None
+        else 0
+    )
+    frozen_rot: Dict[Tuple[int, int, int], AssignmentRecord] = {}
+    checkpoint_suffix_stored: List[AssignmentRecord] = []
+    if checkpoint_prefix and cp_days > 0:
+        suffix_nonrot = list(checkpoint_suffix_nonrot or ())
+        # Witness extend may supply an empty suffix (all-rotating zones); do not re-simulate.
+        if not suffix_nonrot and witness_rot_fill_from_day is None:
+            suffix_nonrot = advance_rng_to_split_boundary(
+                num_soldiers,
+                slots_per_block,
+                days,
+                cp_days,
+                zone,
+                sh,
+                rng,
+                checkpoint_prefix,
+                plan_day_start_hour=plan_start,
+                availability=availability,
+                anchor=anchor,
+                type_codes=type_codes,
+                band_relative=band_relative,
+                balance_total_hours=balance_total_hours,
+                total_hours_slack=total_hours_slack,
+                min_consecutive_free_hours=min_consecutive_free_hours,
+                max_consecutive_duty_blocks=max_consecutive_duty_blocks,
+                min_free_shifts_after_duty=min_free_shifts_after_duty,
+            )
+        checkpoint_suffix_stored = list(suffix_nonrot)
+        # Non-rotating rows only for busy replay (rotating prefix replayed after DFS when extending).
+        nonrot_prefix = _checkpoint_nonrotating_records(checkpoint_prefix)
+        replay_rows: Sequence[AssignmentRecord] = list(nonrot_prefix) + list(suffix_nonrot)
+        replay_checkpoint_assignments(
+            replay_rows,
+            soldiers=soldiers,
+            busy=busy,
+            busy_rot=busy_rot,
+            daily_raw_loc=daily_raw_loc,
+            daily_raw_time=daily_raw_time,
+            zone=zone,
+            block_hours=sh,
+            total_days=days,
+        )
+        if rot_fill_from <= 0:
+            frozen_rot = _frozen_rotating_lookup(checkpoint_prefix, cp_days)
     k_rest = consecutive_free_blocks_needed(sh, min_consecutive_free_hours)
     stats = SimulationStats()
     x_cool = min_free_shifts_after_duty
@@ -2282,6 +3016,8 @@ def run_simulation(
         k_rest = 0
 
     for day in range(days):
+        if cp_days > 0:
+            continue
         deltas_loc[:] = 0.0
         deltas_time[:] = 0.0
         deltas_g[:] = 0.0
@@ -2320,6 +3056,8 @@ def run_simulation(
             )
 
     for day in range(days):
+        if cp_days > 0:
+            continue
         deltas_loc[:] = 0.0
         deltas_time[:] = 0.0
         deltas_g[:] = 0.0
@@ -2415,6 +3153,8 @@ def run_simulation(
                 )
 
     for day in range(days):
+        if cp_days > 0:
+            continue
         deltas_loc[:] = 0.0
         deltas_time[:] = 0.0
         deltas_g[:] = 0.0
@@ -2596,7 +3336,28 @@ def run_simulation(
         ):
             np.copyto(busy_rot, dr)
             dfs_rot_ok = True
+            if rot_fill_from > 0 and checkpoint_prefix:
+                rot_prefix = [
+                    replace(a)
+                    for a in checkpoint_prefix
+                    if str(a.kind or "rotating") == "rotating"
+                    and int(a.day) < rot_fill_from
+                ]
+                if rot_prefix:
+                    replay_checkpoint_assignments(
+                        rot_prefix,
+                        soldiers=soldiers,
+                        busy=busy,
+                        busy_rot=busy_rot,
+                        daily_raw_loc=daily_raw_loc,
+                        daily_raw_time=daily_raw_time,
+                        zone=zone,
+                        block_hours=sh,
+                        total_days=days,
+                    )
             for day in range(days):
+                if rot_fill_from > 0 and day < rot_fill_from:
+                    continue
                 for b in range(blocks_pd):
                     start_h = block_start_hour(plan_start, b, sh)
                     time_j = time_category_for_hour(start_h, zone)
@@ -2615,6 +3376,11 @@ def run_simulation(
                     )
                     for sidx in rot_slot_indices:
                         if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                            continue
+                        if cp_days > 0 and day < cp_days:
+                            fa = frozen_rot.get((day, b, sidx))
+                            if fa is not None:
+                                assigned.append(soldiers[int(fa.soldier_idx)])
                             continue
                         loc_i = zone.slot_location_indices[sidx]
                         lw = loc_w[loc_i]
@@ -2674,9 +3440,30 @@ def run_simulation(
                                     window_name=None,
                                 )
                             )
+                _maybe_capture_witness_rng(witness, day, rng)
 
     if not dfs_rot_ok:
+        if rot_fill_from > 0 and checkpoint_prefix:
+            rot_prefix = [
+                replace(a)
+                for a in checkpoint_prefix
+                if str(a.kind or "rotating") == "rotating" and int(a.day) < rot_fill_from
+            ]
+            if rot_prefix:
+                replay_checkpoint_assignments(
+                    rot_prefix,
+                    soldiers=soldiers,
+                    busy=busy,
+                    busy_rot=busy_rot,
+                    daily_raw_loc=daily_raw_loc,
+                    daily_raw_time=daily_raw_time,
+                    zone=zone,
+                    block_hours=sh,
+                    total_days=days,
+                )
         for day in range(days):
+            if rot_fill_from > 0 and day < rot_fill_from:
+                continue
             for b in range(blocks_pd):
                 start_h = block_start_hour(plan_start, b, sh)
                 time_j = time_category_for_hour(start_h, zone)
@@ -2696,6 +3483,11 @@ def run_simulation(
                     if zone.slot_patterns[sidx] != "rotating":
                         continue
                     if _slot_disabled_for_day(zone, sidx, day, anchor, plan_start):
+                        continue
+                    if cp_days > 0 and day < cp_days:
+                        fa = frozen_rot.get((day, b, sidx))
+                        if fa is not None:
+                            assigned.append(soldiers[int(fa.soldier_idx)])
                         continue
                     loc_i = zone.slot_location_indices[sidx]
                     lw = loc_w[loc_i]
@@ -2792,6 +3584,7 @@ def run_simulation(
                                 window_name=None,
                             )
                         )
+            _maybe_capture_witness_rng(witness, day, rng)
 
     raw_loc_mat = np.stack([s.raw_loc for s in soldiers], axis=0)
     raw_time_mat = np.stack([s.raw_time for s in soldiers], axis=0)
@@ -2815,6 +3608,15 @@ def run_simulation(
         rows = [Z_day[d, s] for d in range(days) if float(np.sum(daily_raw_loc[d, s])) > 1e-9]
         if rows:
             Z_avg[s] = np.mean(np.stack(rows, axis=0), axis=0)
+
+    if cp_days > 0 and checkpoint_prefix:
+        new_only = [a for a in assignments if int(a.day) >= cp_days]
+        assignments = sorted(
+            [replace(a) for a in checkpoint_prefix]
+            + [replace(a) for a in checkpoint_suffix_stored]
+            + new_only,
+            key=checkpoint_replay_sort_key,
+        )
 
     max_free = compute_max_consecutive_free_hours(busy, sh)
     validate_schedule_rest(
@@ -2846,6 +3648,12 @@ def run_simulation_checkpoint_extend(
     min_free_shifts_after_duty: int = 0,
     band_relative: float = BAND_RELATIVE_DEFAULT,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    availability: Any = None,
+    anchor: Optional[datetime] = None,
+    type_codes: Optional[Sequence[str]] = None,
+    *,
+    witness_rng_state: Optional[Tuple[Any, ...]] = None,
+    witness_suffix_nonrot: Optional[Sequence[AssignmentRecord]] = None,
 ) -> Tuple[
     List[Soldier],
     np.ndarray,
@@ -2858,404 +3666,73 @@ def run_simulation_checkpoint_extend(
     SimulationStats,
 ]:
     """
-    Replay ``prefix_assignments`` (days ``0 .. prefix_days-1``), then simulate ``extend_days``
-    more days with the same greedy rules as ``run_simulation`` (**no** all-days rotating DFS).
-
-    Soldier fairness denominators use ``prefix_days * 24`` (rolling replay window), not the full
-    calendar horizon.
+    Replay ``prefix_assignments`` (days ``0 .. prefix_days-1``), then simulate through
+    ``prefix_days + extend_days`` using the same code path as ``run_simulation``.
     """
     if extend_days < 1:
         raise ValueError("extend_days must be >= 1 for checkpoint extension")
-    if num_soldiers < slots_per_block:
-        raise ValueError("need soldiers >= slots per block (concurrent guards)")
-    sh = float(block_hours)
-    plan_start = int(plan_day_start_hour)
-    B = calendar_blocks_per_day(sh)
-    blocks_pd = B
-    n_rot = sum(1 for p in zone.slot_patterns if p == "rotating")
-    if n_rot > 0:
-        assert_rest_feasible_counting(
-            num_soldiers, blocks_pd, n_rot, sh, min_consecutive_free_hours
-        )
-
-    total_days = int(prefix_days) + int(extend_days)
-    nl = zone.n_loc
-    nt = zone.n_time
-    hours_roll = float(prefix_days) * 24.0
-    soldiers = [make_soldier(i, hours_roll, nl, nt) for i in range(num_soldiers)]
-
-    loc_w = zone.loc_weights
-    time_w = zone.time_weights
-    busy = np.zeros((total_days, num_soldiers, blocks_pd), dtype=np.bool_)
-    busy_rot = np.zeros((total_days, num_soldiers, blocks_pd), dtype=np.bool_)
-    daily_raw_loc = np.zeros((total_days, num_soldiers, nl), dtype=np.float64)
-    daily_raw_time = np.zeros((total_days, num_soldiers, nt), dtype=np.float64)
-    deltas_loc = np.zeros((num_soldiers, nl), dtype=np.float64)
-    deltas_time = np.zeros((num_soldiers, nt), dtype=np.float64)
-    deltas_g = np.zeros(num_soldiers, dtype=np.float64)
-    assignments: List[AssignmentRecord] = sorted(
-        [replace(a) for a in prefix_assignments], key=checkpoint_replay_sort_key
-    )
-
+    prefix_list = list(prefix_assignments)
+    blocks_pd = calendar_blocks_per_day(float(block_hours))
     exp_pre = expected_assignment_count(zone, prefix_days, blocks_pd, slots_per_block)
-    if len(prefix_assignments) != exp_pre:
+    if len(prefix_list) != exp_pre:
         raise ValueError(
-            f"checkpoint prefix: got {len(prefix_assignments)} assignments, expected {exp_pre} "
+            f"checkpoint prefix: got {len(prefix_list)} assignments, expected {exp_pre} "
             f"for prefix_days={prefix_days}"
         )
-    build_schedule_compare_matrix(
-        list(prefix_assignments), prefix_days, blocks_pd, slots_per_block
-    )
-
-    replay_checkpoint_assignments(
-        prefix_assignments,
-        soldiers=soldiers,
-        busy=busy,
-        busy_rot=busy_rot,
-        daily_raw_loc=daily_raw_loc,
-        daily_raw_time=daily_raw_time,
-        zone=zone,
-        block_hours=sh,
-        total_days=total_days,
-    )
-
-    k_rest = consecutive_free_blocks_needed(sh, min_consecutive_free_hours)
-    stats = SimulationStats()
-    x_cool = min_free_shifts_after_duty
-    if (
-        x_cool > 0
-        and min_consecutive_free_hours > 0
-        and float(x_cool) * sh + 1e-9 >= float(min_consecutive_free_hours)
-        and n_rot == slots_per_block
-    ):
-        k_rest = 0
-
-    days = total_days
-    d0, d1 = int(prefix_days), int(total_days)
-
-    rot_slot_count = sum(1 for p in zone.slot_patterns if p == "rotating")
-    k_rest_mask = k_rest if rot_slot_count == slots_per_block else 0
-    for day in range(d0, d1):
-        deltas_loc[:] = 0.0
-        deltas_time[:] = 0.0
-        deltas_g[:] = 0.0
-        for sidx in range(slots_per_block):
-            if zone.slot_patterns[sidx] != "full_day":
-                continue
-            loc_i = zone.slot_location_indices[sidx]
-            tid = zone.location_type_ids[loc_i]
-            cfg = zone.full_day_specs[tid]
-            sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
-            rest_after = float(cfg["rest_after"])
-            L0, span = _linear_busy_span_duty_hours_plus_rest(
-                day, B, sh, sh0, sh1, half_open=False, rest_after_h=rest_after
-            )
-            lw = loc_w[loc_i]
-            wm = float(cfg["weight_mult"])
-            tot_w = 0.0
-            raw_active = float(sh1 - sh0 + 1)
-            b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
-            duty_w = b1 - b0 + 1
-            pool = [
-                s
-                for s in soldiers
-                if not _any_busy_span(busy, s.idx, L0, span, B, days)
-            ]
-            if not pool:
-                raise RestConstraintError(
-                    f"full_day (checkpoint extend): cannot fill day {day + 1} slot {sidx + 1} "
-                    f"({zone.loc_ids[loc_i]})."
-                )
-            deltas_loc[:] = 0.0
-            deltas_time[:] = 0.0
-            deltas_g[:] = 0.0
-            time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
-            chosen = pick_soldier(
-                pool,
-                loc_i,
-                time_mid,
-                deltas_loc,
-                deltas_time,
-                deltas_g,
-                rng,
-                band_relative=band_relative,
-                balance_total_hours=balance_total_hours,
-                total_hours_slack=total_hours_slack,
-            )
-            for h in range(sh0, sh1 + 1):
-                tj = time_category_for_hour(h, zone)
-                tw = time_w[tj]
-                wpart = lw * tw * wm
-                tot_w += wpart
-                chosen.add_assignment(loc_i, tj, wpart, 1.0)
-            _busy_span_set(busy, chosen.idx, L0, span, B, days)
-            daily_raw_loc[day, chosen.idx, loc_i] += raw_active
-            for h in range(sh0, sh1 + 1):
-                tj = time_category_for_hour(h, zone)
-                daily_raw_time[day, chosen.idx, tj] += 1.0
-            assignments.append(
-                AssignmentRecord(
-                    day=day,
-                    calendar_block=b0,
-                    start_hour=int(b0 * sh),
-                    slot=sidx,
-                    soldier_idx=chosen.idx,
-                    loc_i=loc_i,
-                    time_j=time_mid,
-                    weight=tot_w,
-                    raw_hours=raw_active,
-                    kind="full_day",
-                    rowspan=duty_w,
-                    win_start_block=b0,
-                    win_end_block=b1,
-                    window_name=None,
-                    linear_busy_span_blocks=span,
-                )
-            )
-
-    for day in range(d0, d1):
-        deltas_loc[:] = 0.0
-        deltas_time[:] = 0.0
-        deltas_g[:] = 0.0
-        for sidx in range(slots_per_block):
-            if zone.slot_patterns[sidx] != "windowed_slots":
-                continue
-            loc_i = zone.slot_location_indices[sidx]
-            tid = zone.location_type_ids[loc_i]
-            wins = zone.windowed_specs[tid]
-            rest_h = float(zone.windowed_rest_hours.get(tid, 6.0))
-            lw = loc_w[loc_i]
-            best: Optional[Tuple[Tuple[Any, ...], int, Soldier, Dict[str, Any], float, str]] = None
-            for wi, wdef in enumerate(wins):
-                h0, h1x = int(wdef["h0"]), int(wdef["h1_excl"])
-                wm = float(wdef["weight_mult"])
-                raw_active = float(max(0, h1x - h0))
-                if raw_active <= 0:
-                    continue
-                L0w, spanw = _linear_busy_span_duty_hours_plus_rest(
-                    day,
-                    B,
-                    sh,
-                    h0,
-                    h1x,
-                    half_open=True,
-                    rest_after_h=rest_h,
-                    plan_start_hour=plan_start,
-                )
-                pool = [
-                    s
-                    for s in soldiers
-                    if not _any_busy_span(busy, s.idx, L0w, spanw, B, days)
-                ]
-                if not pool:
-                    continue
-                deltas_loc[:] = 0.0
-                deltas_time[:] = 0.0
-                deltas_g[:] = 0.0
-                h_mid = h0 if h1x <= h0 + 1 else (h0 + h1x - 1) // 2
-                time_mid = time_category_for_hour(h_mid, zone)
-                cand = pick_soldier(
-                    pool,
-                    loc_i,
-                    time_mid,
-                    deltas_loc,
-                    deltas_time,
-                    deltas_g,
-                    rng,
-                    band_relative=band_relative,
-                    balance_total_hours=balance_total_hours,
-                    total_hours_slack=total_hours_slack,
-                )
-                key = hybrid_sort_key(
-                    cand, loc_i, time_mid, deltas_loc, deltas_time, float(deltas_g[cand.idx])
-                )
-                cand_rank = (key, wi)
-                if best is None or cand_rank < best[0]:
-                    tot_w = 0.0
-                    for h in range(h0, h1x):
-                        tj = time_category_for_hour(h, zone)
-                        tw = time_w[tj]
-                        tot_w += lw * tw * wm
-                    best = (cand_rank, wi, cand, wdef, tot_w, str(wdef.get("name", f"w{wi}")))
-            if best is None:
-                raise RestConstraintError(
-                    f"windowed (checkpoint extend): cannot fill day {day + 1} slot {sidx + 1} "
-                    f"({zone.loc_ids[loc_i]})."
-                )
-            _wi, chosen, wdef, tot_w, wname = best[1], best[2], best[3], best[4], best[5]
-            h0, h1x = int(wdef["h0"]), int(wdef["h1_excl"])
-            wm = float(wdef["weight_mult"])
-            raw_active = float(max(0, h1x - h0))
-            L0, span = _linear_busy_span_duty_hours_plus_rest(
-                day,
-                B,
-                sh,
-                h0,
-                h1x,
-                half_open=True,
-                rest_after_h=rest_h,
-                plan_start_hour=plan_start,
-            )
-            for h in range(h0, h1x):
-                tj = time_category_for_hour(h, zone)
-                tw = time_w[tj]
-                wpart = lw * tw * wm
-                chosen.add_assignment(loc_i, tj, wpart, 1.0)
-            _busy_span_set(busy, chosen.idx, L0, span, B, days)
-            daily_raw_loc[day, chosen.idx, loc_i] += raw_active
-            for h in range(h0, h1x):
-                tj = time_category_for_hour(h, zone)
-                daily_raw_time[day, chosen.idx, tj] += 1.0
-            b0, b1 = _duty_blocks_half_open_wall_hours(sh, h0, h1x)
-            assignments.append(
-                AssignmentRecord(
-                    day=day,
-                    calendar_block=b0,
-                    start_hour=int(b0 * sh),
-                    slot=sidx,
-                    soldier_idx=chosen.idx,
-                    loc_i=loc_i,
-                    time_j=time_category_for_hour(h0, zone),
-                    weight=float(tot_w),
-                    raw_hours=raw_active,
-                    kind="windowed",
-                    rowspan=max(1, b1 - b0 + 1),
-                    win_start_block=b0,
-                    win_end_block=b1,
-                    window_name=wname or None,
-                    linear_busy_span_blocks=span,
-                )
-            )
-
-    for day in range(d0, d1):
-        for b in range(blocks_pd):
-            start_h = block_start_hour(plan_start, b, sh)
-            time_j = time_category_for_hour(start_h, zone)
-            tw = time_w[time_j]
-            assigned: List[Soldier] = []
-            deltas_loc[:] = 0.0
-            deltas_time[:] = 0.0
-            deltas_g[:] = 0.0
-            rot_pf = (
-                _rotating_prefix_key(busy, busy_rot, day, b, blocks_pd, days, k_rest_mask)
-                if x_cool > 0
-                else None
-            )
-            for sidx in range(slots_per_block):
-                if zone.slot_patterns[sidx] != "rotating":
-                    continue
-                loc_i = zone.slot_location_indices[sidx]
-                lw = loc_w[loc_i]
-                weight = sh * lw * tw
-                base_pool = [
-                    s
-                    for s in soldiers
-                    if s not in assigned
-                    and not soldier_must_rest_this_block(
-                        s.idx, day, b, blocks_pd, k_rest_mask
-                    )
-                    and not busy[day, s.idx, b]
-                    and (
-                        max_consecutive_duty_blocks <= 0
-                        or consecutive_duty_blocks_before(
-                            busy_rot, day, b, s.idx, blocks_pd
-                        )
-                        < max_consecutive_duty_blocks
-                    )
-                ]
-                if x_cool > 0:
-                    stats.shift_cooldown_pool_iterations += 1
-                    pool = []
-                    for s in base_pool:
-                        gap = gap_free_blocks_since_last_duty_before_assign(
-                            busy_rot, day, b, s.idx, blocks_pd
-                        )
-                        if gap >= x_cool or gap >= LARGE_LINEAR_GAP:
-                            pool.append(s)
-                        else:
-                            stats.shift_cooldown_exclusions += 1
-                else:
-                    pool = base_pool
-                if not pool:
-                    raise RestConstraintError(
-                        f"rotating (checkpoint extend): cannot fill day {day + 1} block {b + 1} "
-                        f"slot {sidx + 1}."
-                    )
-                chosen = pick_soldier(
-                    pool,
-                    loc_i,
-                    time_j,
-                    deltas_loc,
-                    deltas_time,
-                    deltas_g,
-                    rng,
-                    band_relative=band_relative,
-                    balance_total_hours=balance_total_hours,
-                    total_hours_slack=total_hours_slack,
-                    prefix_key=rot_pf,
-                )
-                assigned.append(chosen)
-                chosen.add_assignment(loc_i, time_j, weight, sh)
-                busy[day, chosen.idx, b] = True
-                busy_rot[day, chosen.idx, b] = True
-                daily_raw_loc[day, chosen.idx, loc_i] += sh
-                daily_raw_time[day, chosen.idx, time_j] += sh
-                deltas_loc[chosen.idx, loc_i] += weight
-                deltas_time[chosen.idx, time_j] += weight
-                deltas_g[chosen.idx] += weight
-                assignments.append(
-                    AssignmentRecord(
-                        day=day,
-                        calendar_block=b,
-                        start_hour=start_h,
-                        slot=sidx,
-                        soldier_idx=chosen.idx,
-                        loc_i=loc_i,
-                        time_j=time_j,
-                        weight=weight,
-                        raw_hours=sh,
-                        kind="rotating",
-                        rowspan=1,
-                        win_start_block=b,
-                        win_end_block=b,
-                        window_name=None,
-                    )
-                )
-
-    raw_loc_mat = np.stack([s.raw_loc for s in soldiers], axis=0)
-    raw_time_mat = np.stack([s.raw_time for s in soldiers], axis=0)
-    Z = np.zeros((num_soldiers, nl + nt), dtype=np.float64)
-    tot_row = np.sum(raw_loc_mat, axis=1, keepdims=True)
-    np.divide(raw_loc_mat, tot_row, out=Z[:, :nl], where=tot_row > 1e-12)
-    Z[:, nl:] = heatmap_time_fraction_by_row(raw_time_mat)
-
-    Z_day = np.zeros((days, num_soldiers, nl + nt), dtype=np.float64)
-    time_day_norm = heatmap_time_fraction_by_row_daily(daily_raw_time)
-    for d in range(days):
-        for s in range(num_soldiers):
-            tot_d = float(np.sum(daily_raw_loc[d, s]))
-            if tot_d <= 0:
-                continue
-            Z_day[d, s, :nl] = daily_raw_loc[d, s] / tot_d
-            Z_day[d, s, nl:] = time_day_norm[d, s, :]
-
-    Z_avg = np.zeros((num_soldiers, nl + nt), dtype=np.float64)
-    for s in range(num_soldiers):
-        rows = [Z_day[d, s] for d in range(days) if float(np.sum(daily_raw_loc[d, s])) > 1e-9]
-        if rows:
-            Z_avg[s] = np.mean(np.stack(rows, axis=0), axis=0)
-
-    max_free = compute_max_consecutive_free_hours(busy, sh)
-    validate_schedule_rest(max_free, min_consecutive_free_hours, assignments=assignments)
-    validate_max_consecutive_duty(busy_rot, max_consecutive_duty_blocks)
-    stats.shift_cooldown_violations_post = count_shift_cooldown_violations(busy_rot, x_cool)
-    if stats.shift_cooldown_violations_post > 0:
-        raise RestConstraintError(
-            f"Internal: shift-cooldown violations after checkpoint extend: "
-            f"{stats.shift_cooldown_violations_post}"
+    if not any(p == "full_day_team" for p in zone.slot_patterns):
+        build_schedule_compare_matrix(
+            prefix_list, prefix_days, blocks_pd, slots_per_block
         )
+    total_days = int(prefix_days) + int(extend_days)
+    if witness_rng_state is not None:
+        rng.setstate(witness_rng_state)
+    if witness_rng_state is not None and witness_suffix_nonrot is not None:
+        suffix_nonrot = [replace(a) for a in witness_suffix_nonrot]
+    else:
+        suffix_nonrot = advance_rng_to_split_boundary(
+            num_soldiers,
+            slots_per_block,
+            total_days,
+            int(prefix_days),
+            zone,
+            block_hours,
+            rng,
+            prefix_list,
+            plan_day_start_hour=plan_day_start_hour,
+            availability=availability,
+            anchor=anchor,
+            type_codes=type_codes,
+            band_relative=band_relative,
+            balance_total_hours=balance_total_hours,
+            total_hours_slack=total_hours_slack,
+            min_consecutive_free_hours=min_consecutive_free_hours,
+            max_consecutive_duty_blocks=max_consecutive_duty_blocks,
+            min_free_shifts_after_duty=min_free_shifts_after_duty,
+        )
+    rot_from = int(prefix_days) if witness_rng_state is not None else None
+    return run_simulation(
+        num_soldiers,
+        slots_per_block,
+        total_days,
+        zone,
+        block_hours,
+        rng,
+        min_consecutive_free_hours=min_consecutive_free_hours,
+        balance_total_hours=balance_total_hours,
+        total_hours_slack=total_hours_slack,
+        max_consecutive_duty_blocks=max_consecutive_duty_blocks,
+        min_free_shifts_after_duty=min_free_shifts_after_duty,
+        band_relative=band_relative,
+        plan_day_start_hour=plan_day_start_hour,
+        availability=availability,
+        anchor=anchor,
+        type_codes=type_codes,
+        checkpoint_prefix=prefix_list,
+        checkpoint_prefix_days=int(prefix_days),
+        checkpoint_suffix_nonrot=suffix_nonrot,
+        witness_rot_fill_from_day=rot_from,
+    )
 
-    return soldiers, Z, max_free, assignments, Z_day, Z_avg, daily_raw_loc, daily_raw_time, stats
 
 
 def compute_max_consecutive_free_hours(busy: np.ndarray, block_hours: float) -> np.ndarray:
@@ -3403,6 +3880,7 @@ def run_simulation_best_of(
             "trials_run": 1,
             "trial_index": 0,
             "trial_seed": seed_used,
+            "final_rng_state": rng_t.getstate(),
             "fairness": fm,
         }
         return pack, meta
@@ -4723,7 +5201,23 @@ def main() -> None:
             validate_checkpoint_document(
                 doc, zone, zones_path, slots_eff, block_hours_eff, blocks_pd, args
             )
+            witness_rng: Optional[Tuple[Any, ...]] = None
+            witness_suffix: Optional[List[AssignmentRecord]] = None
+            if isinstance(doc.get("rng_state"), dict):
+                witness_rng = rng_state_from_json(doc["rng_state"])
+            if isinstance(doc.get("suffix_nonrot"), list):
+                witness_suffix = [
+                    assignment_record_from_dict(x) for x in doc["suffix_nonrot"]
+                ]
+            th = doc.get("target_horizon")
+            if th is not None and int(th) != prefix_days + extend_days:
+                raise SystemExit(
+                    f"checkpoint target_horizon={th!r} != prefix_days+extend_days="
+                    f"{prefix_days + extend_days}"
+                )
             rng_ck = random.Random(args.seed) if args.seed is not None else random.Random()
+            if witness_rng is not None:
+                rng_ck.setstate(witness_rng)
             pack = run_simulation_checkpoint_extend(
                 num_soldiers=args.soldiers,
                 slots_per_block=slots_eff,
@@ -4740,6 +5234,10 @@ def main() -> None:
                 min_free_shifts_after_duty=args.min_free_shifts_after_duty,
                 band_relative=args.band_relative,
                 plan_day_start_hour=plan_day_start_hour,
+                anchor=sim_anchor,
+                type_codes=type_codes,
+                witness_rng_state=witness_rng,
+                witness_suffix_nonrot=witness_suffix,
             )
             args.days = prefix_days + extend_days
             fm = fairness_metrics(pack[1], pack[0])
@@ -4806,6 +5304,8 @@ def main() -> None:
             num_days=int(args.days),
             blocks_pd=blocks_pd,
             slots_eff=slots_eff,
+            seed=args.seed,
+            rng_state=sim_meta.get("final_rng_state"),
         )
         ck_out = Path(args.save_state)
         write_checkpoint_json(ck_out, ck_doc)

@@ -72,7 +72,7 @@ func TestExtendCooldownFromPrefixLastBlock(t *testing.T) {
 	ext, _, err := RunSimulationZoneConfigExtend(
 		zone, 12, 1, 1, prefix, NewPyRandom(99),
 		6, true, 0, 2, 2, 0.2,
-		5, nil, nil, nil,
+		5, nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

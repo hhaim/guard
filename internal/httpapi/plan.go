@@ -44,6 +44,7 @@ func buildProposalFromSim(out *simRunOutput, changes []model.PlanChange) planDoc
 		Meta:          out.Meta,
 		Changes:       changes,
 		UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+		Continuation:  out.Continuation,
 	}
 }
 
@@ -448,7 +449,10 @@ func (s *Server) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	written := make([]string, 0, len(dayPlans))
-	for _, d := range dayPlans {
+	for i, d := range dayPlans {
+		if i == len(dayPlans)-1 && doc.Continuation != nil {
+			d.Plan.Continuation = doc.Continuation
+		}
 		if err := repo.InsertScheduleDay(ctx, tx, d, slot); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

@@ -39,6 +39,7 @@ type simRunOutput struct {
 	BlocksPerDay int
 	Soldiers     map[string]model.PlanDaySoldiers
 	Meta         map[string]any
+	Continuation *model.SimContinuation
 }
 
 func parseAnchorDate(s string) (time.Time, error) {
@@ -305,19 +306,79 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	var recs []*guardsched.AssignmentRecord
 	var stats *guardsched.SimulationStats
 	var trialMeta map[string]any
+	var contSnap *guardsched.ContinuationSnapshot
+
 	if prefix.Days > 0 && len(prefix.Records) > 0 {
-		simMode = "extend"
-		recs, stats, trialMeta, err = guardsched.RunSimulationBestOfZoneConfigExtend(
-			zc, len(keys), prefix.Days, planDays, trials, prefix.Records, seedPtr,
-			minFreeH, true, 0, 2, minCool, bandRel,
-			planDayStartHour, availChecker, &anchor, typeCodes,
-		)
+		prefixDays := prefix.Days
+		var witness *guardsched.ExtendWitness
+		if prefix.Continuation != nil && prefix.Continuation.RNGState != nil {
+			witness, _, err = guardsched.ExtendWitnessFromContinuation(prefix.Continuation, prefix.Records, keys)
+			if err != nil {
+				return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+			}
+			simMode = "extend_witness"
+		} else {
+			simMode = "extend_bootstrap_cold"
+			if trials > 1 {
+				return nil, 400, `{"error":"history without continuation requires sim_trials 1"}`, fmt.Errorf("bootstrap requires single trial")
+			}
+			var seedUsed int64
+			if seedPtr != nil {
+				seedUsed = *seedPtr
+			}
+			rng := guardsched.NewPyRandom(seedUsed)
+			cold, err := guardsched.RunSimulationZoneConfigWithContinuation(
+				zc, len(keys), prefixDays+planDays, prefixDays, rng,
+				minFreeH, true, 0, 2, minCool, bandRel,
+				planDayStartHour, availChecker, &anchor, typeCodes, seedPtr,
+			)
+			if err != nil {
+				return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+			}
+			seg := make([]*guardsched.AssignmentRecord, 0)
+			for _, a := range cold.Records {
+				if a != nil && a.Day >= prefixDays {
+					cp := *a
+					seg = append(seg, &cp)
+				}
+			}
+			recs = guardsched.ReindexExtendSegment(seg, prefixDays)
+			stats = cold.Stats
+			contSnap = cold.Continuation
+			trialMeta = map[string]any{"trials_run": 1, "trial_seed": seedUsed, "witness_extend": false, "bootstrap": "cold"}
+		}
+		if witness != nil {
+			recs, stats, contSnap, trialMeta, err = guardsched.RunSimulationBestOfZoneConfigExtendWitness(
+				zc, len(keys), prefixDays, planDays, trials, prefix.Records, seedPtr,
+				minFreeH, true, 0, 2, minCool, bandRel,
+				planDayStartHour, availChecker, &anchor, typeCodes, witness,
+			)
+			if err != nil {
+				return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+			}
+			recs = guardsched.ReindexExtendSegment(recs, prefixDays)
+		}
 	} else {
-		recs, stats, trialMeta, err = guardsched.RunSimulationBestOfZoneConfig(
-			zc, len(keys), planDays, trials, seedPtr,
+		if trials > 1 {
+			return nil, 400, `{"error":"cold continuation capture requires sim_trials 1"}`, fmt.Errorf("cold continuation")
+		}
+		var seedUsed int64
+		if seedPtr != nil {
+			seedUsed = *seedPtr
+		}
+		rng := guardsched.NewPyRandom(seedUsed)
+		cold, err := guardsched.RunSimulationZoneConfigWithContinuation(
+			zc, len(keys), planDays, planDays, rng,
 			minFreeH, true, 0, 2, minCool, bandRel,
-			planDayStartHour, availChecker, &anchor, typeCodes,
+			planDayStartHour, availChecker, &anchor, typeCodes, seedPtr,
 		)
+		if err != nil {
+			return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+		}
+		recs = cold.Records
+		stats = cold.Stats
+		contSnap = cold.Continuation
+		trialMeta = map[string]any{"trials_run": 1, "trial_seed": seedUsed}
 	}
 	if err != nil {
 		return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
@@ -342,15 +403,18 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		AssignJSON:   assignJSON,
 		BlocksPerDay: bp,
 		Soldiers:     soldiersByDay,
+		Continuation: continuationFromSched(contSnap),
 		Meta: map[string]any{
 			"sim_trials":                     trials,
 			"trial":                          trialMeta,
 			"sim_mode":                       simMode,
+			"continuation_format":          guardsched.CheckpointFormatVersion,
 			"history_days":                   global.HistoryDays,
 			"history_prefix_days":            prefix.Days,
 			"history_dates":                  prefix.Dates,
 			"history_assignments_replayed":   prefix.AssignmentsReplayed,
 			"history_assignments_skipped":    prefix.AssignmentsSkipped,
+			"history_continuation_loaded":    prefix.Continuation != nil && prefix.Continuation.RNGState != nil,
 			"min_consecutive_free_hours":     minFreeH,
 			"min_free_shifts_after_duty":     minCool,
 			"band_relative":                  bandRel,

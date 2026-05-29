@@ -21,6 +21,7 @@ func RunSimulationZoneConfig(
 	avail AvailabilityChecker,
 	anchor *time.Time,
 	typeCodes []string,
+	witness *SimWitness,
 ) ([]*AssignmentRecord, *SimulationStats, error) {
 	slotsPerBlock := zone.SlotsPerBlock()
 	if numSoldiers < slotsPerBlock {
@@ -393,6 +394,7 @@ func RunSimulationZoneConfig(
 						}
 					}
 				}
+				maybeCaptureWitnessRNG(witness, day, r)
 			}
 		}
 	}
@@ -490,6 +492,7 @@ func RunSimulationZoneConfig(
 					}
 				}
 			}
+			maybeCaptureWitnessRNG(witness, day, r)
 		}
 	}
 

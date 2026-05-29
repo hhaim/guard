@@ -47,7 +47,7 @@ func ckptSimExtend(
 	recs, _, err := RunSimulationZoneConfigExtend(
 		zone, ckptSoldiers, prefixDays, extendDays, prefix, NewPyRandom(seed),
 		6, true, 0, 2, 2, 0.2,
-		5, nil, nil, nil,
+		5, nil, nil, nil, nil,
 	)
 	return recs, err
 }
@@ -56,7 +56,7 @@ func ckptSimCold(zone *ZoneConfig, days int, seed int64) ([]*AssignmentRecord, e
 	recs, _, err := RunSimulationZoneConfig(
 		zone, ckptSoldiers, days, NewPyRandom(seed),
 		6, true, 0, 2, 2, 0.2,
-		5, nil, nil, nil,
+		5, nil, nil, nil, nil,
 	)
 	return recs, err
 }

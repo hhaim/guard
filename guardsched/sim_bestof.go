@@ -6,7 +6,11 @@ import (
 	"time"
 )
 
-// fairnessScoreFromAssignments returns stddev of per-soldier raw duty hours (lower is fairer).
+// FairnessScoreFromAssignments returns stddev of per-soldier raw duty hours (lower is fairer).
+func FairnessScoreFromAssignments(recs []*AssignmentRecord, numSoldiers int) float64 {
+	return fairnessScoreFromAssignments(recs, numSoldiers)
+}
+
 func fairnessScoreFromAssignments(recs []*AssignmentRecord, numSoldiers int) float64 {
 	if numSoldiers < 1 {
 		return 0
@@ -60,7 +64,7 @@ func RunSimulationBestOfZoneConfig(
 			zone, numSoldiers, days, rng,
 			minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 			maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-			planDayStartHour, avail, anchor, typeCodes,
+			planDayStartHour, avail, anchor, typeCodes, nil,
 		)
 	}
 	if trials == 1 {
@@ -143,7 +147,7 @@ func RunSimulationBestOfZoneConfigExtend(
 			zone, numSoldiers, prefixDays, extendDays, prefixAssignments, rng,
 			minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 			maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-			planDayStartHour, avail, anchor, typeCodes,
+			planDayStartHour, avail, anchor, typeCodes, nil,
 		)
 	}
 	if trials == 1 {

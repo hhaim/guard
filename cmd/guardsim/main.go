@@ -290,28 +290,29 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "error: read checkpoint: %v\n", err)
 			return 2
 		}
-		var ckpt struct {
-			Assignments []map[string]any `json:"assignments"`
-			NumDays     int              `json:"num_days"`
-		}
-		if err := json.Unmarshal(raw, &ckpt); err != nil {
+		ckpt, err := guardsched.ParseCheckpointJSON(raw)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: parse checkpoint: %v\n", err)
 			return 2
 		}
 		prefixDays := ckpt.NumDays
-		if prefixDays < 1 {
-			fmt.Fprintln(os.Stderr, "error: checkpoint num_days must be >= 1")
-			return 2
-		}
 		ext := *extendDays
 		if ext < 1 {
 			ext = nDays
 		}
-		prefix := guardsched.RecordsFromAssignmentJSON(ckpt.Assignments, keys)
-		recs, stats, meta, err = guardsched.RunSimulationBestOfZoneConfigExtend(
-			zc, nSoldiers, prefixDays, ext, *simTrials, prefix, seedPtr,
-			*minFreeHours, true, 0,
-			*maxDutyBlocks, *minFreeShifts, *bandRelative,
+		if ckpt.TargetHorizon != nil && *ckpt.TargetHorizon != prefixDays+ext {
+			fmt.Fprintf(os.Stderr, "error: checkpoint target_horizon=%d != prefix+extend=%d",
+				*ckpt.TargetHorizon, prefixDays+ext)
+			return 2
+		}
+		witness, prefix, err := guardsched.ExtendWitnessFromCheckpoint(ckpt, keys)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: checkpoint witness: %v\n", err)
+			return 2
+		}
+		recs, stats, meta, err = runBestOfExtendWitness(
+			zc, nSoldiers, prefixDays, ext, *simTrials, prefix, witness, seedPtr,
+			*minFreeHours, *maxDutyBlocks, *minFreeShifts, *bandRelative,
 			planStartHour, avail, anchorPtr, typeCodes,
 		)
 		nDays = ext
@@ -434,6 +435,48 @@ func run() int {
 		}
 	}
 	return 0
+}
+
+func runBestOfExtendWitness(
+	zc *guardsched.ZoneConfig,
+	numSoldiers, prefixDays, extendDays, trials int,
+	prefix []*guardsched.AssignmentRecord,
+	witness *guardsched.ExtendWitness,
+	baseSeed *int64,
+	minFreeHours float64,
+	maxDutyBlocks, minFreeShifts int,
+	bandRelative float64,
+	planStartHour int,
+	avail guardsched.AvailabilityChecker,
+	anchor *time.Time,
+	typeCodes []string,
+) ([]*guardsched.AssignmentRecord, *guardsched.SimulationStats, map[string]any, error) {
+	if trials != 1 {
+		return nil, nil, nil, fmt.Errorf("checkpoint extend with witness requires --sim-trials 1")
+	}
+	var seedUsed int64
+	if baseSeed == nil {
+		seedUsed = 0
+	} else {
+		seedUsed = *baseSeed
+	}
+	rng := guardsched.NewPyRandom(seedUsed)
+	recs, stats, err := guardsched.RunSimulationZoneConfigExtend(
+		zc, numSoldiers, prefixDays, extendDays, prefix, rng,
+		minFreeHours, true, 0,
+		maxDutyBlocks, minFreeShifts, bandRelative,
+		planStartHour, avail, anchor, typeCodes, witness,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	meta := map[string]any{
+		"trials_run":     1,
+		"trial_index":    0,
+		"trial_seed":     seedUsed,
+		"fairness_score": guardsched.FairnessScoreFromAssignments(recs, numSoldiers),
+	}
+	return recs, stats, meta, nil
 }
 
 func resolveAnchor(sc *guardsched.Scenario, flagAnchor string) (time.Time, error) {

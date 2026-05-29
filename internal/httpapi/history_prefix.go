@@ -13,11 +13,13 @@ import (
 
 // historyPrefix is verified schedule replayed before a new plan segment (checkpoint-style).
 type historyPrefix struct {
-	Days               int
-	Records            []*guardsched.AssignmentRecord
-	Dates              []string
+	Days                int
+	Records             []*guardsched.AssignmentRecord
+	Dates               []string
 	AssignmentsReplayed int
 	AssignmentsSkipped  int
+	// Continuation from the last loaded history day (v2 witness for extend).
+	Continuation *guardsched.ContinuationSnapshot
 }
 
 func loadVerifiedHistoryPrefix(
@@ -46,6 +48,8 @@ func loadVerifiedHistoryPrefix(
 		Days:  historyDays,
 		Dates: make([]string, historyDays),
 	}
+	var lastBoundaryPlan model.PlanDoc
+	var haveBoundary bool
 	for i := 0; i < historyDays; i++ {
 		d := from.AddDate(0, 0, i)
 		ds := d.Format("2006-01-02")
@@ -54,6 +58,8 @@ func loadVerifiedHistoryPrefix(
 		if !ok {
 			continue
 		}
+		haveBoundary = true
+		lastBoundaryPlan = row.Plan
 		if row.Plan.ShiftHours != 0 && row.Plan.ShiftHours != expectShiftHours {
 			return nil, fmt.Errorf("verified schedule on %s has shift_hours=%g, expected %g", ds, row.Plan.ShiftHours, expectShiftHours)
 		}
@@ -74,6 +80,13 @@ func loadVerifiedHistoryPrefix(
 	}
 	if out.AssignmentsReplayed == 0 {
 		return &historyPrefix{}, nil
+	}
+	if haveBoundary && lastBoundaryPlan.Continuation != nil {
+		cont, err := continuationToSched(lastBoundaryPlan.Continuation)
+		if err != nil {
+			return nil, err
+		}
+		out.Continuation = cont
 	}
 	return out, nil
 }

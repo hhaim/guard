@@ -9,6 +9,17 @@ import (
 
 const PlanFormatVersion = 1
 
+// SimContinuation is checkpoint v2 witness state stored on the boundary verified day.
+// Same schema as guardsched.ContinuationSnapshot / guardsim checkpoint rng_state + suffix_nonrot.
+type SimContinuation struct {
+	FormatVersion int              `json:"format_version"`
+	NumDays       int              `json:"num_days"`
+	RNGState      map[string]any   `json:"rng_state,omitempty"`
+	SuffixNonrot  []map[string]any `json:"suffix_nonrot,omitempty"`
+	TargetHorizon *int             `json:"target_horizon,omitempty"`
+	Seed          *int64           `json:"seed,omitempty"`
+}
+
 // PlanChange is one manual edit recorded on a proposal.
 type PlanChange struct {
 	TsDate       string `json:"ts_date"`
@@ -46,6 +57,8 @@ type PlanDoc struct {
 	Meta          map[string]any           `json:"meta,omitempty"`
 	Changes       []PlanChange             `json:"changes,omitempty"`
 	UpdatedAt     string                   `json:"updated_at,omitempty"`
+	// Continuation: witness RNG + suffix for the next plan extend (stored on last day of a batch).
+	Continuation  *SimContinuation         `json:"continuation,omitempty"`
 }
 
 // ScheduleDay is one persisted calendar day in the schedule table.

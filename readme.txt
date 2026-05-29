@@ -9,3 +9,10 @@ python3 guard_scheduler_sim.py -x 18 -y 5 -d 1 --seed 42 --min-consecutive-free-
 
 ================
 
+* review the changes why there are so many, did we found a bug or it is a RND issue?
+* commit the test verify that it works and uses the same input json 
+* verify future 9-9 with future blocks is OK
+
+1. another test simple 12/4
+2. add a test that verify from the results that constraint are meet 
+3. verify that simulation json and what we save is the same need to have the same function same engine 
