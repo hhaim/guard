@@ -3,7 +3,7 @@ import type { ZonesDoc } from "../lib/zones";
 import { buildSoldierDisplay, type SoldierDisplay } from "../lib/soldierDisplay";
 import { docFromServer, type Soldier } from "../lib/soldiers";
 import {
-  buildDutyBusy,
+  buildBusyTensor,
   buildScheduleMatrices,
   buildSoldierBlockRows,
   buildScheduleStats,
@@ -235,12 +235,23 @@ function SoldierDetailTable({
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={`${r.day}-${r.block}`} className={r.free ? "sched-row-free" : undefined}>
+              <tr
+                key={`${r.day}-${r.block}`}
+                className={
+                  r.free ? "sched-row-free" : r.rest ? "sched-row-rest" : undefined
+                }
+              >
                 <td>{r.day}</td>
                 <td>{r.block}</td>
                 <td>{r.window}</td>
                 <td>{r.timeCategory}</td>
-                <td className={r.free ? "sched-free-cell" : undefined}>{r.location}</td>
+                <td
+                  className={
+                    r.free ? "sched-free-cell" : r.rest ? "sched-rest-cell" : undefined
+                  }
+                >
+                  {r.location}
+                </td>
                 <td>{r.slot}</td>
                 <td>{r.hours}</td>
                 <td>{r.weight}</td>
@@ -286,7 +297,8 @@ function SoldierTimelineChart({
     <div className="sched-timeline-wrap">
       <h4 className="sched-subtitle">Soldier timelines (full simulation)</h4>
       <p className="sched-hint">
-        Green = off post and assignable, yellow = away/sick/training, red = posted duty. X-axis
+        Green = off post and assignable, yellow = away/sick/training, red = duty + mandatory rest
+        (matches soldier tables). X-axis
         is wall-clock time from plan day start ({formatWallClockHour(planDayStartHour)}); dashed
         lines mark the next plan day.
       </p>
@@ -302,7 +314,7 @@ function SoldierTimelineChart({
             <i className="sched-swatch sched-swatch-unavail" /> Away / sick
           </span>
           <span>
-            <i className="sched-swatch sched-swatch-on" /> Posted duty
+            <i className="sched-swatch sched-swatch-on" /> Duty + rest
           </span>
         </div>
         <div className="sched-timeline-axis">
@@ -383,7 +395,7 @@ export function ScheduleResultsReport({
       zone.blocksPerDay = Math.round(24 / shiftHours);
     }
     const soldierCount = inferSoldierCount(assignments);
-    const busy = buildDutyBusy(assignments, days, soldierCount, zone.blocksPerDay);
+    const busy = buildBusyTensor(assignments, days, soldierCount, zone.blocksPerDay, true);
     return {
       zone,
       soldierCount,

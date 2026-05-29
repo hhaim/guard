@@ -1,0 +1,7 @@
+soldiers:
+  - { id: S0, name: S0, type: A }
+  - { id: S1, name: S1, type: A }
+  - { id: S2, name: S2, type: A }
+  - { id: S3, name: S3, type: A }
+  - { id: S4, name: S4, type: A }
+  - { id: S5, name: S5, type: A }

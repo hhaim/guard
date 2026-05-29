@@ -12,7 +12,7 @@ import {
   planDayTitle,
   weekdayLongName,
 } from "./planDay";
-import { slotDisplayLabel } from "./zones";
+import { parseFullDayConfig, parseFullDayTeamConfig, slotDisplayLabel } from "./zones";
 
 export type { ScheduleAssignment } from "./planDoc";
 
@@ -22,11 +22,15 @@ export type ZoneReportView = {
   slotsPerBlock: number;
   locNames: string[];
   locIds: string[];
+  locWeights: number[];
+  locTypeIds: string[];
+  typeWeightMult: Record<string, number>;
   slotLabels: string[];
   slotLocIndices: number[];
   slotTypeIds: string[];
   disabledWeekdays: Record<string, number[]>;
   timeNames: string[];
+  timeWeights: number[];
   timeFrom: number[];
   timeTo: number[];
 };
@@ -41,6 +45,8 @@ export type SoldierBlockRow = {
   hours: string;
   weight: string;
   free: boolean;
+  /** Block is in full_day / team / windowed duty+rest span but not a rotating post. */
+  rest?: boolean;
 };
 
 export type MatrixCell = {
@@ -141,6 +147,25 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneR
   }
   const locNames = doc.zone_loc.map((z) => z.name || z.id);
   const locIds = doc.zone_loc.map((z) => z.id);
+  const locWeights = doc.zone_loc.map((z) => (typeof z.weight === "number" ? z.weight : 1));
+  const locTypeIds = doc.zone_loc.map((z) => z.type ?? "");
+  const typeWeightMult: Record<string, number> = {};
+  for (const st of doc.slots_types) {
+    if (st.pattern === "rotating") continue;
+    const cfg = st.config ?? {};
+    if (st.pattern === "full_day_team") {
+      typeWeightMult[st.id] = parseFullDayTeamConfig(cfg).weight_multiplier;
+    } else if (st.pattern === "full_day") {
+      typeWeightMult[st.id] = parseFullDayConfig(cfg).weight_multiplier;
+    }
+    if (st.pattern === "windowed_slots") {
+      const slots = (cfg as { slots?: { weight_multiplier?: number; weight_mult?: number }[] }).slots;
+      if (slots?.[0]) {
+        typeWeightMult[st.id] =
+          slots[0].weight_multiplier ?? slots[0].weight_mult ?? 1;
+      }
+    }
+  }
 
   const slotLabels: string[] = [];
   const slotLocIndices: number[] = [];
@@ -167,14 +192,44 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneR
     slotsPerBlock,
     locNames,
     locIds,
+    locWeights,
+    locTypeIds,
+    typeWeightMult,
     slotLabels,
     slotLocIndices,
     slotTypeIds,
     disabledWeekdays,
     timeNames: doc.time_zones.map((t) => t.name),
+    timeWeights: doc.time_zones.map((t) => (typeof t.weight === "number" ? t.weight : 1)),
     timeFrom: doc.time_zones.map((t) => t.from_hour),
     timeTo: doc.time_zones.map((t) => t.to_hour),
   };
+}
+
+/** Pattern weight_multiplier from zones YAML (1 for rotating). */
+export function patternWeightMultiplier(
+  zone: ZoneReportView,
+  a: ScheduleAssignment,
+): number {
+  const kind = a.kind?.trim() || "rotating";
+  if (kind === "rotating") return 1;
+  const typeId = zone.locTypeIds[a.loc_i] ?? "";
+  return zone.typeWeightMult[typeId] ?? 1;
+}
+
+/** One calendar block: shift_hours × loc × time × pattern multiplier (matches sim / rotating rows). */
+export function assignmentBlockWeight(
+  zone: ZoneReportView,
+  a: ScheduleAssignment,
+  block: number,
+  planDayStartHour: number,
+): number {
+  const startH = blockStartHour(planDayStartHour, block, zone.shiftHours);
+  const timeJ = timeCategoryForHour(startH, zone);
+  const lw = zone.locWeights[a.loc_i] ?? 1;
+  const tw = zone.timeWeights[timeJ] ?? 1;
+  const wm = patternWeightMultiplier(zone, a);
+  return zone.shiftHours * lw * tw * wm;
 }
 
 export function timeCategoryForHour(h: number, zone: ZoneReportView): number {
@@ -304,6 +359,7 @@ export function buildScheduleMatrices(
 
   const matrices: MatrixDay[] = [];
   for (let d = 0; d < days; d++) {
+    const dayCalendarDate = anchor ? calendarDateForPlanDay(anchor, d) : "";
     const headers = Array.from({ length: zone.slotsPerBlock }, (_, j) => {
       const li = zone.slotLocIndices[j] ?? 0;
       return {
@@ -385,6 +441,35 @@ export function buildScheduleMatrices(
   return matrices;
 }
 
+function buildLinearBusyBlockLookup(
+  assignments: ScheduleAssignment[],
+  days: number,
+  blocksPd: number,
+): Map<string, ScheduleAssignment> {
+  const lookup = new Map<string, ScheduleAssignment>();
+  const maxL = days * blocksPd;
+  for (const a of assignments) {
+    const span =
+      a.linear_busy_span_blocks != null && a.linear_busy_span_blocks > 0
+        ? a.linear_busy_span_blocks
+        : 0;
+    if (span <= 0) continue;
+    const L0 = a.day * blocksPd + a.calendar_block;
+    for (let k = 0; k < span; k++) {
+      const L = L0 + k;
+      if (L >= maxL) break;
+      const d = Math.floor(L / blocksPd);
+      const b = L % blocksPd;
+      lookup.set(`${a.soldier_idx}:${d}:${b}`, a);
+    }
+  }
+  return lookup;
+}
+
+function assignmentKind(a: ScheduleAssignment): string {
+  return a.kind?.trim() || "rotating";
+}
+
 export function buildSoldierBlockRows(
   soldierIdx: number,
   assignments: ScheduleAssignment[],
@@ -399,18 +484,45 @@ export function buildSoldierBlockRows(
       dutyLookup.set(`${a.day}:${b}`, a);
     }
   }
+  const spanLookup = buildLinearBusyBlockLookup(assignments, days, zone.blocksPerDay);
 
   const rows: SoldierBlockRow[] = [];
   for (let d = 0; d < days; d++) {
     for (let b = 0; b < zone.blocksPerDay; b++) {
-      const duty = dutyLookup.get(`${d}:${b}`);
+      const key = `${d}:${b}`;
+      const duty = dutyLookup.get(key);
+      const spanA = spanLookup.get(`${soldierIdx}:${d}:${b}`);
       const startH = blockStartHour(planDayStartHour, b, zone.shiftHours);
       const timeJ =
-        duty != null
-          ? duty.time_j
-          : timeCategoryForHour(startH, zone);
+        duty != null ? duty.time_j : timeCategoryForHour(startH, zone);
       const win = formatBlockWindow(startH, zone.shiftHours);
-      if (duty) {
+      if (duty != null && assignmentKind(duty) === "rotating") {
+        rows.push({
+          day: d + 1,
+          block: b + 1,
+          window: win,
+          timeCategory: zone.timeNames[duty.time_j] ?? zone.timeNames[timeJ] ?? "",
+          location: zone.locNames[duty.loc_i] ?? "",
+          slot: String(duty.slot + 1),
+          hours: duty.raw_hours.toFixed(2),
+          weight: duty.weight.toFixed(4),
+          free: false,
+        });
+      } else if (spanA != null && spanA.soldier_idx === soldierIdx) {
+        const blkW = assignmentBlockWeight(zone, spanA, b, planDayStartHour);
+        rows.push({
+          day: d + 1,
+          block: b + 1,
+          window: win,
+          timeCategory: zone.timeNames[timeJ] ?? "",
+          location: zone.locNames[spanA.loc_i] ?? "",
+          slot: "—",
+          hours: zone.shiftHours.toFixed(2),
+          weight: blkW.toFixed(4),
+          free: false,
+          rest: true,
+        });
+      } else if (duty != null) {
         rows.push({
           day: d + 1,
           block: b + 1,

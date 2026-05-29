@@ -25,3 +25,7 @@ soldiers:
   - { id: s15, full_name: Soldier 15, type_code: D }
   - { id: s16, full_name: Soldier 16, type_code: D }
   - { id: s17, full_name: Soldier 17, type_code: D }
+  - { id: s18, full_name: Soldier 18, type_code: B }
+  - { id: s19, full_name: Soldier 19, type_code: B }
+  - { id: s20, full_name: Soldier 19, type_code: A }
+  - { id: s21, full_name: Soldier 19, type_code: C }

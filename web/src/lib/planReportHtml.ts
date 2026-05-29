@@ -2,7 +2,7 @@ import { formatWallClockHour, resolvePlanDayStartHour, timelineChartLayout } fro
 import type { PlanChange, PlanDoc } from "./planDoc";
 import type { Soldier } from "../lib/soldiers";
 import {
-  buildDutyBusy,
+  buildBusyTensor,
   buildScheduleMatrices,
   buildScheduleStats,
   buildSoldierBlockRows,
@@ -158,6 +158,11 @@ const REPORT_CSS = `
     page-break-inside: avoid;
   }
   tr.sched-row-free td { background: rgba(46, 125, 50, 0.06); }
+  tr.sched-row-rest td { background: rgba(74, 20, 140, 0.06); }
+  .sched-row-rest .sched-rest-cell {
+    font-weight: 600;
+    color: #4a148c;
+  }
   .sched-row-free .sched-free-cell {
     font-weight: 600;
     color: #1b5e20;
@@ -362,8 +367,16 @@ function soldierDetailHtml(
 ): string {
   const trs = rows
     .map((r) => {
-      const rowCls = r.free ? " class=\"sched-row-free\"" : "";
-      const locCls = r.free ? " class=\"sched-free-cell\"" : "";
+      const rowCls = r.free
+        ? " class=\"sched-row-free\""
+        : r.rest
+          ? " class=\"sched-row-rest\""
+          : "";
+      const locCls = r.free
+        ? " class=\"sched-free-cell\""
+        : r.rest
+          ? " class=\"sched-rest-cell\""
+          : "";
       return `<tr${rowCls}>
           <td>${r.day}</td>
           <td>${r.block}</td>
@@ -414,7 +427,7 @@ function timelineHtml(
     })
     .join("");
   return `<div class="sched-timeline-wrap">
-    <p class="sched-hint">Green = off post, yellow = away/sick, red = on duty. ${days} plan day(s) from ${esc(formatWallClockHour(planDayStartHour))}; wall-clock UTC.</p>
+    <p class="sched-hint">Green = off post, yellow = away/sick, red = duty + mandatory rest (matches soldier tables). ${days} plan day(s) from ${esc(formatWallClockHour(planDayStartHour))}; wall-clock UTC.</p>
     ${laneRows}
   </div>`;
 }
@@ -609,7 +622,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
     anchorDate,
     soldierIds,
   });
-  const busy = buildDutyBusy(assignments, days, soldierCount, zone.blocksPerDay);
+  const busy = buildBusyTensor(assignments, days, soldierCount, zone.blocksPerDay, true);
   const lanes = buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
     soldierIds,
     anchorDate,

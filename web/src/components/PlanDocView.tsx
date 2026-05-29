@@ -21,6 +21,7 @@ export type PlanDocViewProps = {
 
 /**
  * Single entry point to render a plan/schedule document (proposals and verified history).
+ * Soldier tables and timelines use {@link ScheduleResultsReport} (same rules as Go sim JSON).
  */
 export function PlanDocView({
   plan,

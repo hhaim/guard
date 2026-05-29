@@ -16,7 +16,7 @@ Guard scheduler fairness simulation (**hybrid_rel** soldier pick: relative band 
   whiskers; soldier table includes min/mean/max free per day.
 - PNG outputs: ``-o`` is the **location** full-period heatmap; sibling files add ``_time``,
   ``_avg_daily_loc``, ``_avg_daily_time``, ``_mean_free_bars``, ``_max_free_bars``, and
-  ``_soldier_timelines`` (green = off post, red = posted duty blocks only; YAML ``rest_after`` excluded).
+  ``_soldier_timelines`` (green = off post, red = duty + YAML ``rest_after``; matches soldier tables).
 - HTML: **Schedule by soldier** tables (every block: post or FREE), plus the timeline figure.
 - **PDF:** use ``--pdf`` (writes ``<html-stem>.pdf``) or ``--pdf-output my.pdf``; requires **WeasyPrint**.
 - **Soldier pick:** ``hybrid_rel`` only — sort by this slot’s location load, then **global weighted**
@@ -585,9 +585,9 @@ def build_busy_tensor(
     """``busy[day, soldier, block]`` = soldier unavailable in that calendar block.
 
     When ``include_yaml_rest`` is True (default), ``full_day`` / ``windowed`` assignments
-    also mark post-duty ``rest_after`` blocks (same linear tiling as the simulator). When
-    False, only **posted duty** blocks are set — use that for timeline figures so they match
-    per-block HTML tables (which list assignments, not YAML rest gaps).
+    also mark post-duty ``rest_after`` blocks (same linear tiling as the simulator). Timeline
+    figures and per-soldier HTML tables use this mode. When False, only the posted-duty window
+    is marked (narrower red bars; not used for report timelines).
     """
     busy = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
     max_l = days * blocks_pd
@@ -605,6 +605,28 @@ def build_busy_tensor(
             for b in assignment_occupied_blocks(a, blocks_pd):
                 busy[a.day, a.soldier_idx, b] = True
     return busy
+
+
+def build_linear_busy_block_lookup(
+    assignments: Sequence[AssignmentRecord],
+    days: int,
+    blocks_pd: int,
+) -> Dict[Tuple[int, int, int], AssignmentRecord]:
+    """Map (soldier, day, block) → assignment whose duty+rest linear span covers that block."""
+    lookup: Dict[Tuple[int, int, int], AssignmentRecord] = {}
+    max_l = days * blocks_pd
+    for a in assignments:
+        span = getattr(a, "linear_busy_span_blocks", None)
+        if span is None or int(span) <= 0:
+            continue
+        L0 = int(a.day) * blocks_pd + int(a.calendar_block)
+        for k in range(int(span)):
+            L = L0 + k
+            if L >= max_l:
+                break
+            d, b = divmod(L, blocks_pd)
+            lookup[(int(a.soldier_idx), int(d), int(b))] = a
+    return lookup
 
 
 # --- Checkpoint save/load (see guard_sim_checkpoint_state_plan.md) ---
@@ -950,7 +972,7 @@ def replay_checkpoint_assignments(
             )
             lw = loc_w[loc_i]
             wm = float(cfg["weight_mult"])
-            raw_active = float(sh1 - sh0 + 1)
+            raw_active = _full_day_raw_active_hours(sh0, sh1)
             for h in range(sh0, sh1 + 1):
                 tj = time_category_for_hour(h, zone)
                 tw = time_w[tj]
@@ -979,7 +1001,7 @@ def replay_checkpoint_assignments(
             )
             lw = loc_w[loc_i]
             wm = float(cfg["weight_mult"])
-            raw_active = float(sh1 - sh0 + 1)
+            raw_active = _full_day_raw_active_hours(sh0, sh1)
             for h in range(sh0, sh1 + 1):
                 tj = time_category_for_hour(h, zone)
                 tw = time_w[tj]
@@ -1372,7 +1394,7 @@ def _fill_full_day_team_post(
     )
     lw = zone.loc_weights[loc_i]
     wm = float(cfg["weight_mult"])
-    raw_active = float(sh1 - sh0 + 1)
+    raw_active = _full_day_raw_active_hours(sh0, sh1)
     b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
     duty_w = b1 - b0 + 1
     time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
@@ -1437,11 +1459,12 @@ def _fill_full_day_team_post(
         for h in range(sh0, sh1 + 1):
             tj = time_category_for_hour(h, zone)
             daily_raw_time[day, chosen.idx, tj] += 1.0
+        span_b0 = linear_busy_span_calendar_block(day, B, L0)
         assignments.append(
             AssignmentRecord(
                 day=day,
-                calendar_block=b0,
-                start_hour=int(b0 * sh),
+                calendar_block=span_b0,
+                start_hour=block_start_hour(plan_start_hour, span_b0, sh),
                 slot=sidx,
                 soldier_idx=chosen.idx,
                 loc_i=loc_i,
@@ -2089,6 +2112,13 @@ def _duty_blocks_half_open_wall_hours(sh: float, h0: int, h1_excl: int) -> Tuple
     return b0, b1
 
 
+def _full_day_raw_active_hours(sh0: int, sh1: int) -> float:
+    """Credited duty hours; start == end on 0..23 means 24h to the same clock next day."""
+    if sh1 <= sh0:
+        return 24.0
+    return float(sh1 - sh0 + 1)
+
+
 def _linear_busy_span_duty_hours_plus_rest(
     day: int,
     B: int,
@@ -2107,7 +2137,10 @@ def _linear_busy_span_duty_hours_plus_rest(
     from separately aligning duty and rest.
     """
     _ = half_open  # unified end+rest mapping.
-    end_excl = int(math.floor(float(h_duty1_incl_or_excl) + float(rest_after_h) + 1e-9))
+    end_duty_excl = int(h_duty1_incl_or_excl) + 1
+    if int(h_duty1_incl_or_excl) <= int(h_duty0):
+        end_duty_excl = int(h_duty0) + 24
+    end_excl = int(math.floor(float(end_duty_excl) + float(rest_after_h) + 1e-9))
     if end_excl <= int(h_duty0):
         end_excl = int(h_duty0) + 1
     sh_i = int(sh)
@@ -2122,6 +2155,49 @@ def _linear_busy_span_duty_hours_plus_rest(
     span = b1 - b0 + 1
     L0 = day * B + b0
     return L0, span
+
+
+def linear_busy_span_calendar_block(day: int, blocks_pd: int, L0: int) -> int:
+    """Calendar block where duty+rest linear span starts (matches ``_busy_span_set``)."""
+    return int(L0) - int(day) * int(blocks_pd)
+
+
+def pattern_weight_multiplier(zone: ZoneConfig, a: AssignmentRecord) -> float:
+    """YAML ``weight_multiplier`` for this assignment's pattern (1.0 for rotating)."""
+    kind = getattr(a, "kind", "rotating") or "rotating"
+    if kind == "rotating":
+        return 1.0
+    tid = zone.location_type_ids[a.loc_i]
+    if kind == "full_day":
+        return float(zone.full_day_specs[tid]["weight_mult"])
+    if kind == "full_day_team":
+        return float(zone.full_day_team_specs[tid]["weight_mult"])
+    if kind == "windowed":
+        wins = zone.windowed_specs.get(tid, [])
+        wname = getattr(a, "window_name", None)
+        if wname:
+            for w in wins:
+                if w.get("name") == wname:
+                    return float(w.get("weight_mult", 1.0))
+        if wins:
+            return float(wins[0].get("weight_mult", 1.0))
+    return 1.0
+
+
+def assignment_calendar_block_weight(
+    zone: ZoneConfig,
+    a: AssignmentRecord,
+    block: int,
+    block_hours: float,
+    plan_day_start_hour: int,
+) -> float:
+    """Fairness weight for one calendar block (``shift_hours * loc * time * pattern_mult``)."""
+    start_h = block_start_hour(int(plan_day_start_hour), int(block), float(block_hours))
+    time_j = time_category_for_hour(start_h, zone)
+    lw = float(zone.loc_weights[a.loc_i])
+    tw = float(zone.time_weights[time_j])
+    wm = pattern_weight_multiplier(zone, a)
+    return float(block_hours) * lw * tw * wm
 
 
 def _busy_span_set(
@@ -2529,7 +2605,7 @@ def _scratch_simulate_nonrot_passes(
                 )
                 lw = loc_w[loc_i]
                 wm = float(cfg["weight_mult"])
-                raw_active = float(sh1 - sh0 + 1)
+                raw_active = _full_day_raw_active_hours(sh0, sh1)
                 b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
                 time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
                 n_req = max(1, int(cfg.get("headcount", 1)))
@@ -3083,7 +3159,7 @@ def run_simulation(
             )
             lw = loc_w[loc_i]
             wm = float(cfg["weight_mult"])
-            raw_active = float(sh1 - sh0 + 1)
+            raw_active = _full_day_raw_active_hours(sh0, sh1)
             b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
             duty_w = b1 - b0 + 1
             time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
@@ -3132,11 +3208,12 @@ def run_simulation(
                 for h in range(sh0, sh1 + 1):
                     tj = time_category_for_hour(h, zone)
                     daily_raw_time[day, chosen.idx, tj] += 1.0
+                span_b0 = linear_busy_span_calendar_block(day, B, L0)
                 assignments.append(
                     AssignmentRecord(
                         day=day,
-                        calendar_block=b0,
-                        start_hour=int(b0 * sh),
+                        calendar_block=span_b0,
+                        start_hour=block_start_hour(plan_start, span_b0, sh),
                         slot=sidx,
                         soldier_idx=chosen.idx,
                         loc_i=loc_i,
@@ -3289,8 +3366,8 @@ def run_simulation(
                 assignments.append(
                     AssignmentRecord(
                         day=day,
-                        calendar_block=b0,
-                        start_hour=int(b0 * sh),
+                        calendar_block=linear_busy_span_calendar_block(day, B, L0),
+                        start_hour=block_start_hour(plan_start, linear_busy_span_calendar_block(day, B, L0), sh),
                         slot=sidx,
                         soldier_idx=chosen.idx,
                         loc_i=loc_i,
@@ -4152,9 +4229,10 @@ def build_soldier_timeline_figure(
     unavail: Optional[np.ndarray] = None,
 ) -> "plt.Figure":
     """
-    One horizontal lane per soldier: red = **posted duty** in that block, green = off post and
-    assignable, yellow = away/sick/training (not assignable). YAML ``rest_after`` padding is
-    not shown as red here. X-axis is hours along the plan-day timeline (0 = plan day start).
+    One horizontal lane per soldier: red = unavailable (posted duty + YAML ``rest_after`` when
+    present on the assignment), green = off post and assignable, yellow = away/sick/training.
+    Matches per-soldier HTML tables (location rows for the full linear busy span). X-axis is
+    hours along the plan-day timeline (0 = plan day start).
     """
     plt, _, Patch = _get_matplotlib()
 
@@ -4193,13 +4271,13 @@ def build_soldier_timeline_figure(
     ps = int(plan_day_start_hour) % 24
     ax.set_xlabel(f"Plan-day timeline (h=0 at {ps:02d}:00 wall clock)")
     ax.set_title(
-        f"Per-soldier schedule (green = off post, yellow = away/sick, red = posted duty)\n{title}",
+        f"Per-soldier schedule (green = off post, yellow = away/sick, red = duty + rest)\n{title}",
         fontsize=10,
     )
     ax.grid(axis="x", alpha=0.25, linestyle=":")
     legend_el = [
         Patch(facecolor=green, edgecolor="white", label="Off post"),
-        Patch(facecolor=red, edgecolor="white", label="Posted duty"),
+        Patch(facecolor=red, edgecolor="white", label="Duty + rest"),
     ]
     if unavail is not None:
         legend_el.insert(1, Patch(facecolor=yellow, edgecolor="white", label="Away / sick"))
@@ -4413,6 +4491,9 @@ def write_html_report(
     for a in assignments:
         for bb in assignment_occupied_blocks(a, calendar_blocks_per_day):
             duty_lookup[(a.soldier_idx, a.day, bb)] = a
+    span_lookup = build_linear_busy_block_lookup(
+        assignments, days, calendar_blocks_per_day
+    )
 
     soldier_sections: List[str] = []
     num_soldiers_list = len(soldiers)
@@ -4426,8 +4507,41 @@ def write_html_report(
                 time_j = time_category_for_hour(start_h, zone)
                 win = format_block_window(start_h, block_hours)
                 key = (sidx, d, b)
-                if key in duty_lookup:
-                    a = duty_lookup[key]
+                duty = duty_lookup.get(key)
+                span_a = span_lookup.get(key)
+                if duty is not None and (getattr(duty, "kind", "rotating") or "rotating") == "rotating":
+                    a = duty
+                    trs_s.append(
+                        "<tr>"
+                        f"<td>{d + 1}</td>"
+                        f"<td>{b + 1}</td>"
+                        f"<td>{esc(win)}</td>"
+                        f"<td>{esc(zone.time_names[a.time_j])}</td>"
+                        f"<td>{esc(zone.loc_names[a.loc_i])}</td>"
+                        f"<td>{a.slot + 1}</td>"
+                        f"<td>{a.raw_hours:.2f}</td>"
+                        f"<td>{a.weight:.4f}</td>"
+                        "</tr>"
+                    )
+                elif span_a is not None and span_a.soldier_idx == sidx:
+                    a = span_a
+                    blk_w = assignment_calendar_block_weight(
+                        zone, a, b, block_hours, plan_start
+                    )
+                    trs_s.append(
+                        "<tr class='duty-rest'>"
+                        f"<td>{d + 1}</td>"
+                        f"<td>{b + 1}</td>"
+                        f"<td>{esc(win)}</td>"
+                        f"<td>{esc(zone.time_names[time_j])}</td>"
+                        f"<td>{esc(zone.loc_names[a.loc_i])}</td>"
+                        f"<td>—</td>"
+                        f"<td>{block_hours:.2f}</td>"
+                        f"<td>{blk_w:.4f}</td>"
+                        "</tr>"
+                    )
+                elif duty is not None:
+                    a = duty
                     trs_s.append(
                         "<tr>"
                         f"<td>{d + 1}</td>"
@@ -4627,6 +4741,7 @@ def write_html_report(
     .param td:first-child {{ font-weight: 600; width: 14rem; }}
     nav.toc a {{ margin-right: 0.75rem; font-size: 0.85rem; }}
     tr.duty-free td:nth-child(5) {{ font-weight: 600; color: #1b5e20; }}
+    tr.duty-rest td:nth-child(5) {{ font-weight: 600; color: #4a148c; }}
   </style>
 </head>
 <body>
@@ -4673,7 +4788,8 @@ def write_html_report(
   {matrix_block}
 
   <h2>Schedule by soldier</h2>
-  <p>Each block of each day for that soldier: post name when <strong>serving</strong>, or <strong>FREE</strong> when off duty.
+  <p>Each block of each day for that soldier: post when <strong>serving</strong> (rotating or spanning duty row),
+  location name on every block covered by <strong>full_day / team / windowed duty + YAML rest</strong>, or <strong>FREE</strong> when off duty.
   <strong>{n_blocks_total}</strong> rows per soldier ({calendar_blocks_per_day} blocks/day × {days} days).</p>
   <p class="toc">Jump:
   {' '.join(f"<a href='#soldier-{s}'>S{s}</a>" for s in range(num_soldiers_list))}
@@ -5483,7 +5599,7 @@ def main() -> None:
     mean_free_bars_png = _figure_to_png_bytes(fig_mf)
 
     busy_tl = build_busy_tensor(
-        assignments, args.days, args.soldiers, blocks_pd, include_yaml_rest=False
+        assignments, args.days, args.soldiers, blocks_pd, include_yaml_rest=True
     )
     unavail_tl = None
     if scenario_avail is not None:

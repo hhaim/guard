@@ -1,0 +1,86 @@
+# zones_mixed_patterns.yaml — schema v2 (mixed rotating / full_day / windowed_slots).
+#
+# - shift_hours: hours per calendar block (must tile 24 h); set in this file or override with --shift-hours.
+# - zone_loc reference slots_types by id (pattern: rotating | full_day | windowed_slots).
+# - Fill order in sim: full_day → windowed_slots → rotating.
+
+schema_version: 2
+shift_hours: 4  # 2 | 3 | 4 — grid for day alignment / table rows / rest padding
+
+slots_types:
+  - id: rotating_slot
+    name: Rotating Guard
+    pattern: rotating
+
+
+  - id: full_day_kitchen
+    name: Full Day Duty in Kitchen
+    pattern: full_day
+    config:
+      start: "09:00"
+      end: "09:00"
+      rest_after_hours: 4
+      weight_multiplier: 1.1
+
+
+  - id: kitchen_team_1
+    pattern: full_day_team
+    # optional: skip this slot type on these weekdays
+    disabled_weekdays: []
+    config:
+      start: "09:00"
+      end: "09:00"
+      rest_after_hours: 0
+      weight_multiplier: 1.1
+      headcount: 5
+      type_quotas:
+        A: 1
+        B: 2
+        C: 1
+
+# One row per concurrent slot (1..Y). location_id must match zone_loc[].id
+slots:
+  - location_id: loc_gate
+    name: g1
+  - location_id: loc_gate
+    name: g2
+  - location_id: loc_gate
+    name: g3
+  - location_id: loc_gate
+    name: g4
+  - location_id: bet_kitchen1
+    name: k1
+
+
+zone_loc:
+  - id: loc_gate
+    type: rotating_slot
+    name: G
+    weight: 1.0
+  - id: loc_kitchen
+    type: full_day_kitchen
+    name: K
+    weight: 1.0
+  - id: bet_kitchen1
+    type: kitchen_team_1
+    name: L
+    weight: 1.0
+
+# Used for piecewise fairness (active hours × time_zone weight × pattern multiplier).
+# Hours must cover 0..23; from_hour and to_hour are inclusive per existing sim convention.
+time_zones:
+  - id: zt_night
+    name: Night
+    weight: 1.5
+    from_hour: 0
+    to_hour: 5
+  - id: zt_morning
+    name: Morning
+    weight: 0.9
+    from_hour: 6
+    to_hour: 11
+  - id: zt_day
+    name: Day
+    weight: 1.0
+    from_hour: 12
+    to_hour: 23

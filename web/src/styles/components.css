@@ -1698,6 +1698,11 @@
   color: #1b5e20;
 }
 
+.sched-row-rest .sched-rest-cell {
+  font-weight: 600;
+  color: #4a148c;
+}
+
 .sched-timeline-wrap {
   margin-top: 0.5rem;
 }

@@ -73,7 +73,7 @@ func fillFullDayTeamPost(
 	L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, sh0, sh1, false, cfg.RestAfterH, planDayStartHour)
 	lw := zone.Locations[locI].Weight
 	wm := cfg.WeightMult
-	rawActive := float64(sh1 - sh0 + 1)
+	rawActive := fullDayRawActiveHours(sh0, sh1)
 	b0, b1 := dutyBlocksInclusiveWallHours(sh, sh0, sh1)
 	dutyW := b1 - b0 + 1
 	timeMid := timeCategoryForHour((sh0+sh1)/2, simZ)
@@ -141,8 +141,9 @@ func fillFullDayTeamPost(
 			tj := timeCategoryForHour(h, simZ)
 			dailyRawTime[day][chosen.Idx][tj] += 1.0
 		}
+		spanB0 := LinearBusySpanCalendarBlock(day, B, L0)
 		*assignments = append(*assignments, &AssignmentRecord{
-			Day: assignmentDay, CalendarBlock: b0, StartHour: int(float64(b0) * sh), Slot: sidx,
+			Day: assignmentDay, CalendarBlock: spanB0, StartHour: BlockStartHour(planDayStartHour, spanB0, sh), Slot: sidx,
 			SoldierIdx: chosen.Idx, LocI: locI, TimeJ: timeMid, Weight: totW, RawHours: rawActive,
 			Kind: "full_day_team", Rowspan: dutyW, WinStartBlock: b0, WinEndBlock: b1,
 			LinearBusySpanBlocks: span,

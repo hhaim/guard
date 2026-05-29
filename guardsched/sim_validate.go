@@ -43,6 +43,15 @@ func restBlocksAligned(restAfterH, sh float64) int {
 	return int(math.Round(restAl / sh))
 }
 
+// fullDayRawActiveHours returns credited duty hours for full_day (inclusive wall clock).
+// When start == end on 0..23, duty is 24h ending at the same clock the next calendar day.
+func fullDayRawActiveHours(sh0, sh1 int) float64 {
+	if sh1 <= sh0 {
+		return 24
+	}
+	return float64(sh1 - sh0 + 1)
+}
+
 func dutyBlocksInclusiveWallHours(sh float64, h0, h1Incl int) (b0, b1 int) {
 	shi := int(sh)
 	b0 = h0 / shi
@@ -64,7 +73,12 @@ func dutyBlocksHalfOpenWallHours(sh float64, h0, h1Excl int) (b0, b1 int) {
 
 func linearBusySpanDutyHoursPlusRest(day, B int, sh float64, hDuty0, hDuty1 int, halfOpen bool, restAfterH float64, planStartHour int) (L0, span int) {
 	_ = halfOpen // unified end+rest mapping.
-	endExcl := int(math.Floor(float64(hDuty1) + restAfterH + 1e-9))
+	// Inclusive end on 0..23; when end <= start, duty runs 24h to the same clock next calendar day.
+	endDutyExcl := hDuty1 + 1
+	if hDuty1 <= hDuty0 {
+		endDutyExcl = hDuty0 + 24
+	}
+	endExcl := int(math.Floor(float64(endDutyExcl) + restAfterH + 1e-9))
 	if endExcl <= hDuty0 {
 		endExcl = hDuty0 + 1
 	}
@@ -83,6 +97,11 @@ func linearBusySpanDutyHoursPlusRest(day, B int, sh float64, hDuty0, hDuty1 int,
 	span = b1 - b0 + 1
 	L0 = day*B + b0
 	return L0, span
+}
+
+// LinearBusySpanCalendarBlock is the calendar block index where the duty+rest span starts.
+func LinearBusySpanCalendarBlock(day, blocksPerDay, L0 int) int {
+	return L0 - day*blocksPerDay
 }
 
 func busySpanSet(busy [][][]bool, soldier, L0, spanBlocks, B, days int) {

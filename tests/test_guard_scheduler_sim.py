@@ -445,8 +445,8 @@ def test_expected_assignment_count_mixed_yaml() -> None:
     assert g.expected_assignment_count(zone, 5, B, y) == 5 * per_day
 
 
-def test_build_busy_tensor_timeline_mode_excludes_yaml_rest() -> None:
-    """Timeline uses ``include_yaml_rest=False`` so it matches HTML duty rows (not rest spill)."""
+def test_build_busy_tensor_timeline_includes_yaml_rest() -> None:
+    """Timeline and soldier tables use full linear busy span (duty + rest_after)."""
     B = 8
     a = g.AssignmentRecord(
         day=0,
@@ -468,6 +468,7 @@ def test_build_busy_tensor_timeline_mode_excludes_yaml_rest() -> None:
     duty = g.build_busy_tensor([a], 2, 1, B, include_yaml_rest=False)
     assert full[1, 0, 0] and full[1, 0, 1]
     assert not duty[1, 0, 0] and not duty[1, 0, 1]
+    assert full[0, 0, 2] and full[0, 0, 7] and not full[0, 0, 0]
     assert duty[0, 0, 2] and duty[0, 0, 7] and not duty[0, 0, 0]
 
 
