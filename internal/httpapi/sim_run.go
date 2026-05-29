@@ -195,9 +195,10 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	if err != nil {
 		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
 	}
-	if global.HistoryDays > 0 && body.Days > global.HistoryDays {
-		body.Days = global.HistoryDays
+	if global.HistoryDays <= 0 {
+		global.HistoryDays = 14
 	}
+	planDays := body.Days
 	var seedPtr *int64
 	if body.Seed != nil {
 		seedPtr = body.Seed
@@ -290,16 +291,34 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
 	}
 
-	availChecker, soldiersByDay, err := s.buildPlanAvailability(ctx, anchor, body.Days, planDayStartHour, keys)
+	availChecker, soldiersByDay, err := s.buildPlanAvailability(ctx, anchor, planDays, planDayStartHour, keys)
 	if err != nil {
 		return nil, 500, err.Error(), err
 	}
 
-	recs, stats, trialMeta, err := guardsched.RunSimulationBestOfZoneConfig(
-		zc, len(keys), body.Days, trials, seedPtr,
-		minFreeH, true, 0, 2, minCool, bandRel,
-		planDayStartHour, availChecker, &anchor, typeCodes,
-	)
+	prefix, err := loadVerifiedHistoryPrefix(ctx, s.Pool, anchor, global.HistoryDays, keys, zc.ShiftHours)
+	if err != nil {
+		return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+	}
+
+	simMode := "cold"
+	var recs []*guardsched.AssignmentRecord
+	var stats *guardsched.SimulationStats
+	var trialMeta map[string]any
+	if prefix.Days > 0 && len(prefix.Records) > 0 {
+		simMode = "extend"
+		recs, stats, trialMeta, err = guardsched.RunSimulationBestOfZoneConfigExtend(
+			zc, len(keys), prefix.Days, planDays, trials, prefix.Records, seedPtr,
+			minFreeH, true, 0, 2, minCool, bandRel,
+			planDayStartHour, availChecker, &anchor, typeCodes,
+		)
+	} else {
+		recs, stats, trialMeta, err = guardsched.RunSimulationBestOfZoneConfig(
+			zc, len(keys), planDays, trials, seedPtr,
+			minFreeH, true, 0, 2, minCool, bandRel,
+			planDayStartHour, availChecker, &anchor, typeCodes,
+		)
+	}
 	if err != nil {
 		return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
 	}
@@ -313,7 +332,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 
 	return &simRunOutput{
 		Anchor:       anchor,
-		Days:         body.Days,
+		Days:         planDays,
 		ShiftHours:   zc.ShiftHours,
 		SoldierKeys:  keys,
 		SlotLabels:   slotLabels,
@@ -326,6 +345,12 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		Meta: map[string]any{
 			"sim_trials":                     trials,
 			"trial":                          trialMeta,
+			"sim_mode":                       simMode,
+			"history_days":                   global.HistoryDays,
+			"history_prefix_days":            prefix.Days,
+			"history_dates":                  prefix.Dates,
+			"history_assignments_replayed":   prefix.AssignmentsReplayed,
+			"history_assignments_skipped":    prefix.AssignmentsSkipped,
 			"min_consecutive_free_hours":     minFreeH,
 			"min_free_shifts_after_duty":     minCool,
 			"band_relative":                  bandRel,
@@ -333,7 +358,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
 			"plan_day_start":                 planDayStartStr,
 			"plan_day_start_hour":            planDayStartHour,
-			"plan_days":                      buildPlanDaysMeta(anchor, body.Days, planDayStartHour),
+			"plan_days":                      buildPlanDaysMeta(anchor, planDays, planDayStartHour),
 		},
 	}, 0, "", nil
 }

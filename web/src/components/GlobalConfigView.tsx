@@ -213,7 +213,7 @@ export function GlobalConfigView() {
           <h2 className="settings-section-header">Simulation</h2>
           <NumberField
             label="History days"
-            hint="Max lookback for schedule runs"
+            hint="Verified schedule days loaded before each plan (checkpoint extend)"
             value={formData.history_days}
             onChange={(n) => updateField("history_days", n)}
           />

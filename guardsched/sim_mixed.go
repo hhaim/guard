@@ -92,7 +92,7 @@ func RunSimulationZoneConfig(
 			tid := zone.Locations[locI].TypeID
 			cfg := zone.FullDayTeamSpecs[tid]
 			if err := fillFullDayTeamPost(
-				zone, day, sidx, locI, cfg, soldiers, typeCodes, busy,
+				zone, day, day, sidx, locI, cfg, soldiers, typeCodes, busy,
 				dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
 				B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, &assignments,
 			); err != nil {

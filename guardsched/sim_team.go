@@ -48,7 +48,7 @@ func soldierTypeCode(typeCodes []string, idx int) string {
 
 func fillFullDayTeamPost(
 	zone *ZoneConfig,
-	day, sidx, locI int,
+	day, assignmentDay, sidx, locI int,
 	cfg FullDayTeamSpec,
 	soldiers []*Soldier,
 	typeCodes []string,
@@ -142,7 +142,7 @@ func fillFullDayTeamPost(
 			dailyRawTime[day][chosen.Idx][tj] += 1.0
 		}
 		*assignments = append(*assignments, &AssignmentRecord{
-			Day: day, CalendarBlock: b0, StartHour: int(float64(b0) * sh), Slot: sidx,
+			Day: assignmentDay, CalendarBlock: b0, StartHour: int(float64(b0) * sh), Slot: sidx,
 			SoldierIdx: chosen.Idx, LocI: locI, TimeJ: timeMid, Weight: totW, RawHours: rawActive,
 			Kind: "full_day_team", Rowspan: dutyW, WinStartBlock: b0, WinEndBlock: b1,
 			LinearBusySpanBlocks: span,

@@ -57,6 +57,8 @@ func run() int {
 	simTrials := flag.Int("sim-trials", defaultSimTrials, "Score N seeds (S..S+N-1), replay best")
 	jsonOut := flag.String("json-output", "", "Write assignments JSON to PATH (stdout if '-')")
 	compareJSON := flag.String("compare-json", "", "Write schedule-compare matrix JSON (Python parity format; stdout if '-')")
+	loadState := flag.String("load-state", "", "Checkpoint JSON: replay prefix then simulate --extend-days")
+	extendDays := flag.Int("extend-days", 0, "With --load-state: new calendar days after replay")
 	quiet := flag.Bool("quiet", false, "Only print JSON/errors")
 	flag.Parse()
 
@@ -116,8 +118,12 @@ func run() int {
 		return 2
 	}
 	if nDays < 1 {
-		fmt.Fprintln(os.Stderr, "error: -d/--days must be >= 1 (or use --scenario)")
-		return 2
+		if *loadState != "" && *extendDays >= 1 {
+			nDays = *extendDays
+		} else {
+			fmt.Fprintln(os.Stderr, "error: -d/--days must be >= 1 (or use --scenario)")
+			return 2
+		}
 	}
 
 	raw, err := os.ReadFile(zonesFile)
@@ -273,12 +279,50 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "Days: %d  shift_hours: %.0f  blocks/day: %d\n", nDays, zc.ShiftHours, blocksPD)
 	}
 
-	recs, stats, meta, err := guardsched.RunSimulationBestOfZoneConfig(
-		zc, nSoldiers, nDays, *simTrials, seedPtr,
-		*minFreeHours, true, 0,
-		*maxDutyBlocks, *minFreeShifts, *bandRelative,
-		planStartHour, avail, anchorPtr, typeCodes,
-	)
+	keys := guardsched.SoldierKeys(nSoldiers)
+
+	var recs []*guardsched.AssignmentRecord
+	var stats *guardsched.SimulationStats
+	var meta map[string]any
+	if strings.TrimSpace(*loadState) != "" {
+		raw, err := os.ReadFile(*loadState)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read checkpoint: %v\n", err)
+			return 2
+		}
+		var ckpt struct {
+			Assignments []map[string]any `json:"assignments"`
+			NumDays     int              `json:"num_days"`
+		}
+		if err := json.Unmarshal(raw, &ckpt); err != nil {
+			fmt.Fprintf(os.Stderr, "error: parse checkpoint: %v\n", err)
+			return 2
+		}
+		prefixDays := ckpt.NumDays
+		if prefixDays < 1 {
+			fmt.Fprintln(os.Stderr, "error: checkpoint num_days must be >= 1")
+			return 2
+		}
+		ext := *extendDays
+		if ext < 1 {
+			ext = nDays
+		}
+		prefix := guardsched.RecordsFromAssignmentJSON(ckpt.Assignments, keys)
+		recs, stats, meta, err = guardsched.RunSimulationBestOfZoneConfigExtend(
+			zc, nSoldiers, prefixDays, ext, *simTrials, prefix, seedPtr,
+			*minFreeHours, true, 0,
+			*maxDutyBlocks, *minFreeShifts, *bandRelative,
+			planStartHour, avail, anchorPtr, typeCodes,
+		)
+		nDays = ext
+	} else {
+		recs, stats, meta, err = guardsched.RunSimulationBestOfZoneConfig(
+			zc, nSoldiers, nDays, *simTrials, seedPtr,
+			*minFreeHours, true, 0,
+			*maxDutyBlocks, *minFreeShifts, *bandRelative,
+			planStartHour, avail, anchorPtr, typeCodes,
+		)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: schedule: %v\n", err)
 		return 1
@@ -333,7 +377,6 @@ func run() int {
 		return 0
 	}
 
-	keys := guardsched.SoldierKeys(nSoldiers)
 	assignJSON := guardsched.AssignmentRecordsToJSON(recs, keys)
 
 	outDoc := map[string]any{
