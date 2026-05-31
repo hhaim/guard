@@ -39,6 +39,52 @@ func BuildBusyTensor(
 	return busy
 }
 
+// IsFullDayTimelineKind reports whether an assignment kind uses orange timeline segments.
+func IsFullDayTimelineKind(kind string) bool {
+	k := kind
+	if k == "" {
+		k = "rotating"
+	}
+	return k == "full_day" || k == "full_day_team"
+}
+
+// BuildFullDayDutyTensor marks full_day_busy[day][soldier][block] for timeline orange segments.
+// Uses the same span rules as BuildBusyTensor but only for full_day / full_day_team assignments.
+func BuildFullDayDutyTensor(
+	recs []*AssignmentRecord,
+	days, numSoldiers, blocksPd int,
+	includeYamlRest bool,
+) [][][]bool {
+	out := new3DBool(days, numSoldiers, blocksPd)
+	maxL := days * blocksPd
+	for _, a := range recs {
+		if a == nil || !IsFullDayTimelineKind(a.Kind) {
+			continue
+		}
+		if includeYamlRest && a.LinearBusySpanBlocks > 0 {
+			L0 := a.Day*blocksPd + a.CalendarBlock
+			for k := 0; k < a.LinearBusySpanBlocks; k++ {
+				L := L0 + k
+				if L >= maxL {
+					break
+				}
+				d, b := L/blocksPd, L%blocksPd
+				if d >= 0 && d < days && a.SoldierIdx >= 0 && a.SoldierIdx < numSoldiers && b >= 0 && b < blocksPd {
+					out[d][a.SoldierIdx][b] = true
+				}
+			}
+			continue
+		}
+		for _, b := range AssignmentOccupiedBlocks(a, blocksPd) {
+			if a.Day >= 0 && a.Day < days && a.SoldierIdx >= 0 && a.SoldierIdx < numSoldiers &&
+				b >= 0 && b < blocksPd {
+				out[a.Day][a.SoldierIdx][b] = true
+			}
+		}
+	}
+	return out
+}
+
 // LinearBusyBlockLookup maps (soldier, day, block) to the assignment whose duty+rest span covers that block.
 func LinearBusyBlockLookup(recs []*AssignmentRecord, days, blocksPd int) map[[3]int]*AssignmentRecord {
 	out := make(map[[3]int]*AssignmentRecord)

@@ -16,7 +16,7 @@ Guard scheduler fairness simulation (**hybrid_rel** soldier pick: relative band 
   whiskers; soldier table includes min/mean/max free per day.
 - PNG outputs: ``-o`` is the **location** full-period heatmap; sibling files add ``_time``,
   ``_avg_daily_loc``, ``_avg_daily_time``, ``_mean_free_bars``, ``_max_free_bars``, and
-  ``_soldier_timelines`` (green = off post, red = duty + YAML ``rest_after``; matches soldier tables).
+  ``_soldier_timelines`` (green = off post, red = rotating/windowed duty + rest, orange = full_day / team; matches soldier tables).
 - HTML: **Schedule by soldier** tables (every block: post or FREE), plus the timeline figure.
 - **PDF:** use ``--pdf`` (writes ``<html-stem>.pdf``) or ``--pdf-output my.pdf``; requires **WeasyPrint**.
 - **Soldier pick:** ``hybrid_rel`` only — sort by this slot’s location load, then **global weighted**
@@ -605,6 +605,41 @@ def build_busy_tensor(
             for b in assignment_occupied_blocks(a, blocks_pd):
                 busy[a.day, a.soldier_idx, b] = True
     return busy
+
+
+def is_full_day_timeline_kind(kind: Optional[str]) -> bool:
+    """True for timeline orange segments (full_day / full_day_team duty+rest spans)."""
+    k = (kind or "rotating").strip() or "rotating"
+    return k in ("full_day", "full_day_team")
+
+
+def build_full_day_duty_tensor(
+    assignments: Sequence[AssignmentRecord],
+    days: int,
+    num_soldiers: int,
+    blocks_pd: int,
+    *,
+    include_yaml_rest: bool = True,
+) -> np.ndarray:
+    """``full_day_busy[day, soldier, block]`` — blocks colored orange on soldier timelines."""
+    out = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
+    max_l = days * blocks_pd
+    for a in assignments:
+        if not is_full_day_timeline_kind(getattr(a, "kind", None)):
+            continue
+        span = getattr(a, "linear_busy_span_blocks", None)
+        if include_yaml_rest and span is not None and int(span) > 0:
+            L0 = int(a.day) * blocks_pd + int(a.calendar_block)
+            for k in range(int(span)):
+                L = L0 + k
+                if L >= max_l:
+                    break
+                d, b = divmod(L, blocks_pd)
+                out[d, a.soldier_idx, b] = True
+        else:
+            for b in assignment_occupied_blocks(a, blocks_pd):
+                out[a.day, a.soldier_idx, b] = True
+    return out
 
 
 def build_linear_busy_block_lookup(
@@ -4259,11 +4294,11 @@ def build_soldier_timeline_figure(
     assignments: Optional[Sequence[AssignmentRecord]] = None,
 ) -> "plt.Figure":
     """
-    One horizontal lane per soldier: red = unavailable (posted duty + YAML ``rest_after`` when
-    present on the assignment), green = off post and assignable, yellow = away/sick/training.
-    Matches per-soldier HTML tables (location rows for the full linear busy span). X-axis is
-    hours along the plan-day timeline (0 = plan day start), plus up to two future shifts
-    (max 12 h) after the last plan day when ``assignments`` is provided.
+    One horizontal lane per soldier: red = rotating/windowed duty + YAML rest, orange =
+    full_day / full_day_team duty + rest, green = off post and assignable, yellow =
+    away/sick/training. Matches per-soldier HTML tables. X-axis is hours along the plan-day
+    timeline (0 = plan day start), plus up to two future shifts (max 12 h) after the last
+    plan day when ``assignments`` is provided.
     """
     plt, _, Patch = _get_matplotlib()
 
@@ -4271,21 +4306,29 @@ def build_soldier_timeline_figure(
     ext_blocks = report_future_extension_blocks(block_hours)
     ext_h = ext_blocks * float(block_hours)
     total_h = days * 24.0 + ext_h
+    full_day_busy: Optional[np.ndarray] = None
+    if assignments is not None:
+        full_day_busy = build_full_day_duty_tensor(assignments, days, n_s, blocks_pd)
     fig_h = max(4.0, 0.38 * n_s + 2.2)
     fig, ax = plt.subplots(figsize=(min(24, max(12, days * 0.45)), fig_h))
-    red, green, yellow = "#c62828", "#2e7d32", "#f9a825"
+    red, orange, green, yellow = "#c62828", "#d84315", "#2e7d32", "#f9a825"
+
     for s in range(n_s):
         y_pos = n_s - 1 - s
         y0 = y_pos - 0.36
         h = 0.72
         red_segs: List[Tuple[float, float]] = []
+        orange_segs: List[Tuple[float, float]] = []
         green_segs: List[Tuple[float, float]] = []
         yellow_segs: List[Tuple[float, float]] = []
         for d in range(days):
             for b in range(blocks_pd):
                 x0 = d * 24.0 + b * block_hours
                 if busy[d, s, b]:
-                    red_segs.append((x0, block_hours))
+                    if full_day_busy is not None and full_day_busy[d, s, b]:
+                        orange_segs.append((x0, block_hours))
+                    else:
+                        red_segs.append((x0, block_hours))
                 elif unavail is not None and unavail[d, s, b]:
                     yellow_segs.append((x0, block_hours))
                 else:
@@ -4301,13 +4344,26 @@ def build_soldier_timeline_figure(
                     busy=busy,
                     blocks_pd=blocks_pd,
                 ):
-                    red_segs.append((x0, block_hours))
+                    color = red
+                    for a in assignments:
+                        if int(a.soldier_idx) != s:
+                            continue
+                        if _assignment_covers_linear_index(a, linear_index, blocks_pd):
+                            if is_full_day_timeline_kind(getattr(a, "kind", None)):
+                                color = orange
+                            break
+                    if color == orange:
+                        orange_segs.append((x0, block_hours))
+                    else:
+                        red_segs.append((x0, block_hours))
                 else:
                     green_segs.append((x0, block_hours))
         if green_segs:
             ax.broken_barh(green_segs, (y0, h), facecolors=green, edgecolors="white", linewidth=0.3)
         if yellow_segs:
             ax.broken_barh(yellow_segs, (y0, h), facecolors=yellow, edgecolors="white", linewidth=0.3)
+        if orange_segs:
+            ax.broken_barh(orange_segs, (y0, h), facecolors=orange, edgecolors="white", linewidth=0.3)
         if red_segs:
             ax.broken_barh(red_segs, (y0, h), facecolors=red, edgecolors="white", linewidth=0.3)
 
@@ -4318,13 +4374,16 @@ def build_soldier_timeline_figure(
     ps = int(plan_day_start_hour) % 24
     ax.set_xlabel(f"Plan-day timeline (h=0 at {ps:02d}:00 wall clock)")
     ax.set_title(
-        f"Per-soldier schedule (green = off post, yellow = away/sick, red = duty + rest)\n{title}",
+        "Per-soldier schedule (green = off post, yellow = away/sick, "
+        "red = rotating/windowed, orange = full day / team)\n"
+        f"{title}",
         fontsize=10,
     )
     ax.grid(axis="x", alpha=0.25, linestyle=":")
     legend_el = [
         Patch(facecolor=green, edgecolor="white", label="Off post"),
-        Patch(facecolor=red, edgecolor="white", label="Duty + rest"),
+        Patch(facecolor=red, edgecolor="white", label="Rotating / windowed"),
+        Patch(facecolor=orange, edgecolor="white", label="Full day / team"),
     ]
     if unavail is not None:
         legend_el.insert(1, Patch(facecolor=yellow, edgecolor="white", label="Away / sick"))
@@ -4992,7 +5051,7 @@ def write_html_report(
   {all_soldier_html}
 
   <h2>Soldier timelines (full simulation)</h2>
-  <p><strong>Green</strong> = free, <strong>red</strong> = on duty. X-axis is hours from the start of day 1; dashed lines are midnight between simulation days.</p>
+  <p><strong>Green</strong> = off post, <strong>yellow</strong> = away/sick, <strong>red</strong> = rotating/windowed duty + rest, <strong>orange</strong> = full day / team duty + rest. X-axis is plan-day timeline from day 1 start; dashed lines mark plan-day boundaries.</p>
   <p><img src="{_png_data_uri(soldier_timeline_png)}" alt="Per-soldier duty timeline" /></p>
 
   {full_loc_html}

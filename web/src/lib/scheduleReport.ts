@@ -86,7 +86,52 @@ export type TimelineSegment = {
   onDuty: boolean;
   /** Away/sick/training — not assignable (yellow when not on duty). */
   unavailable?: boolean;
+  /** Duty+rest from full_day or full_day_team (orange on timeline). */
+  fullDayDuty?: boolean;
 };
+
+export type TimelineSegmentKind = "off" | "unavailable" | "duty" | "full_day_duty";
+
+export function isFullDayTimelineKind(kind: string | undefined | null): boolean {
+  const k = kind?.trim() || "rotating";
+  return k === "full_day" || k === "full_day_team";
+}
+
+export function isFullDayTimelineAssignment(a: ScheduleAssignment): boolean {
+  return isFullDayTimelineKind(a.kind);
+}
+
+export function timelineSegmentKind(seg: TimelineSegment): TimelineSegmentKind {
+  if (seg.onDuty) return seg.fullDayDuty ? "full_day_duty" : "duty";
+  if (seg.unavailable) return "unavailable";
+  return "off";
+}
+
+export function timelineSegmentClassName(seg: TimelineSegment): string {
+  switch (timelineSegmentKind(seg)) {
+    case "full_day_duty":
+      return "sched-seg sched-seg-full-day";
+    case "duty":
+      return "sched-seg sched-seg-on";
+    case "unavailable":
+      return "sched-seg sched-seg-unavail";
+    default:
+      return "sched-seg sched-seg-off";
+  }
+}
+
+export function timelineSegmentTitle(seg: TimelineSegment): string {
+  switch (timelineSegmentKind(seg)) {
+    case "full_day_duty":
+      return "full day duty + rest";
+    case "duty":
+      return "duty + rest";
+    case "unavailable":
+      return "away/sick";
+    default:
+      return "off post";
+  }
+}
 
 export type BuildTimelineOpts = {
   planDayStartHour?: number;
@@ -694,6 +739,10 @@ export function buildTimelineLanes(
   const days = busy.length;
   const blocksPd = busy[0]?.[0]?.length ?? 0;
   const extBlocks = reportFutureExtensionBlocks(blockHours);
+  const fullDayBusy =
+    assignmentList?.length && blocksPd > 0
+      ? buildFullDayDutyTensor(assignmentList, days, soldierCount, blocksPd, true)
+      : undefined;
   const lanes: { soldierIdx: number; label: string; segments: TimelineSegment[] }[] = [];
   for (let s = soldierCount - 1; s >= 0; s--) {
     const segments: TimelineSegment[] = [];
@@ -723,6 +772,7 @@ export function buildTimelineLanes(
           duration: blockHours,
           onDuty,
           unavailable,
+          fullDayDuty: onDuty && !!fullDayBusy?.[d]?.[s]?.[b],
         });
       }
     }
@@ -730,10 +780,12 @@ export function buildTimelineLanes(
       for (let eb = 0; eb < extBlocks; eb++) {
         const linearIndex = days * blocksPd + eb;
         let onDuty = false;
+        let fullDayDuty = false;
         for (const a of assignmentList) {
           if (a.soldier_idx !== s) continue;
           if (assignmentCoversLinearIndex(a, linearIndex, blocksPd)) {
             onDuty = true;
+            fullDayDuty = isFullDayTimelineAssignment(a);
             break;
           }
         }
@@ -742,6 +794,7 @@ export function buildTimelineLanes(
           duration: blockHours,
           onDuty,
           unavailable: false,
+          fullDayDuty: onDuty && fullDayDuty,
         });
       }
     }
@@ -891,6 +944,46 @@ export function buildBusyTensor(
     }
   }
   return busy;
+}
+
+/** Orange timeline segments: full_day / full_day_team duty+rest spans (subset of buildBusyTensor). */
+export function buildFullDayDutyTensor(
+  assignments: ScheduleAssignment[],
+  days: number,
+  numSoldiers: number,
+  blocksPd: number,
+  includeYamlRest = true,
+): boolean[][][] {
+  const out = Array.from({ length: days }, () =>
+    Array.from({ length: numSoldiers }, () => Array<boolean>(blocksPd).fill(false)),
+  );
+  const maxL = days * blocksPd;
+  for (const a of assignments) {
+    if (!isFullDayTimelineKind(a.kind)) continue;
+    const span =
+      includeYamlRest && a.linear_busy_span_blocks != null && a.linear_busy_span_blocks > 0
+        ? a.linear_busy_span_blocks
+        : 0;
+    if (span > 0) {
+      const L0 = a.day * blocksPd + a.calendar_block;
+      for (let k = 0; k < span; k++) {
+        const L = L0 + k;
+        if (L >= maxL) break;
+        const d = Math.floor(L / blocksPd);
+        const b = L % blocksPd;
+        if (d >= 0 && d < days && a.soldier_idx >= 0 && a.soldier_idx < numSoldiers && b < blocksPd) {
+          out[d][a.soldier_idx][b] = true;
+        }
+      }
+    } else {
+      for (const b of assignmentOccupiedBlocks(a, blocksPd)) {
+        if (a.day >= 0 && a.day < days && a.soldier_idx >= 0 && a.soldier_idx < numSoldiers && b < blocksPd) {
+          out[a.day][a.soldier_idx][b] = true;
+        }
+      }
+    }
+  }
+  return out;
 }
 
 export function computeMaxConsecutiveFreeHours(busy: boolean[][][], blockHours: number): number[][] {

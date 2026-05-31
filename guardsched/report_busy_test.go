@@ -65,6 +65,20 @@ func TestReportBusy_zonesNextDayFull_S1Day1Block2(t *testing.T) {
 		t.Fatalf("duty-only busy[%d][%d][%d] want true (09:00 plan block is first kitchen duty block)", day, soldier, block)
 	}
 
+	fullDay := BuildFullDayDutyTensor(recs, 2, n, B, true)
+	if !fullDay[day][soldier][block] {
+		t.Fatalf("full_day duty[%d][%d][%d] want true (kitchen team orange span)", day, soldier, block)
+	}
+	for d := 0; d < 2; d++ {
+		for s := 0; s < n; s++ {
+			for b := 0; b < B; b++ {
+				if fullDay[d][s][b] && !busyTL[d][s][b] {
+					t.Fatalf("full_day busy at %d/%d/%d without timeline busy", d, s, b)
+				}
+			}
+		}
+	}
+
 	for key, rec := range lookup {
 		if !busyTL[key[1]][key[0]][key[2]] {
 			t.Fatalf("timeline missing red at soldier=%d day=%d block=%d", key[0], key[1], key[2])

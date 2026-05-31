@@ -14,6 +14,8 @@ import {
   MATRIX_CELL_MAX_SOLDIERS,
   formatMatrixCellLabels,
   reportFutureExtensionBlocks,
+  timelineSegmentClassName,
+  timelineSegmentTitle,
 } from "../lib/scheduleReport";
 import { normalizePlanDoc, type PlanDoc } from "../lib/planDoc";
 import { formatWallClockHour, resolvePlanDayStartHour, timelineChartLayout } from "../lib/planDay";
@@ -306,10 +308,10 @@ function SoldierTimelineChart({
     <div className="sched-timeline-wrap">
       <h4 className="sched-subtitle">Soldier timelines (full simulation)</h4>
       <p className="sched-hint">
-        Green = off post and assignable, yellow = away/sick/training, red = duty + mandatory rest
-        (matches soldier tables). X-axis
-        is wall-clock time from plan day start ({formatWallClockHour(planDayStartHour)}); dashed
-        lines mark the next plan day.
+        Green = off post and assignable, yellow = away/sick/training, red = rotating/windowed duty
+        + rest, orange = full day / team duty + rest (matches soldier tables). X-axis is wall-clock
+        time from plan day start ({formatWallClockHour(planDayStartHour)}); dashed lines mark the
+        next plan day.
       </p>
       <p className="sched-hint sched-timeline-caption">
         {days}d — {lanes.length} soldiers, {slotsPerBlock} slots/block, shift_hours={blockHours}h
@@ -323,7 +325,10 @@ function SoldierTimelineChart({
             <i className="sched-swatch sched-swatch-unavail" /> Away / sick
           </span>
           <span>
-            <i className="sched-swatch sched-swatch-on" /> Duty + rest
+            <i className="sched-swatch sched-swatch-on" /> Rotating / windowed
+          </span>
+          <span>
+            <i className="sched-swatch sched-swatch-full-day" /> Full day / team
           </span>
         </div>
         <div className="sched-timeline-axis">
@@ -354,20 +359,12 @@ function SoldierTimelineChart({
                 {lane.segments.map((seg, i) => (
                   <span
                     key={i}
-                    className={
-                      seg.onDuty
-                        ? "sched-seg sched-seg-on"
-                        : seg.unavailable
-                          ? "sched-seg sched-seg-unavail"
-                          : "sched-seg sched-seg-off"
-                    }
+                    className={timelineSegmentClassName(seg)}
                     style={{
                       left: `${layout.segmentLeftPct(seg.startHour)}%`,
                       width: `${layout.segmentWidthPct(seg.duration)}%`,
                     }}
-                    title={`${lane.label}: ${
-                      seg.onDuty ? "duty" : seg.unavailable ? "away/sick" : "off post"
-                    } ${formatTimelineSegmentRange(seg, planDayStartHour)}`}
+                    title={`${lane.label}: ${timelineSegmentTitle(seg)} ${formatTimelineSegmentRange(seg, planDayStartHour)}`}
                   />
                 ))}
               </div>

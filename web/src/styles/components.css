@@ -1744,6 +1744,10 @@
   background: #c62828;
 }
 
+.sched-swatch-full-day {
+  background: #d84315;
+}
+
 .sched-swatch-unavail {
   background: #f9a825;
 }
@@ -1812,6 +1816,10 @@
 
 .sched-seg-on {
   background: #c62828;
+}
+
+.sched-seg-full-day {
+  background: #d84315;
 }
 
 .sched-seg-unavail {

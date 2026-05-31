@@ -696,6 +696,53 @@ def test_build_busy_tensor_marks_full_day_duty_blocks() -> None:
     busy = g.build_busy_tensor(asn, days=1, num_soldiers=2, blocks_pd=3)
     assert busy[0, 0, 0] and busy[0, 0, 1] and busy[0, 0, 2]
     assert not busy[0, 1, 0]
+    fd = g.build_full_day_duty_tensor(asn, days=1, num_soldiers=2, blocks_pd=3)
+    assert np.array_equal(fd, busy)
+    rot = g.AssignmentRecord(
+        day=0,
+        calendar_block=1,
+        start_hour=4,
+        slot=1,
+        soldier_idx=1,
+        loc_i=0,
+        time_j=0,
+        weight=1.0,
+        raw_hours=4.0,
+        kind="rotating",
+    )
+    mixed = [*asn, rot]
+    busy_m = g.build_busy_tensor(mixed, days=1, num_soldiers=2, blocks_pd=3)
+    fd_m = g.build_full_day_duty_tensor(mixed, days=1, num_soldiers=2, blocks_pd=3)
+    assert fd_m[0, 0, 0] and not fd_m[0, 1, 1]
+    assert busy_m[0, 1, 1] and not fd_m[0, 1, 1]
+
+
+def test_build_full_day_duty_tensor_kitchen_team_span() -> None:
+    zone = g.load_zone_config(ROOT / "zones_next_day_full.yaml", slots_per_block=5)
+    type_codes = g.load_roster_type_codes_yaml(ROOT / "roaster1.yaml", g.roster_keys(18))
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=42,
+        num_soldiers=18,
+        slots_per_block=5,
+        days=2,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        min_consecutive_free_hours=6.0,
+        min_free_shifts_after_duty=2,
+        type_codes=type_codes,
+    )
+    assignments = pack[3]
+    B = g.calendar_blocks_per_day(zone.shift_hours)
+    busy = g.build_busy_tensor(assignments, 2, 18, B, include_yaml_rest=True)
+    fd = g.build_full_day_duty_tensor(assignments, 2, 18, B, include_yaml_rest=True)
+    assert np.any(fd)
+    assert np.all(fd <= busy)
+    team = [a for a in assignments if a.kind == "full_day_team"]
+    assert team
+    s = team[0].soldier_idx
+    assert fd[0, s, 1]
+    assert busy[0, s, 1]
 
 
 # ---------------------------------------------------------------------------

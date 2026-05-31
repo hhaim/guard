@@ -12,6 +12,7 @@ import {
   inferSoldierCount,
   MATRIX_CELL_MAX_SOLDIERS,
   reportFutureExtensionBlocks,
+  timelineSegmentKind,
   type MatrixDay,
 } from "./scheduleReport";
 import { buildSoldierDisplay, type SoldierDisplay } from "./soldierDisplay";
@@ -232,6 +233,7 @@ const REPORT_CSS = `
   }
   .seg { position: absolute; top: 1px; bottom: 1px; border-radius: 1px; }
   .seg-on { background: #c62828; }
+  .seg-full-day { background: #d84315; }
   .seg-off { background: #2e7d32; }
   .seg-unavail { background: #f9a825; }
   .sched-availability-day { margin: 0 0 14px; }
@@ -411,6 +413,19 @@ function soldierDetailHtml(
   </div>`;
 }
 
+function planReportTimelineSegClass(seg: ReturnType<typeof buildTimelineLanes>[0]["segments"][0]): string {
+  switch (timelineSegmentKind(seg)) {
+    case "full_day_duty":
+      return "seg seg-full-day";
+    case "duty":
+      return "seg seg-on";
+    case "unavailable":
+      return "seg seg-unavail";
+    default:
+      return "seg seg-off";
+  }
+}
+
 function timelineHtml(
   lanes: ReturnType<typeof buildTimelineLanes>,
   days: number,
@@ -424,7 +439,7 @@ function timelineHtml(
       const segs = lane.segments
         .map(
           (seg) =>
-            `<span class="seg ${seg.onDuty ? "seg-on" : seg.unavailable ? "seg-unavail" : "seg-off"}" style="left:${layout.segmentLeftPct(seg.startHour)}%;width:${layout.segmentWidthPct(seg.duration)}%"></span>`
+            `<span class="${planReportTimelineSegClass(seg)}" style="left:${layout.segmentLeftPct(seg.startHour)}%;width:${layout.segmentWidthPct(seg.duration)}%"></span>`,
         )
         .join("");
       const badge = soldierBadgeHtml(lane.soldierIdx, lane.label, display);
@@ -435,7 +450,7 @@ function timelineHtml(
     })
     .join("");
   return `<div class="sched-timeline-wrap">
-    <p class="sched-hint">Green = off post, yellow = away/sick, red = duty + mandatory rest (matches soldier tables). ${days} plan day(s) from ${esc(formatWallClockHour(planDayStartHour))}; wall-clock UTC.</p>
+    <p class="sched-hint">Green = off post, yellow = away/sick, red = rotating/windowed duty + rest, orange = full day / team duty + rest (matches soldier tables). ${days} plan day(s) from ${esc(formatWallClockHour(planDayStartHour))}; wall-clock UTC.</p>
     ${laneRows}
   </div>`;
 }
