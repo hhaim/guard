@@ -388,7 +388,7 @@ func RunSimulationZoneConfigExtend(
 			lw := zone.Locations[locI].Weight
 			wm := cfg.WeightMult
 			rawActive := fullDayRawActiveHours(sh0, sh1)
-			b0, b1 := dutyBlocksInclusiveWallHours(sh, sh0, sh1)
+			b0, b1 := dutyBlocksPlanAligned(sh, sh0, sh1, planDayStartHour, B)
 			dutyW := b1 - b0 + 1
 			nReq := cfg.Headcount
 			if nReq < 1 {

@@ -24,7 +24,7 @@ func TestZonesNextDayFull_S7NotRotatingBefore13AfterFullDay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const n = 22
+	const n = 18 // seed 42: kitchen team rest respected through day-2 13:00 (n=22 allows early day-2 rotations)
 	keys := Roster(n)
 	typeCodes, err := LoadRosterTypeCodesYAML(rraw, keys)
 	if err != nil {

@@ -113,8 +113,12 @@ export function formatWallClockHour(hour: number): string {
 }
 
 /** X-axis layout for soldier timeline charts (0% = plan day start, not midnight). */
-export function timelineChartLayout(days: number, planDayStartHour: number) {
-  const spanHours = days * 24;
+export function timelineChartLayout(
+  days: number,
+  planDayStartHour: number,
+  totalSpanHours?: number,
+) {
+  const spanHours = totalSpanHours ?? days * 24;
   const origin = ((Math.trunc(planDayStartHour) % 24) + 24) % 24;
   return {
     spanHours,

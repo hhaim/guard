@@ -8,7 +8,10 @@ import {
   buildSoldierBlockRows,
   buildTimelineLanes,
   buildZoneReportView,
+  formatMatrixCellLabels,
   inferSoldierCount,
+  MATRIX_CELL_MAX_SOLDIERS,
+  reportFutureExtensionBlocks,
   type MatrixDay,
 } from "./scheduleReport";
 import { buildSoldierDisplay, type SoldierDisplay } from "./soldierDisplay";
@@ -289,10 +292,14 @@ function matrixCellHtml(
     cell.labels ??
     indices.map((idx) => (useFullNames ? display.fullLabel(idx) : labelForIdx(idx)));
   if (indices.length > 1) {
-    const badges = indices
-      .map((idx, i) => soldierBadgeHtml(idx, labels[i] ?? labelForIdx(idx), display))
+    const show = indices.slice(0, MATRIX_CELL_MAX_SOLDIERS);
+    const showLabels = labels.slice(0, MATRIX_CELL_MAX_SOLDIERS);
+    const extra = indices.length - show.length;
+    const badges = show
+      .map((idx, i) => soldierBadgeHtml(idx, showLabels[i] ?? labelForIdx(idx), display))
       .join("");
-    return `<div class="sched-matrix-cell-team" title="${esc(labels.join(", "))}">${badges}</div>`;
+    const more = extra > 0 ? `<span class="sched-matrix-cell-more"> (+${extra} more)</span>` : "";
+    return `<div class="sched-matrix-cell-team" title="${esc(formatMatrixCellLabels(indices, labels))}">${badges}${more}</div>`;
   }
   return soldierBadgeHtml(indices[0], labels[0] ?? labelForIdx(indices[0]), display);
 }
@@ -408,9 +415,10 @@ function timelineHtml(
   lanes: ReturnType<typeof buildTimelineLanes>,
   days: number,
   planDayStartHour: number,
-  display: SoldierDisplay
+  display: SoldierDisplay,
+  totalSpanHours: number,
 ): string {
-  const layout = timelineChartLayout(days, planDayStartHour);
+  const layout = timelineChartLayout(days, planDayStartHour, totalSpanHours);
   const laneRows = lanes
     .map((lane) => {
       const segs = lane.segments
@@ -628,9 +636,10 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
     anchorDate,
     shiftHours: zone.shiftHours,
     soldiersByDay: proposal.soldiers,
+    assignments,
   });
   const stats = buildScheduleStats(assignments, days, zone, soldierCount);
-  const totalHours = days * 24;
+  const totalHours = days * 24 + reportFutureExtensionBlocks(zone.shiftHours) * zone.shiftHours;
   const changes = proposal.changes ?? [];
   const generatedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
 
@@ -694,7 +703,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
 
     <div class="pdf-page">
       <h2 class="sched-section-title">Soldier timelines</h2>
-      ${timelineHtml(lanes, days, planDayStartHour, display)}
+      ${timelineHtml(lanes, days, planDayStartHour, display, totalHours)}
     </div>
 
     ${statsHtml(stats, days, zone.shiftHours, zone.slotsPerBlock, display)}

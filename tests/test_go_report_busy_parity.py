@@ -77,4 +77,4 @@ def test_go_json_busy_tensor_matches_python_report(guardsim_bin: Path) -> None:
         assert busy_tl[key[1], key[0], key[2]], f"timeline red missing for {key}"
 
     busy_duty = g.build_busy_tensor(go_recs, 2, 22, B, include_yaml_rest=False)
-    assert not busy_duty[day, soldier, block]
+    assert busy_duty[day, soldier, block]

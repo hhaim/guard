@@ -1395,7 +1395,7 @@ def _fill_full_day_team_post(
     lw = zone.loc_weights[loc_i]
     wm = float(cfg["weight_mult"])
     raw_active = _full_day_raw_active_hours(sh0, sh1)
-    b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
+    b0, b1 = _duty_blocks_plan_aligned(sh, sh0, sh1, plan_start_hour, B)
     duty_w = b1 - b0 + 1
     time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
     headcount = int(cfg["headcount"])
@@ -2100,6 +2100,35 @@ def _duty_blocks_inclusive_wall_hours(sh: float, h0: int, h1_incl: int) -> Tuple
     return b0, b1
 
 
+def _duty_blocks_plan_aligned(
+    sh: float,
+    h_duty0: int,
+    h_duty1_incl: int,
+    plan_start_hour: int,
+    blocks_pd: int,
+) -> Tuple[int, int]:
+    """Inclusive plan-day block indices for a duty window (``start == end`` => 24h)."""
+    end_duty_excl = int(h_duty1_incl) + 1
+    if int(h_duty1_incl) <= int(h_duty0):
+        end_duty_excl = int(h_duty0) + 24
+    sh_i = int(sh)
+    start_rel = (int(h_duty0) - int(plan_start_hour)) % 24
+    dur_h = int(end_duty_excl) - int(h_duty0)
+    if dur_h <= 0:
+        dur_h = 1
+    end_rel = start_rel + dur_h
+    b0 = start_rel // sh_i
+    b1 = (end_rel - 1) // sh_i
+    cap = int(blocks_pd) - 1
+    if b0 > cap:
+        b0 = cap
+    if b1 > cap:
+        b1 = cap
+    if b1 < b0:
+        b1 = b0
+    return b0, b1
+
+
 def _duty_blocks_half_open_wall_hours(sh: float, h0: int, h1_excl: int) -> Tuple[int, int]:
     """Block indices covering duty window ``[h0, h1_excl)`` in wall-clock hours."""
     if h1_excl <= int(h0):
@@ -2606,7 +2635,7 @@ def _scratch_simulate_nonrot_passes(
                 lw = loc_w[loc_i]
                 wm = float(cfg["weight_mult"])
                 raw_active = _full_day_raw_active_hours(sh0, sh1)
-                b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
+                b0, b1 = _duty_blocks_plan_aligned(sh, sh0, sh1, plan_start, B)
                 time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
                 n_req = max(1, int(cfg.get("headcount", 1)))
 
@@ -3160,7 +3189,7 @@ def run_simulation(
             lw = loc_w[loc_i]
             wm = float(cfg["weight_mult"])
             raw_active = _full_day_raw_active_hours(sh0, sh1)
-            b0, b1 = _duty_blocks_inclusive_wall_hours(sh, sh0, sh1)
+            b0, b1 = _duty_blocks_plan_aligned(sh, sh0, sh1, plan_start, B)
             duty_w = b1 - b0 + 1
             time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
             n_req = max(1, int(cfg.get("headcount", 1)))
@@ -4227,17 +4256,21 @@ def build_soldier_timeline_figure(
     title: str,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
     unavail: Optional[np.ndarray] = None,
+    assignments: Optional[Sequence[AssignmentRecord]] = None,
 ) -> "plt.Figure":
     """
     One horizontal lane per soldier: red = unavailable (posted duty + YAML ``rest_after`` when
     present on the assignment), green = off post and assignable, yellow = away/sick/training.
     Matches per-soldier HTML tables (location rows for the full linear busy span). X-axis is
-    hours along the plan-day timeline (0 = plan day start).
+    hours along the plan-day timeline (0 = plan day start), plus up to two future shifts
+    (max 12 h) after the last plan day when ``assignments`` is provided.
     """
     plt, _, Patch = _get_matplotlib()
 
     days, n_s, blocks_pd = busy.shape
-    total_h = days * 24.0
+    ext_blocks = report_future_extension_blocks(block_hours)
+    ext_h = ext_blocks * float(block_hours)
+    total_h = days * 24.0 + ext_h
     fig_h = max(4.0, 0.38 * n_s + 2.2)
     fig, ax = plt.subplots(figsize=(min(24, max(12, days * 0.45)), fig_h))
     red, green, yellow = "#c62828", "#2e7d32", "#f9a825"
@@ -4255,6 +4288,20 @@ def build_soldier_timeline_figure(
                     red_segs.append((x0, block_hours))
                 elif unavail is not None and unavail[d, s, b]:
                     yellow_segs.append((x0, block_hours))
+                else:
+                    green_segs.append((x0, block_hours))
+        if ext_blocks > 0 and assignments is not None:
+            for eb in range(ext_blocks):
+                x0 = days * 24.0 + eb * block_hours
+                linear_index = days * blocks_pd + eb
+                if _soldier_busy_at_linear_index(
+                    s,
+                    linear_index,
+                    assignments=assignments,
+                    busy=busy,
+                    blocks_pd=blocks_pd,
+                ):
+                    red_segs.append((x0, block_hours))
                 else:
                     green_segs.append((x0, block_hours))
         if green_segs:
@@ -4295,8 +4342,113 @@ def build_soldier_timeline_figure(
         )
     for d in range(1, days):
         ax.axvline(d * 24.0, color="0.55", lw=0.8, ls="--", alpha=0.6)
+    if ext_h > 0:
+        ax.axvline(days * 24.0, color="0.45", lw=0.8, ls=":", alpha=0.7)
     fig.tight_layout()
     return fig
+
+
+_MATRIX_CELL_MAX_SOLDIERS = 10
+REPORT_FUTURE_SHIFT_COUNT = 2
+REPORT_FUTURE_MAX_HOURS = 12.0
+
+
+def report_future_extension_blocks(block_hours: float) -> int:
+    """Extra report rows / timeline hours after plan-day end (2 shifts, max 12 h)."""
+    sh = float(block_hours)
+    if sh <= 0:
+        return 0
+    cap = int(math.floor(REPORT_FUTURE_MAX_HOURS / sh + 1e-9))
+    return max(0, min(REPORT_FUTURE_SHIFT_COUNT, cap))
+
+
+def _assignment_linear_origin(a: AssignmentRecord, blocks_pd: int) -> int:
+    return int(a.day) * int(blocks_pd) + int(a.calendar_block)
+
+
+def _assignment_linear_span_len(a: AssignmentRecord, blocks_pd: int) -> int:
+    span = getattr(a, "linear_busy_span_blocks", None)
+    if span is not None and int(span) > 0:
+        return int(span)
+    k = getattr(a, "kind", "rotating") or "rotating"
+    if k == "rotating":
+        return 1
+    occ = assignment_occupied_blocks(a, blocks_pd)
+    return max(1, len(occ))
+
+
+def _assignment_covers_linear_index(
+    a: AssignmentRecord, linear_index: int, blocks_pd: int
+) -> bool:
+    l0 = _assignment_linear_origin(a, blocks_pd)
+    span = _assignment_linear_span_len(a, blocks_pd)
+    return l0 <= int(linear_index) < l0 + span
+
+
+def _matrix_slot_soldiers(
+    src_d: int,
+    src_b: int,
+    slot: int,
+    *,
+    sim_days: int,
+    lookup_rot: Dict[Tuple[int, int, int], List[int]],
+    merged: Dict[Tuple[int, int], Tuple[List[int], int, int]],
+    assignments: Sequence[AssignmentRecord],
+    blocks_pd: int,
+) -> List[int]:
+    if src_d < sim_days:
+        rot = lookup_rot.get((src_d, src_b, slot))
+        if rot:
+            return list(rot)
+        m = merged.get((src_d, slot))
+        if m is not None:
+            indices, rs, sb = m
+            if sb <= src_b < sb + rs:
+                return list(indices)
+        linear_index = src_d * blocks_pd + src_b
+    else:
+        linear_index = sim_days * blocks_pd + src_b
+    out: List[int] = []
+    for a in assignments:
+        if int(a.slot) != slot:
+            continue
+        if _assignment_covers_linear_index(a, linear_index, blocks_pd):
+            _matrix_add_soldier(out, int(a.soldier_idx))
+    return out
+
+
+def _soldier_busy_at_linear_index(
+    soldier_idx: int,
+    linear_index: int,
+    *,
+    assignments: Sequence[AssignmentRecord],
+    busy: np.ndarray,
+    blocks_pd: int,
+) -> bool:
+    days = int(busy.shape[0])
+    d, b = divmod(int(linear_index), blocks_pd)
+    if 0 <= d < days and busy[d, soldier_idx, b]:
+        return True
+    for a in assignments:
+        if int(a.soldier_idx) != soldier_idx:
+            continue
+        if _assignment_covers_linear_index(a, linear_index, blocks_pd):
+            return True
+    return False
+
+
+def _format_matrix_cell_soldiers(indices: Sequence[int], *, max_show: int = _MATRIX_CELL_MAX_SOLDIERS) -> str:
+    """Comma-separated S# labels for a matrix cell; cap display at ``max_show``."""
+    labs = [f"S{i}" for i in sorted(set(indices))]
+    if len(labs) <= max_show:
+        return ", ".join(labs)
+    extra = len(labs) - max_show
+    return ", ".join(labs[:max_show]) + f" (+{extra} more)"
+
+
+def _matrix_add_soldier(bucket: List[int], soldier_idx: int) -> None:
+    if soldier_idx not in bucket:
+        bucket.append(soldier_idx)
 
 
 def build_day_schedule_matrix_html(
@@ -4308,24 +4460,32 @@ def build_day_schedule_matrix_html(
     zone: ZoneConfig,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
 ) -> str:
-    """Per day: rows = time shift, columns = Slot 1..y, cell = soldier id (rowspan for full_day / windowed)."""
-    lookup_rot: Dict[Tuple[int, int, int], str] = {}
-    merged: Dict[Tuple[int, int], Tuple[str, int, int]] = {}
+    """Per day: rows = time shift, columns = Slot 1..y, cell = soldier id(s) (rowspan for spanning posts)."""
+    lookup_rot: Dict[Tuple[int, int, int], List[int]] = {}
+    merged: Dict[Tuple[int, int], Tuple[List[int], int, int]] = {}
     for a in assignments:
         k = getattr(a, "kind", "rotating") or "rotating"
         if k == "rotating":
-            lookup_rot[(a.day, a.calendar_block, a.slot)] = f"S{a.soldier_idx}"
-        elif k in ("full_day", "windowed"):
-            merged[(a.day, a.slot)] = (
-                f"S{a.soldier_idx}",
-                int(a.rowspan),
-                int(a.calendar_block),
-            )
+            key = (a.day, a.calendar_block, a.slot)
+            lookup_rot.setdefault(key, [])
+            _matrix_add_soldier(lookup_rot[key], int(a.soldier_idx))
+        elif k in ("full_day", "full_day_team", "windowed"):
+            key = (a.day, a.slot)
+            occupied = assignment_occupied_blocks(a, blocks_pd)
+            sb = occupied[0] if occupied else int(a.calendar_block)
+            rs = len(occupied) if occupied else int(a.rowspan)
+            if key not in merged:
+                merged[key] = ([int(a.soldier_idx)], rs, sb)
+            else:
+                indices, prev_rs, prev_sb = merged[key]
+                _matrix_add_soldier(indices, int(a.soldier_idx))
+                merged[key] = (indices, max(prev_rs, rs), prev_sb)
 
     def esc(x: object) -> str:
         return html_module.escape(str(x))
 
     sections: List[str] = []
+    ext_blocks = report_future_extension_blocks(block_hours)
     for d in range(days):
         skip = [0] * slots_per_block
         heads: List[str] = []
@@ -4341,23 +4501,58 @@ def build_day_schedule_matrix_html(
         heads_s = "".join(heads)
         rows: List[str] = []
         plan_start = int(plan_day_start_hour)
-        for b in range(blocks_pd):
-            sh = block_start_hour(plan_start, b, block_hours)
+        row_specs: List[Tuple[int, int, int]] = [(d, b, b) for b in range(blocks_pd)]
+        for eb in range(ext_blocks):
+            nd = d + 1
+            if nd < days:
+                row_specs.append((nd, eb, blocks_pd + eb))
+            else:
+                row_specs.append((days, eb, blocks_pd + eb))
+        for src_d, src_b, label_b in row_specs:
+            sh = block_start_hour(plan_start, label_b, block_hours)
             win = format_block_window(sh, block_hours)
+            if label_b >= blocks_pd:
+                win = f"{win} (next plan day)"
             tds: List[str] = []
+            in_day = label_b < blocks_pd
             for j in range(slots_per_block):
-                if skip[j] > 0:
+                if in_day and skip[j] > 0:
                     skip[j] -= 1
                     continue
-                if (d, j) in merged:
-                    lab, rs, sb = merged[(d, j)]
-                    if b == sb:
+                if in_day and (d, j) in merged:
+                    indices, rs, sb = merged[(d, j)]
+                    if label_b < sb:
+                        tds.append("<td>—</td>")
+                    elif label_b == sb:
+                        lab = _format_matrix_cell_soldiers(indices)
                         tds.append(f'<td rowspan="{rs}">{esc(lab)}</td>')
                         skip[j] = rs - 1
                     else:
-                        tds.append("<td>—</td>")
+                        soldiers = _matrix_slot_soldiers(
+                            src_d,
+                            src_b,
+                            j,
+                            sim_days=days,
+                            lookup_rot=lookup_rot,
+                            merged=merged,
+                            assignments=assignments,
+                            blocks_pd=blocks_pd,
+                        )
+                        lab = _format_matrix_cell_soldiers(soldiers) if soldiers else "—"
+                        tds.append(f"<td>{esc(lab)}</td>")
                 else:
-                    tds.append(f"<td>{esc(lookup_rot.get((d, b, j), '—'))}</td>")
+                    soldiers = _matrix_slot_soldiers(
+                        src_d,
+                        src_b,
+                        j,
+                        sim_days=days,
+                        lookup_rot=lookup_rot,
+                        merged=merged,
+                        assignments=assignments,
+                        blocks_pd=blocks_pd,
+                    )
+                    lab = _format_matrix_cell_soldiers(soldiers) if soldiers else "—"
+                    tds.append(f"<td>{esc(lab)}</td>")
             rows.append(f"<tr><th>{esc(win)}</th>{''.join(tds)}</tr>")
         sections.append(
             f"<h3 id='matrix-day-{d + 1}'>Day {d + 1} — schedule matrix (time × slot)</h3>\n"
@@ -5619,6 +5814,7 @@ def main() -> None:
         title,
         plan_day_start_hour=plan_day_start_hour,
         unavail=unavail_tl,
+        assignments=assignments,
     )
     soldier_timeline_png = _figure_to_png_bytes(fig_tl)
 

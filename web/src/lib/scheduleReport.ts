@@ -94,6 +94,7 @@ export type BuildTimelineOpts = {
   anchorDate?: string;
   soldierIds?: string[];
   soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
+  assignments?: ScheduleAssignment[];
 };
 
 export function calendarBlocksPerDay(shiftHours: number): number {
@@ -110,6 +111,102 @@ export function formatBlockWindow(startHour: number, blockHours: number): string
     return `${pad2(sh)}:00–${pad2(eh % 24)}:00 (+1d)`;
   }
   return `${pad2(sh)}:00 (+${bh} h)`;
+}
+
+export const REPORT_FUTURE_SHIFT_COUNT = 2;
+export const REPORT_FUTURE_MAX_HOURS = 12;
+
+export function reportFutureExtensionBlocks(blockHours: number): number {
+  if (blockHours <= 0) return 0;
+  const cap = Math.floor(REPORT_FUTURE_MAX_HOURS / blockHours + 1e-9);
+  return Math.max(0, Math.min(REPORT_FUTURE_SHIFT_COUNT, cap));
+}
+
+export const MATRIX_CELL_MAX_SOLDIERS = 10;
+
+export function formatMatrixCellLabels(
+  indices: number[],
+  labels?: string[],
+  maxShow = MATRIX_CELL_MAX_SOLDIERS,
+): string {
+  const pairs = indices.map((idx, i) => ({
+    idx,
+    label: labels?.[i] ?? `S${idx}`,
+  }));
+  pairs.sort((a, b) => a.idx - b.idx);
+  const seen = new Set<number>();
+  const labs: string[] = [];
+  for (const p of pairs) {
+    if (seen.has(p.idx)) continue;
+    seen.add(p.idx);
+    labs.push(p.label);
+  }
+  if (labs.length <= maxShow) return labs.join(", ");
+  return `${labs.slice(0, maxShow).join(", ")} (+${labs.length - maxShow} more)`;
+}
+
+function assignmentKind(a: ScheduleAssignment): string {
+  return a.kind?.trim() || "rotating";
+}
+
+function assignmentLinearOrigin(a: ScheduleAssignment, blocksPd: number): number {
+  return a.day * blocksPd + a.calendar_block;
+}
+
+function assignmentLinearSpanLen(a: ScheduleAssignment, blocksPd: number): number {
+  if (a.linear_busy_span_blocks != null && a.linear_busy_span_blocks > 0) {
+    return a.linear_busy_span_blocks;
+  }
+  const k = assignmentKind(a);
+  if (k === "rotating") return 1;
+  return Math.max(1, assignmentOccupiedBlocks(a, blocksPd).length);
+}
+
+function assignmentCoversLinearIndex(
+  a: ScheduleAssignment,
+  linearIndex: number,
+  blocksPd: number,
+): boolean {
+  const l0 = assignmentLinearOrigin(a, blocksPd);
+  const span = assignmentLinearSpanLen(a, blocksPd);
+  return linearIndex >= l0 && linearIndex < l0 + span;
+}
+
+function matrixSlotSoldiers(
+  srcD: number,
+  srcB: number,
+  slot: number,
+  simDays: number,
+  blocksPd: number,
+  assignments: ScheduleAssignment[],
+  lookupRot: Map<string, { soldierIndices: number[]; labels: string[] }>,
+  merged: Map<
+    string,
+    { soldierIndices: number[]; labels: string[]; rowspan: number; startBlock: number }
+  >,
+  soldierIds?: string[],
+): { soldierIndices: number[]; labels: string[] } {
+  if (srcD < simDays) {
+    const rot = lookupRot.get(`${srcD}:${srcB}:${slot}`);
+    if (rot) return rot;
+    const m = merged.get(`${srcD}:${slot}`);
+    if (m && m.startBlock <= srcB && srcB < m.startBlock + m.rowspan) {
+      return { soldierIndices: m.soldierIndices, labels: m.labels };
+    }
+  }
+  const linearIndex = srcD < simDays ? srcD * blocksPd + srcB : simDays * blocksPd + srcB;
+  const pairs: { idx: number; label: string }[] = [];
+  for (const a of assignments) {
+    if (a.slot !== slot) continue;
+    if (!assignmentCoversLinearIndex(a, linearIndex, blocksPd)) continue;
+    if (pairs.some((p) => p.idx === a.soldier_idx)) continue;
+    pairs.push({ idx: a.soldier_idx, label: soldierLabel(a, soldierIds) });
+  }
+  pairs.sort((x, y) => x.idx - y.idx);
+  return {
+    soldierIndices: pairs.map((p) => p.idx),
+    labels: pairs.map((p) => p.label),
+  };
 }
 
 function pad2(n: number): string {
@@ -330,6 +427,7 @@ export function buildScheduleMatrices(
       cur.soldierIndices = pairs.map((p) => p.idx);
       cur.labels = pairs.map((p) => p.label);
     }
+    cur.rowspan = Math.max(cur.rowspan, rowspan);
   };
 
   for (const a of assignments) {
@@ -346,17 +444,14 @@ export function buildScheduleMatrices(
         cur.soldierIndices.sort((x, y) => x - y);
       }
     } else if (k === "full_day" || k === "full_day_team" || k === "windowed") {
-      addToGroup(
-        merged,
-        `${a.day}:${a.slot}`,
-        a.soldier_idx,
-        label,
-        a.rowspan ?? assignmentOccupiedBlocks(a, zone.blocksPerDay).length,
-        a.win_start_block ?? a.calendar_block,
-      );
+      const occ = assignmentOccupiedBlocks(a, zone.blocksPerDay);
+      const sb = occ[0] ?? a.win_start_block ?? a.calendar_block;
+      const rs = occ.length || a.rowspan || 1;
+      addToGroup(merged, `${a.day}:${a.slot}`, a.soldier_idx, label, rs, sb);
     }
   }
 
+  const extBlocks = reportFutureExtensionBlocks(zone.shiftHours);
   const matrices: MatrixDay[] = [];
   for (let d = 0; d < days; d++) {
     const dayCalendarDate = anchor ? calendarDateForPlanDay(anchor, d) : "";
@@ -372,20 +467,32 @@ export function buildScheduleMatrices(
     const rows: MatrixRow[] = [];
     const skip = Array(zone.slotsPerBlock).fill(0);
 
-    for (let b = 0; b < zone.blocksPerDay; b++) {
-      const sh = blockStartHour(planStart, b, zone.shiftHours);
+    const rowSpecs: { srcD: number; srcB: number; labelB: number }[] = [];
+    for (let b = 0; b < zone.blocksPerDay; b++) rowSpecs.push({ srcD: d, srcB: b, labelB: b });
+    for (let eb = 0; eb < extBlocks; eb++) {
+      const nd = d + 1;
+      if (nd < days) rowSpecs.push({ srcD: nd, srcB: eb, labelB: zone.blocksPerDay + eb });
+      else rowSpecs.push({ srcD: days, srcB: eb, labelB: zone.blocksPerDay + eb });
+    }
+
+    for (const { srcD, srcB, labelB } of rowSpecs) {
+      const sh = blockStartHour(planStart, labelB, zone.shiftHours);
+      let win = formatBlockWindow(sh, zone.shiftHours);
+      if (labelB >= zone.blocksPerDay) win = `${win} (next plan day)`;
       const cells: MatrixCell[] = [];
+      const inDay = labelB < zone.blocksPerDay;
       for (let j = 0; j < zone.slotsPerBlock; j++) {
-        if (skip[j] > 0) {
+        if (inDay && skip[j] > 0) {
           skip[j] -= 1;
           cells.push({ soldierIdx: null, label: "", skip: true });
           continue;
         }
         if (
+          inDay &&
           anchor &&
           isSlotDisabledOnPlanDay(zone, j, anchor, d, planStart)
         ) {
-          if (b === 0) {
+          if (labelB === 0) {
             cells.push({
               soldierIdx: null,
               label: "—",
@@ -396,37 +503,62 @@ export function buildScheduleMatrices(
           }
           continue;
         }
-        const m = merged.get(`${d}:${j}`);
-        if (m) {
-          if (b === m.startBlock) {
-            const primary = m.soldierIndices[0] ?? null;
-            cells.push({
-              soldierIdx: primary,
-              label: m.labels.join(", "),
-              soldierIndices: m.soldierIndices,
-              labels: m.labels,
-              rowspan: m.rowspan,
-            });
-            skip[j] = m.rowspan - 1;
+        if (inDay) {
+          const m = merged.get(`${d}:${j}`);
+          if (m) {
+            if (labelB < m.startBlock) {
+              cells.push({ soldierIdx: null, label: "—" });
+              continue;
+            }
+            if (labelB === m.startBlock) {
+              const primary = m.soldierIndices[0] ?? null;
+              cells.push({
+                soldierIdx: primary,
+                label: formatMatrixCellLabels(m.soldierIndices, m.labels),
+                soldierIndices: m.soldierIndices,
+                labels: m.labels,
+                rowspan: m.rowspan,
+              });
+              skip[j] = m.rowspan - 1;
+              continue;
+            }
           } else {
-            cells.push({ soldierIdx: null, label: "—" });
-          }
-        } else {
-          const rot = lookupRot.get(`${d}:${b}:${j}`);
-          if (rot) {
-            const primary = rot.soldierIndices[0] ?? null;
-            cells.push({
-              soldierIdx: primary,
-              label: rot.labels.join(", "),
-              soldierIndices: rot.soldierIndices,
-              labels: rot.labels,
-            });
-          } else {
-            cells.push({ soldierIdx: null, label: "—" });
+            const rot = lookupRot.get(`${d}:${labelB}:${j}`);
+            if (rot) {
+              const primary = rot.soldierIndices[0] ?? null;
+              cells.push({
+                soldierIdx: primary,
+                label: formatMatrixCellLabels(rot.soldierIndices, rot.labels),
+                soldierIndices: rot.soldierIndices,
+                labels: rot.labels,
+              });
+              continue;
+            }
           }
         }
+        const group = matrixSlotSoldiers(
+          srcD,
+          srcB,
+          j,
+          days,
+          zone.blocksPerDay,
+          assignments,
+          lookupRot,
+          merged,
+          soldierIds,
+        );
+        if (group.soldierIndices.length === 0) {
+          cells.push({ soldierIdx: null, label: "—" });
+        } else {
+          cells.push({
+            soldierIdx: group.soldierIndices[0] ?? null,
+            label: formatMatrixCellLabels(group.soldierIndices, group.labels),
+            soldierIndices: group.soldierIndices,
+            labels: group.labels,
+          });
+        }
       }
-      rows.push({ window: formatBlockWindow(sh, zone.shiftHours), cells });
+      rows.push({ window: win, cells });
     }
     const weekday = dayCalendarDate ? weekdayLongName(dayCalendarDate) : undefined;
     matrices.push({
@@ -464,10 +596,6 @@ function buildLinearBusyBlockLookup(
     }
   }
   return lookup;
-}
-
-function assignmentKind(a: ScheduleAssignment): string {
-  return a.kind?.trim() || "rotating";
 }
 
 export function buildSoldierBlockRows(
@@ -562,7 +690,10 @@ export function buildTimelineLanes(
   const soldierIds = opts?.soldierIds;
   const soldiersByDay = opts?.soldiersByDay;
   const anchorDate = opts?.anchorDate?.trim() ?? "";
+  const assignmentList = opts?.assignments;
   const days = busy.length;
+  const blocksPd = busy[0]?.[0]?.length ?? 0;
+  const extBlocks = reportFutureExtensionBlocks(blockHours);
   const lanes: { soldierIdx: number; label: string; segments: TimelineSegment[] }[] = [];
   for (let s = soldierCount - 1; s >= 0; s--) {
     const segments: TimelineSegment[] = [];
@@ -592,6 +723,25 @@ export function buildTimelineLanes(
           duration: blockHours,
           onDuty,
           unavailable,
+        });
+      }
+    }
+    if (extBlocks > 0 && assignmentList?.length) {
+      for (let eb = 0; eb < extBlocks; eb++) {
+        const linearIndex = days * blocksPd + eb;
+        let onDuty = false;
+        for (const a of assignmentList) {
+          if (a.soldier_idx !== s) continue;
+          if (assignmentCoversLinearIndex(a, linearIndex, blocksPd)) {
+            onDuty = true;
+            break;
+          }
+        }
+        segments.push({
+          startHour: blockTimelineStartHour(days, eb, planDayStartHour, blockHours),
+          duration: blockHours,
+          onDuty,
+          unavailable: false,
         });
       }
     }

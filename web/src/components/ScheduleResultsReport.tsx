@@ -11,6 +11,9 @@ import {
   buildZoneReportView,
   formatTimelineSegmentRange,
   inferSoldierCount,
+  MATRIX_CELL_MAX_SOLDIERS,
+  formatMatrixCellLabels,
+  reportFutureExtensionBlocks,
 } from "../lib/scheduleReport";
 import { normalizePlanDoc, type PlanDoc } from "../lib/planDoc";
 import { formatWallClockHour, resolvePlanDayStartHour, timelineChartLayout } from "../lib/planDay";
@@ -98,19 +101,23 @@ function MatrixCellContent({
     cell.labels ??
     indices.map((idx) => (useFullNames ? display.fullLabel(idx) : labelForIdx(idx)));
   if (indices.length > 1) {
+    const show = indices.slice(0, MATRIX_CELL_MAX_SOLDIERS);
+    const showLabels = labels.slice(0, MATRIX_CELL_MAX_SOLDIERS);
+    const extra = indices.length - show.length;
     return (
-      <div className="sched-matrix-cell-team" title={labels.join(", ")}>
-        {indices.map((idx, i) => (
+      <div className="sched-matrix-cell-team" title={formatMatrixCellLabels(indices, labels)}>
+        {show.map((idx, i) => (
           <SoldierLink
             key={idx}
             soldierIdx={idx}
-            label={labels[i] ?? labelForIdx(idx)}
+            label={showLabels[i] ?? labelForIdx(idx)}
             title={useFullNames ? undefined : display.fullLabel(idx)}
             selected={selectedSoldier === idx}
             onSelect={onSelectSoldier}
             display={display}
           />
         ))}
+        {extra > 0 ? <span className="sched-matrix-cell-more"> (+{extra} more)</span> : null}
       </div>
     );
   }
@@ -270,6 +277,7 @@ function SoldierTimelineChart({
   blockHours,
   slotsPerBlock,
   planDayStartHour,
+  totalHours,
   display,
 }: {
   lanes: ReturnType<typeof buildTimelineLanes>;
@@ -277,11 +285,12 @@ function SoldierTimelineChart({
   blockHours: number;
   slotsPerBlock: number;
   planDayStartHour: number;
+  totalHours: number;
   display: SoldierDisplay;
 }) {
   const layout = useMemo(
-    () => timelineChartLayout(days, planDayStartHour),
-    [days, planDayStartHour],
+    () => timelineChartLayout(days, planDayStartHour, totalHours),
+    [days, planDayStartHour, totalHours],
   );
 
   const ticks = useMemo(() => {
@@ -410,8 +419,9 @@ export function ScheduleResultsReport({
         anchorDate,
         shiftHours: zone.shiftHours,
         soldiersByDay: plan.soldiers,
+        assignments,
       }),
-      totalHours: days * 24,
+      totalHours: days * 24 + reportFutureExtensionBlocks(zone.shiftHours) * zone.shiftHours,
       stats: buildScheduleStats(assignments, days, zone, soldierCount),
     };
   }, [assignments, days, shiftHours, zones, anchorDate, planDayStartHour, soldierIds, plan.soldiers]);
@@ -527,6 +537,7 @@ export function ScheduleResultsReport({
           blockHours={report.zone.shiftHours}
           slotsPerBlock={report.zone.slotsPerBlock}
           planDayStartHour={planDayStartHour}
+          totalHours={report.totalHours}
           display={display}
         />
       )}

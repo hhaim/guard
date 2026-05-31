@@ -1036,6 +1036,19 @@ def test_count_shift_cooldown_violations() -> None:
     assert g.count_shift_cooldown_violations(busy, min_free_shifts_after_duty=0) == 0
 
 
+def test_report_future_extension_blocks() -> None:
+    assert g.report_future_extension_blocks(4.0) == 2
+    assert g.report_future_extension_blocks(3.0) == 2
+    assert g.report_future_extension_blocks(6.0) == 2
+    assert g.report_future_extension_blocks(8.0) == 1
+
+
+def test_duty_blocks_plan_aligned_09_to_09() -> None:
+    """09:00–09:00 on plan day starting 05:00 with 4h blocks spans blocks 1..5 (20h on-plan)."""
+    b0, b1 = g._duty_blocks_plan_aligned(4.0, 9, 9, 5, 6)
+    assert (b0, b1) == (1, 5)
+
+
 def test_build_day_schedule_matrix_html_rowspan_full_day() -> None:
     zone = g.load_zone_config(ZONES_V1, slots_per_block=3)
     asn = [
@@ -1058,6 +1071,120 @@ def test_build_day_schedule_matrix_html_rowspan_full_day() -> None:
     html = g.build_day_schedule_matrix_html(asn, days=1, blocks_pd=3, slots_per_block=3, block_hours=8.0, zone=zone)
     assert 'rowspan="3"' in html
     assert "S4" in html
+
+
+def test_build_day_schedule_matrix_html_full_day_team_multi_soldier() -> None:
+    zone = g.load_zone_config(ROOT / "zones_next_day_full.yaml", slots_per_block=5)
+    asn = [
+        g.AssignmentRecord(
+            day=0,
+            calendar_block=1,
+            start_hour=9,
+            slot=4,
+            soldier_idx=s,
+            loc_i=2,
+            time_j=0,
+            weight=10.0,
+            raw_hours=24.0,
+            kind="full_day_team",
+            rowspan=5,
+            win_start_block=1,
+            win_end_block=5,
+        )
+        for s in (1, 3, 5, 7, 9)
+    ]
+    html = g.build_day_schedule_matrix_html(
+        asn,
+        days=1,
+        blocks_pd=6,
+        slots_per_block=5,
+        block_hours=4.0,
+        zone=zone,
+        plan_day_start_hour=5,
+    )
+    assert 'rowspan="5"' in html
+    assert "S1, S3, S5, S7, S9" in html
+
+
+def test_format_matrix_cell_soldiers_caps_at_ten() -> None:
+    assert g._format_matrix_cell_soldiers(list(range(12))) == (
+        "S0, S1, S2, S3, S4, S5, S6, S7, S8, S9 (+2 more)"
+    )
+
+
+def test_zones_next_day_full_matrix_shows_kitchen_team() -> None:
+    """Regression: slot 5 (full_day_team) must appear in the schedule matrix HTML."""
+    import re
+
+    zone = g.load_zone_config(ROOT / "zones_next_day_full.yaml", slots_per_block=5)
+    type_codes = _load_roaster1_type_codes()
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=42,
+        num_soldiers=18,
+        slots_per_block=5,
+        days=2,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        min_consecutive_free_hours=6.0,
+        min_free_shifts_after_duty=2,
+        type_codes=type_codes,
+    )
+    assign = pack[3]
+    team_day0 = [a for a in assign if a.day == 0 and a.slot == 4 and a.kind == "full_day_team"]
+    assert len(team_day0) == 5
+    expected = g._format_matrix_cell_soldiers([a.soldier_idx for a in team_day0])
+    html = g.build_day_schedule_matrix_html(
+        assign,
+        days=2,
+        blocks_pd=g.calendar_blocks_per_day(zone.shift_hours),
+        slots_per_block=5,
+        block_hours=zone.shift_hours,
+        zone=zone,
+        plan_day_start_hour=5,
+    )
+    m = re.search(r"matrix-day-1.*?</table>", html, re.DOTALL)
+    assert m is not None
+    assert expected in m.group()
+    assert "(next plan day)" in m.group()
+
+
+def test_matrix_future_extension_shows_kitchen_tail_on_day1() -> None:
+    """Day 1 matrix appends next-plan-day rows so 09:00–09:00 duty tail is visible."""
+    import re
+
+    zone = g.load_zone_config(ROOT / "zones_next_day_full.yaml", slots_per_block=5)
+    type_codes = _load_roaster1_type_codes()
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=42,
+        num_soldiers=18,
+        slots_per_block=5,
+        days=2,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        min_consecutive_free_hours=6.0,
+        min_free_shifts_after_duty=2,
+        type_codes=type_codes,
+    )
+    assign = pack[3]
+    html = g.build_day_schedule_matrix_html(
+        assign,
+        days=2,
+        blocks_pd=g.calendar_blocks_per_day(zone.shift_hours),
+        slots_per_block=5,
+        block_hours=zone.shift_hours,
+        zone=zone,
+        plan_day_start_hour=5,
+    )
+    m = re.search(r"matrix-day-1.*?</table>", html, re.DOTALL)
+    assert m is not None
+    body = m.group()
+    assert body.count("(next plan day)") == g.report_future_extension_blocks(zone.shift_hours)
+    assert re.search(
+        r"\(next plan day\)</th><td>S\d+</td><td>S\d+</td><td>S\d+</td><td>S\d+</td><td>S\d+",
+        body,
+    )
 
 
 def test_assert_rest_feasible_counting_min_formula() -> None:

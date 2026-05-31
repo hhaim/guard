@@ -59,6 +59,37 @@ func dutyBlocksInclusiveWallHours(sh float64, h0, h1Incl int) (b0, b1 int) {
 	return b0, b1
 }
 
+// dutyBlocksPlanAligned returns inclusive plan-day block indices for a duty window (start==end => 24h).
+func dutyBlocksPlanAligned(sh float64, hDuty0, hDuty1Incl, planStartHour, blocksPd int) (b0, b1 int) {
+	endDutyExcl := hDuty1Incl + 1
+	if hDuty1Incl <= hDuty0 {
+		endDutyExcl = hDuty0 + 24
+	}
+	shi := int(sh)
+	startRel := (hDuty0 - planStartHour) % 24
+	if startRel < 0 {
+		startRel += 24
+	}
+	durH := endDutyExcl - hDuty0
+	if durH <= 0 {
+		durH = 1
+	}
+	endRel := startRel + durH
+	b0 = startRel / shi
+	b1 = (endRel - 1) / shi
+	cap := blocksPd - 1
+	if b0 > cap {
+		b0 = cap
+	}
+	if b1 > cap {
+		b1 = cap
+	}
+	if b1 < b0 {
+		b1 = b0
+	}
+	return b0, b1
+}
+
 func dutyBlocksHalfOpenWallHours(sh float64, h0, h1Excl int) (b0, b1 int) {
 	if h1Excl <= h0 {
 		shi := int(sh)
