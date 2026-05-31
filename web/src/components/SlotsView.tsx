@@ -958,6 +958,12 @@ function FullDayTeamConfigFields({
         config={config}
         onChange={(base) => onChange({ ...config, ...base })}
       />
+      <DecimalNumField
+        label="Hours factor"
+        hint="Credited duty fraction for fairness (e.g. 0.33); busy span unchanged"
+        value={config.hours_factor}
+        onChange={(hours_factor) => onChange({ ...config, hours_factor })}
+      />
       <TypeQuotasEditor
         headcount={config.headcount}
         quotas={config.type_quotas}

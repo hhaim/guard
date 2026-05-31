@@ -34,6 +34,52 @@ def test_load_zone_config_full_day_team() -> None:
     assert cfg["type_quotas"]["A"] == 1
     assert cfg["type_quotas"]["B"] == 2
     assert cfg["type_quotas"]["C"] == 1
+    assert cfg.get("hours_factor", 1.0) == pytest.approx(1.0)
+
+
+def test_iter_full_day_duty_hours_same_clock_is_24() -> None:
+    hours = list(g._iter_full_day_duty_hours(9, 9))
+    assert len(hours) == 24
+    assert hours[0] == 9
+    assert hours[-1] == 8
+
+
+def test_full_day_team_hours_factor_scales_raw_hours_and_weight() -> None:
+    """hours_factor credits a fraction of duty for fairness; busy span unchanged."""
+    zone = g.load_zone_config(ROOT / "zones_next_day_full_v1.yaml", slots_per_block=5)
+    assert zone.full_day_team_specs["kitchen_team_1"]["hours_factor"] == pytest.approx(0.33)
+    type_codes = g.load_roster_type_codes_yaml(ROOT / "roaster1.yaml", g.roster_keys(22))
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=42,
+        num_soldiers=22,
+        slots_per_block=5,
+        days=1,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        min_consecutive_free_hours=6.0,
+        max_consecutive_duty_blocks=0,
+        min_free_shifts_after_duty=2,
+        band_relative=0.2,
+        type_codes=type_codes,
+    )
+    soldiers = pack[0]
+    team = [a for a in pack[3] if a.kind == "full_day_team"]
+    assert team
+    a = team[0]
+    assert a.raw_hours == pytest.approx(24.0 * 0.33)
+    assert g.pattern_hours_factor(zone, a) == pytest.approx(0.33)
+    # Day band block: 4h × 0.33 × 1.0 × 1.0 × 1.1
+    assert g.assignment_calendar_block_weight(zone, a, 2, zone.shift_hours, 5) == pytest.approx(
+        4 * 0.33 * 1.1
+    )
+    assert a.linear_busy_span_blocks is not None
+    # Busy span still covers full duty window (not scaled by hours_factor).
+    assert a.linear_busy_span_blocks >= g.calendar_blocks_per_day(zone.shift_hours)
+    s = soldiers[team[0].soldier_idx]
+    per_day = 24.0 * 0.33
+    assert s.total_raw_guard_hours() == pytest.approx(per_day, rel=1e-6)
+    assert s.raw_loc[2] == pytest.approx(per_day, rel=1e-6)
 
 
 def test_run_simulation_full_day_team_assignment_count() -> None:

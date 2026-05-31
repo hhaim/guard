@@ -1008,14 +1008,14 @@ def replay_checkpoint_assignments(
             lw = loc_w[loc_i]
             wm = float(cfg["weight_mult"])
             raw_active = _full_day_raw_active_hours(sh0, sh1)
-            for h in range(sh0, sh1 + 1):
+            for h in _iter_full_day_duty_hours(sh0, sh1):
                 tj = time_category_for_hour(h, zone)
                 tw = time_w[tj]
                 wpart = lw * tw * wm
                 s.add_assignment(loc_i, tj, wpart, 1.0)
             _busy_span_set(busy, s.idx, L0, span, B, days)
             daily_raw_loc[day, s.idx, loc_i] += raw_active
-            for h in range(sh0, sh1 + 1):
+            for h in _iter_full_day_duty_hours(sh0, sh1):
                 tj = time_category_for_hour(h, zone)
                 daily_raw_time[day, s.idx, tj] += 1.0
         elif k == "full_day_team":
@@ -1036,17 +1036,20 @@ def replay_checkpoint_assignments(
             )
             lw = loc_w[loc_i]
             wm = float(cfg["weight_mult"])
-            raw_active = _full_day_raw_active_hours(sh0, sh1)
-            for h in range(sh0, sh1 + 1):
+            hf = float(cfg.get("hours_factor", 1.0))
+            if hf <= 0:
+                hf = 1.0
+            raw_active = _full_day_raw_active_hours(sh0, sh1) * hf
+            for h in _iter_full_day_duty_hours(sh0, sh1):
                 tj = time_category_for_hour(h, zone)
                 tw = time_w[tj]
-                wpart = lw * tw * wm
-                s.add_assignment(loc_i, tj, wpart, 1.0)
+                wpart = lw * tw * wm * hf
+                s.add_assignment(loc_i, tj, wpart, hf)
             _busy_span_set(busy, s.idx, L0, span, B, days)
             daily_raw_loc[day, s.idx, loc_i] += raw_active
-            for h in range(sh0, sh1 + 1):
+            for h in _iter_full_day_duty_hours(sh0, sh1):
                 tj = time_category_for_hour(h, zone)
-                daily_raw_time[day, s.idx, tj] += 1.0
+                daily_raw_time[day, s.idx, tj] += hf
         elif k == "windowed":
             loc_i = int(a.loc_i)
             sidx = int(a.slot)
@@ -1429,7 +1432,10 @@ def _fill_full_day_team_post(
     )
     lw = zone.loc_weights[loc_i]
     wm = float(cfg["weight_mult"])
-    raw_active = _full_day_raw_active_hours(sh0, sh1)
+    hf = float(cfg.get("hours_factor", 1.0))
+    if hf <= 0:
+        hf = 1.0
+    raw_active = _full_day_raw_active_hours(sh0, sh1) * hf
     b0, b1 = _duty_blocks_plan_aligned(sh, sh0, sh1, plan_start_hour, B)
     duty_w = b1 - b0 + 1
     time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
@@ -1483,17 +1489,17 @@ def _fill_full_day_team_post(
 
     for chosen in assigned:
         tot_w = 0.0
-        for h in range(sh0, sh1 + 1):
+        for h in _iter_full_day_duty_hours(sh0, sh1):
             tj = time_category_for_hour(h, zone)
             tw = zone.time_weights[tj]
-            wpart = lw * tw * wm
+            wpart = lw * tw * wm * hf
             tot_w += wpart
-            chosen.add_assignment(loc_i, tj, wpart, 1.0)
+            chosen.add_assignment(loc_i, tj, wpart, hf)
         _busy_span_set(busy, chosen.idx, L0, span, B, days)
         daily_raw_loc[day, chosen.idx, loc_i] += raw_active
-        for h in range(sh0, sh1 + 1):
+        for h in _iter_full_day_duty_hours(sh0, sh1):
             tj = time_category_for_hour(h, zone)
-            daily_raw_time[day, chosen.idx, tj] += 1.0
+            daily_raw_time[day, chosen.idx, tj] += hf
         span_b0 = linear_busy_span_calendar_block(day, B, L0)
         assignments.append(
             AssignmentRecord(
@@ -1731,6 +1737,9 @@ def _load_zone_config(
                 raise ValueError(
                     f"full_day_team {tid!r}: sum(type_quotas)={sum_q} exceeds headcount={hc}"
                 )
+            hf = float(cfg.get("hours_factor", 1.0))
+            if hf <= 0:
+                raise ValueError(f"full_day_team {tid!r}: hours_factor must be > 0")
             full_day_team_specs[tid] = {
                 "start_h": sh0,
                 "end_h": sh1,
@@ -1738,6 +1747,7 @@ def _load_zone_config(
                 "weight_mult": float(
                     cfg.get("weight_multiplier", cfg.get("weight_mult", cfg.get("w_mult", 1.0)))
                 ),
+                "hours_factor": hf,
                 "headcount": hc,
                 "type_quotas": quotas,
             }
@@ -2183,6 +2193,18 @@ def _full_day_raw_active_hours(sh0: int, sh1: int) -> float:
     return float(sh1 - sh0 + 1)
 
 
+def _iter_full_day_duty_hours(sh0: int, sh1: int):
+    """Each wall hour in a full_day duty window (start == end => 24h: sh0..23 then 0..sh0-1)."""
+    if sh1 <= sh0:
+        for h in range(sh0, 24):
+            yield h
+        for h in range(0, sh0):
+            yield h
+    else:
+        for h in range(sh0, sh1 + 1):
+            yield h
+
+
 def _linear_busy_span_duty_hours_plus_rest(
     day: int,
     B: int,
@@ -2248,6 +2270,16 @@ def pattern_weight_multiplier(zone: ZoneConfig, a: AssignmentRecord) -> float:
     return 1.0
 
 
+def pattern_hours_factor(zone: ZoneConfig, a: AssignmentRecord) -> float:
+    """Credited duty fraction for full_day_team (1.0 for other patterns)."""
+    kind = getattr(a, "kind", "rotating") or "rotating"
+    if kind != "full_day_team":
+        return 1.0
+    tid = zone.location_type_ids[a.loc_i]
+    hf = float(zone.full_day_team_specs[tid].get("hours_factor", 1.0))
+    return hf if hf > 0 else 1.0
+
+
 def assignment_calendar_block_weight(
     zone: ZoneConfig,
     a: AssignmentRecord,
@@ -2255,13 +2287,14 @@ def assignment_calendar_block_weight(
     block_hours: float,
     plan_day_start_hour: int,
 ) -> float:
-    """Fairness weight for one calendar block (``shift_hours * loc * time * pattern_mult``)."""
+    """Fairness weight for one calendar block (``shift_hours * loc * time * pattern_mult * hours_factor``)."""
     start_h = block_start_hour(int(plan_day_start_hour), int(block), float(block_hours))
     time_j = time_category_for_hour(start_h, zone)
     lw = float(zone.loc_weights[a.loc_i])
     tw = float(zone.time_weights[time_j])
     wm = pattern_weight_multiplier(zone, a)
-    return float(block_hours) * lw * tw * wm
+    hf = pattern_hours_factor(zone, a)
+    return float(block_hours) * lw * tw * wm * hf
 
 
 def _busy_span_set(
@@ -2700,7 +2733,7 @@ def _scratch_simulate_nonrot_passes(
                     total_hours_slack=total_hours_slack,
                 )
                 for chosen in chosen_list:
-                    for h in range(sh0, sh1 + 1):
+                    for h in _iter_full_day_duty_hours(sh0, sh1):
                         tj = time_category_for_hour(h, zone)
                         tw = time_w[tj]
                         wpart = lw * tw * wm
@@ -3267,7 +3300,7 @@ def run_simulation(
                 ) from e
             for chosen in chosen_list:
                 tot_w = 0.0
-                for h in range(sh0, sh1 + 1):
+                for h in _iter_full_day_duty_hours(sh0, sh1):
                     tj = time_category_for_hour(h, zone)
                     tw = time_w[tj]
                     wpart = lw * tw * wm
@@ -3275,7 +3308,7 @@ def run_simulation(
                     chosen.add_assignment(loc_i, tj, wpart, 1.0)
                 _busy_span_set(busy, chosen.idx, L0, span, B, days)
                 daily_raw_loc[day, chosen.idx, loc_i] += raw_active
-                for h in range(sh0, sh1 + 1):
+                for h in _iter_full_day_duty_hours(sh0, sh1):
                     tj = time_category_for_hour(h, zone)
                     daily_raw_time[day, chosen.idx, tj] += 1.0
                 span_b0 = linear_busy_span_calendar_block(day, B, L0)

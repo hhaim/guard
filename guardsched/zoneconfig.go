@@ -21,6 +21,7 @@ type FullDayTeamSpec struct {
 	StartH, EndH int
 	RestAfterH   float64
 	WeightMult   float64
+	HoursFactor  float64 // credited duty fraction (default 1); busy span unchanged
 	Headcount    int
 	TypeQuotas   map[string]int
 }
@@ -182,9 +183,16 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 			if sumQ > hc {
 				return nil, fmt.Errorf("full_day_team %q: sum(type_quotas)=%d exceeds headcount=%d", tid, sumQ, hc)
 			}
+			hf := 1.0
+			if v, ok := cfg["hours_factor"]; ok {
+				hf = floatFromAny(v)
+			}
+			if hf <= 0 {
+				return nil, fmt.Errorf("full_day_team %q: hours_factor must be > 0", tid)
+			}
 			fullDayTeam[tid] = FullDayTeamSpec{
 				StartH: fd.StartH, EndH: fd.EndH, RestAfterH: fd.RestAfterH, WeightMult: fd.WeightMult,
-				Headcount: hc, TypeQuotas: quotas,
+				HoursFactor: hf, Headcount: hc, TypeQuotas: quotas,
 			}
 		case "windowed_slots":
 			typePattern[tid] = pat

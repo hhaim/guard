@@ -25,6 +25,8 @@ export type ZoneReportView = {
   locWeights: number[];
   locTypeIds: string[];
   typeWeightMult: Record<string, number>;
+  /** full_day_team credited duty fraction (default 1). */
+  typeHoursFactor: Record<string, number>;
   slotLabels: string[];
   slotLocIndices: number[];
   slotTypeIds: string[];
@@ -292,11 +294,14 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneR
   const locWeights = doc.zone_loc.map((z) => (typeof z.weight === "number" ? z.weight : 1));
   const locTypeIds = doc.zone_loc.map((z) => z.type ?? "");
   const typeWeightMult: Record<string, number> = {};
+  const typeHoursFactor: Record<string, number> = {};
   for (const st of doc.slots_types) {
     if (st.pattern === "rotating") continue;
     const cfg = st.config ?? {};
     if (st.pattern === "full_day_team") {
-      typeWeightMult[st.id] = parseFullDayTeamConfig(cfg).weight_multiplier;
+      const team = parseFullDayTeamConfig(cfg);
+      typeWeightMult[st.id] = team.weight_multiplier;
+      typeHoursFactor[st.id] = team.hours_factor;
     } else if (st.pattern === "full_day") {
       typeWeightMult[st.id] = parseFullDayConfig(cfg).weight_multiplier;
     }
@@ -337,6 +342,7 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneR
     locWeights,
     locTypeIds,
     typeWeightMult,
+    typeHoursFactor,
     slotLabels,
     slotLocIndices,
     slotTypeIds,
@@ -359,7 +365,16 @@ export function patternWeightMultiplier(
   return zone.typeWeightMult[typeId] ?? 1;
 }
 
-/** One calendar block: shift_hours × loc × time × pattern multiplier (matches sim / rotating rows). */
+/** Credited duty fraction for full_day_team (1 for other patterns). */
+export function patternHoursFactor(zone: ZoneReportView, a: ScheduleAssignment): number {
+  const kind = a.kind?.trim() || "rotating";
+  if (kind !== "full_day_team") return 1;
+  const typeId = zone.locTypeIds[a.loc_i] ?? "";
+  const hf = zone.typeHoursFactor[typeId];
+  return hf != null && hf > 0 ? hf : 1;
+}
+
+/** One calendar block: shift_hours × loc × time × pattern multiplier × hours_factor. */
 export function assignmentBlockWeight(
   zone: ZoneReportView,
   a: ScheduleAssignment,
@@ -371,7 +386,8 @@ export function assignmentBlockWeight(
   const lw = zone.locWeights[a.loc_i] ?? 1;
   const tw = zone.timeWeights[timeJ] ?? 1;
   const wm = patternWeightMultiplier(zone, a);
-  return zone.shiftHours * lw * tw * wm;
+  const hf = patternHoursFactor(zone, a);
+  return zone.shiftHours * lw * tw * wm * hf;
 }
 
 export function timeCategoryForHour(h: number, zone: ZoneReportView): number {

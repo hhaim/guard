@@ -57,12 +57,15 @@ export const DEFAULT_WINDOWED_SLOTS_CONFIG: WindowedSlotsConfig = {
 export type FullDayTeamConfig = FullDayConfig & {
   headcount: number;
   type_quotas: Record<string, number>;
+  /** Credited duty fraction for fairness (default 1); busy span unchanged. */
+  hours_factor: number;
 };
 
 export const DEFAULT_FULL_DAY_TEAM_CONFIG: FullDayTeamConfig = {
   ...DEFAULT_FULL_DAY_CONFIG,
   headcount: 1,
   type_quotas: {},
+  hours_factor: 1,
 };
 
 export type SlotType = {
@@ -130,12 +133,16 @@ export function parseFullDayTeamConfig(config: Record<string, unknown> | undefin
     ...base,
     headcount: Math.max(1, Math.round(asConfigNum(c.headcount, DEFAULT_FULL_DAY_TEAM_CONFIG.headcount))),
     type_quotas,
+    hours_factor: asConfigNum(c.hours_factor, DEFAULT_FULL_DAY_TEAM_CONFIG.hours_factor),
   };
 }
 
 export function fullDayTeamConfigToRecord(cfg: FullDayTeamConfig): Record<string, unknown> {
   const row: Record<string, unknown> = fullDayConfigToRecord(cfg);
   row.headcount = cfg.headcount;
+  if (cfg.hours_factor !== 1) {
+    row.hours_factor = cfg.hours_factor;
+  }
   if (Object.keys(cfg.type_quotas).length > 0) {
     row.type_quotas = cfg.type_quotas;
   }
@@ -284,6 +291,9 @@ export function validateSlotTypePattern(st: SlotType): string | null {
     }
     if (st.pattern === "full_day_team") {
       const team = cfg as FullDayTeamConfig;
+      if (team.hours_factor <= 0) {
+        return `full_day_team "${label}": hours_factor must be > 0`;
+      }
       let sumQ = 0;
       for (const q of Object.values(team.type_quotas)) sumQ += q;
       if (sumQ > team.headcount) {

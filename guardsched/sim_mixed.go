@@ -156,19 +156,19 @@ func RunSimulationZoneConfig(
 			}
 			for _, chosen := range chosenList {
 				totW := 0.0
-				for h := sh0; h <= sh1; h++ {
+				forEachFullDayDutyHour(sh0, sh1, func(h int) {
 					tj := timeCategoryForHour(h, simZ)
 					tw := zone.TimeBands[tj].Weight
 					wpart := lw * tw * wm
 					totW += wpart
 					chosen.addAssignment(locI, tj, wpart, 1.0)
-				}
+				})
 				busySpanSet(busy, chosen.Idx, L0, span, B, days)
 				dailyRawLoc[day][chosen.Idx][locI] += rawActive
-				for h := sh0; h <= sh1; h++ {
+				forEachFullDayDutyHour(sh0, sh1, func(h int) {
 					tj := timeCategoryForHour(h, simZ)
 					dailyRawTime[day][chosen.Idx][tj] += 1.0
-				}
+				})
 				spanB0 := LinearBusySpanCalendarBlock(day, B, L0)
 				assignments = append(assignments, &AssignmentRecord{
 					Day: day, CalendarBlock: spanB0, StartHour: BlockStartHour(planDayStartHour, spanB0, sh), Slot: sidx,

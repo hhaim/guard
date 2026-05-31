@@ -52,6 +52,23 @@ func fullDayRawActiveHours(sh0, sh1 int) float64 {
 	return float64(sh1 - sh0 + 1)
 }
 
+// forEachFullDayDutyHour visits each wall hour in a full_day duty window.
+// When start == end, duty spans 24h (sh0..23 then 0..sh0-1).
+func forEachFullDayDutyHour(sh0, sh1 int, fn func(h int)) {
+	if sh1 <= sh0 {
+		for h := sh0; h < 24; h++ {
+			fn(h)
+		}
+		for h := 0; h < sh0; h++ {
+			fn(h)
+		}
+		return
+	}
+	for h := sh0; h <= sh1; h++ {
+		fn(h)
+	}
+}
+
 func dutyBlocksInclusiveWallHours(sh float64, h0, h1Incl int) (b0, b1 int) {
 	shi := int(sh)
 	b0 = h0 / shi

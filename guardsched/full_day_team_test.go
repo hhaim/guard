@@ -39,6 +39,83 @@ func TestLoadZoneConfig_fullDayTeam(t *testing.T) {
 	if cfg.TypeQuotas["A"] != 1 || cfg.TypeQuotas["B"] != 2 || cfg.TypeQuotas["C"] != 1 {
 		t.Fatalf("quotas=%v", cfg.TypeQuotas)
 	}
+	if cfg.HoursFactor != 1 {
+		t.Fatalf("hours_factor=%v want default 1", cfg.HoursFactor)
+	}
+}
+
+func TestLoadZoneConfig_fullDayTeam_hoursFactor(t *testing.T) {
+	raw := []byte(`schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: team
+    pattern: full_day_team
+    config:
+      start: "09:00"
+      end: "09:00"
+      hours_factor: 0.33
+      headcount: 2
+      type_quotas: { A: 1 }
+zone_loc:
+  - { id: loc, type: team, name: T, weight: 1.0 }
+slots:
+  - { location_id: loc, name: t1 }
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: 23 }
+`)
+	zc, err := LoadZoneConfigYAML(raw, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := zc.FullDayTeamSpecs["team"]
+	if cfg.HoursFactor != 0.33 {
+		t.Fatalf("hours_factor=%v want 0.33", cfg.HoursFactor)
+	}
+}
+
+func TestRunSimulation_fullDayTeam_hoursFactor(t *testing.T) {
+	raw := []byte(`schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: team
+    pattern: full_day_team
+    config:
+      start: "09:00"
+      end: "09:00"
+      hours_factor: 0.33
+      weight_multiplier: 1.1
+      headcount: 1
+zone_loc:
+  - { id: loc, type: team, name: T, weight: 1.0 }
+slots:
+  - { location_id: loc, name: t1 }
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: 23 }
+`)
+	zc, err := LoadZoneConfigYAML(raw, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typeCodes := []string{"A"}
+	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
+	r := NewPyRandom(42)
+	recs, _, err := RunSimulationZoneConfig(
+		zc, 4, 1, r, 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("assignments=%d want 1", len(recs))
+	}
+	a := recs[0]
+	wantRaw := 24.0 * 0.33
+	if a.RawHours != wantRaw {
+		t.Fatalf("raw_hours=%v want %v", a.RawHours, wantRaw)
+	}
+	if a.Weight <= 0 {
+		t.Fatalf("weight=%v want > 0", a.Weight)
+	}
 }
 
 func TestRunSimulation_fullDayTeam_counts(t *testing.T) {

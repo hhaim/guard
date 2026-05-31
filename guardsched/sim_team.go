@@ -73,7 +73,11 @@ func fillFullDayTeamPost(
 	L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, sh0, sh1, false, cfg.RestAfterH, planDayStartHour)
 	lw := zone.Locations[locI].Weight
 	wm := cfg.WeightMult
-	rawActive := fullDayRawActiveHours(sh0, sh1)
+	hf := cfg.HoursFactor
+	if hf <= 0 {
+		hf = 1
+	}
+	rawActive := fullDayRawActiveHours(sh0, sh1) * hf
 	b0, b1 := dutyBlocksPlanAligned(sh, sh0, sh1, planDayStartHour, B)
 	dutyW := b1 - b0 + 1
 	timeMid := timeCategoryForHour((sh0+sh1)/2, simZ)
@@ -128,19 +132,19 @@ func fillFullDayTeamPost(
 
 	for _, chosen := range assigned {
 		totW := 0.0
-		for h := sh0; h <= sh1; h++ {
+		forEachFullDayDutyHour(sh0, sh1, func(h int) {
 			tj := timeCategoryForHour(h, simZ)
 			tw := zone.TimeBands[tj].Weight
-			wpart := lw * tw * wm
+			wpart := lw * tw * wm * hf
 			totW += wpart
-			chosen.addAssignment(locI, tj, wpart, 1.0)
-		}
+			chosen.addAssignment(locI, tj, wpart, hf)
+		})
 		busySpanSet(busy, chosen.Idx, L0, span, B, days)
 		dailyRawLoc[day][chosen.Idx][locI] += rawActive
-		for h := sh0; h <= sh1; h++ {
+		forEachFullDayDutyHour(sh0, sh1, func(h int) {
 			tj := timeCategoryForHour(h, simZ)
-			dailyRawTime[day][chosen.Idx][tj] += 1.0
-		}
+			dailyRawTime[day][chosen.Idx][tj] += hf
+		})
 		spanB0 := LinearBusySpanCalendarBlock(day, B, L0)
 		*assignments = append(*assignments, &AssignmentRecord{
 			Day: assignmentDay, CalendarBlock: spanB0, StartHour: BlockStartHour(planDayStartHour, spanB0, sh), Slot: sidx,
