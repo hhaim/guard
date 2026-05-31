@@ -9,9 +9,10 @@ import (
 	"sort"
 	"slices"
 	"testing"
+	"time"
 )
 
-// Mirrors tests/test_checkpoint_15_extend_5.py (15-day checkpoint → load → extend 5).
+// Mirrors tests/test_hot_15_extend_5.py (15-day hot burst → extend 5).
 
 const (
 	ckptPrefixDays = 15
@@ -70,41 +71,9 @@ func prefixSig(recs []*AssignmentRecord, prefixDays int) []string {
 	return assignmentRecordSig(recs, 0, 0)
 }
 
-func assignmentRecordToMap(a *AssignmentRecord) map[string]any {
-	k := a.Kind
-	if k == "" {
-		k = "rotating"
-	}
-	m := map[string]any{
-		"day":             a.Day,
-		"calendar_block":  a.CalendarBlock,
-		"start_hour":      a.StartHour,
-		"slot":            a.Slot,
-		"soldier_idx":     a.SoldierIdx,
-		"loc_i":           a.LocI,
-		"time_j":          a.TimeJ,
-		"weight":          a.Weight,
-		"raw_hours":       a.RawHours,
-		"kind":            k,
-		"rowspan":         a.Rowspan,
-		"win_start_block": a.WinStartBlock,
-		"win_end_block":   a.WinEndBlock,
-	}
-	if a.WindowName != "" {
-		m["window_name"] = a.WindowName
-	}
-	if a.LinearBusySpanBlocks != 0 {
-		m["linear_busy_span_blocks"] = a.LinearBusySpanBlocks
-	}
-	return m
-}
-
 func writeCheckpointJSON(t *testing.T, path string, prefix []*AssignmentRecord, numDays, blocksPD, slots int) {
 	t.Helper()
-	assigns := make([]map[string]any, len(prefix))
-	for i, a := range prefix {
-		assigns[i] = assignmentRecordToMap(a)
-	}
+	assigns := AssignmentRecordsToJSON(prefix, nil)
 	doc := map[string]any{
 		"format_version":  1,
 		"num_days":        numDays,
@@ -211,7 +180,7 @@ func TestCheckpoint15Extend5ReproducibleFromSaved(t *testing.T) {
 	}
 }
 
-func TestCheckpoint15Extend5MatchesGuardsimCLI(t *testing.T) {
+func TestHot15Extend5MatchesGuardsimCLI(t *testing.T) {
 	root := findRepoRoot(t)
 	zones := filepath.Join(root, "testdata", "zones_s1_gate4.yaml")
 	bin := filepath.Join(root, "bin", "guardsim")
@@ -222,25 +191,30 @@ func TestCheckpoint15Extend5MatchesGuardsimCLI(t *testing.T) {
 	}
 
 	zone := loadRotatingOnlyZone(t, ckptSlots)
-	prefix, err := ckptSimCold(zone, ckptPrefixDays, ckptSeed)
+	anchor := mustParseDate(t, "2026-05-27")
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "checkpoint.json")
+
+	inProc, _, _, err := RunSimulationHot(
+		storePath, zone, ckptSoldiers, ckptTotalDays, 1, 1, ptrInt64(ckptSeed),
+		6, 2, 2, 0.2, 5, nil, anchor, nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	B, _ := CalendarBlocksPerDaySafe(zone.ShiftHours)
-	ckptPath := filepath.Join(t.TempDir(), "checkpoint_15d.json")
-	writeCheckpointJSON(t, ckptPath, prefix, ckptPrefixDays, B, ckptSlots)
+	inSig := assignmentRecordSig(inProc, 0, 0)
 
-	inProc, err := ckptSimExtend(zone, prefix, ckptPrefixDays, ckptExtendDays, ckptSeed)
-	if err != nil {
+	cliDir := filepath.Join(tmpDir, "cli")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pySig := extendNew5Sig(inProc)
-
 	cli := exec.Command(bin,
 		"-zones", zones,
 		"-x", "12", "-y", "4",
-		"-load-state", ckptPath,
-		"-extend-days", "5",
+		"-d", fmt.Sprintf("%d", ckptTotalDays),
+		"-hot",
+		"-burst-days", "1",
+		"-anchor-date", "2026-05-27",
 		"-seed", "12345",
 		"-min-consecutive-free-hours", "6",
 		"-min-free-shifts-after-duty", "2",
@@ -248,7 +222,7 @@ func TestCheckpoint15Extend5MatchesGuardsimCLI(t *testing.T) {
 		"-json-output", "-",
 		"-quiet",
 	)
-	cli.Dir = root
+	cli.Dir = cliDir
 	out, err := cli.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -264,10 +238,21 @@ func TestCheckpoint15Extend5MatchesGuardsimCLI(t *testing.T) {
 	}
 	keys := SoldierKeys(ckptSoldiers)
 	goCLI := RecordsFromAssignmentJSON(payload.Assignments, keys)
-	cliSig := extendNew5Sig(goCLI)
-	if !slices.Equal(pySig, cliSig) {
-		t.Fatalf("in-process extend vs guardsim CLI mismatch (first in-proc=%v cli=%v)", pySig[0], cliSig[0])
+	cliSig := assignmentRecordSig(goCLI, 0, 0)
+	if !slices.Equal(inSig, cliSig) {
+		t.Fatalf("RunSimulationHot vs guardsim -hot mismatch (first in-proc=%v cli=%v)", inSig[0], cliSig[0])
 	}
+}
+
+func ptrInt64(v int64) *int64 { return &v }
+
+func mustParseDate(t *testing.T, s string) time.Time {
+	t.Helper()
+	ts, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return time.Date(ts.Year(), ts.Month(), ts.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 func TestPrefixFrom20DayMatchesStandalone15Day(t *testing.T) {

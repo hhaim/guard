@@ -60,24 +60,20 @@ def test_sim_assignment_dict_keys_match_ui_contract() -> None:
     assert set(api_style.keys()) <= SIM_ASSIGNMENT_CORE_KEYS | UI_ASSIGNMENT_EXTRA_KEYS
 
 
-def test_checkpoint_v2_has_rng_and_optional_suffix() -> None:
-    """Checkpoint v2 documents witness fields used for extend parity."""
-    zone = g.load_zone_config(ROOT / "zones_s2.yaml", slots_per_block=5)
-    doc = g.build_checkpoint_document(
-        zone=zone,
-        zones_path=ROOT / "zones_s2.yaml",
-        zones_yaml_text="",
-        run_meta={},
-        assignments=[],
-        num_days=1,
-        blocks_pd=6,
-        slots_eff=5,
-        seed=42,
+def test_plan_doc_continuation_has_witness_fields() -> None:
+    """PlanDoc continuation (hot store / DB) carries witness fields for extend."""
+    from hot_store import build_plan_continuation
+
+    cont = build_plan_continuation(
         rng_state=(3, tuple(range(624)), None),
+        horizon_days=10,
+        all_records=[],
+        prefix_days=8,
+        segment_days=2,
+        seed=42,
         suffix_nonrot=[],
-        target_horizon=10,
     )
-    assert doc["format_version"] == g.CHECKPOINT_FORMAT_VERSION
-    assert "rng_state" in doc
-    assert doc["rng_state"]["version"] == 3
-    assert len(doc["rng_state"]["state"]) == 624
+    assert cont["format_version"] == g.CHECKPOINT_FORMAT_VERSION
+    assert "rng_state" in cont
+    assert cont["rng_state"]["version"] == 3
+    assert len(cont["rng_state"]["state"]) == 624

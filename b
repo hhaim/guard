@@ -150,6 +150,10 @@ cmd_py_test() {
 }
 
 cmd_test() {
+  # Avoid corrupt Cursor sandbox module cache when present.
+  if [[ "${GOMODCACHE:-}" == *cursor-sandbox-cache* ]]; then
+    export GOMODCACHE="${HOME}/go/pkg/mod"
+  fi
   echo "==> go test ./..."
   go test ./...
 

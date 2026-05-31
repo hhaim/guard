@@ -57,8 +57,8 @@ func run() int {
 	simTrials := flag.Int("sim-trials", defaultSimTrials, "Score N seeds (S..S+N-1), replay best")
 	jsonOut := flag.String("json-output", "", "Write assignments JSON to PATH (stdout if '-')")
 	compareJSON := flag.String("compare-json", "", "Write schedule-compare matrix JSON (Python parity format; stdout if '-')")
-	loadState := flag.String("load-state", "", "Checkpoint JSON: replay prefix then simulate --extend-days")
-	extendDays := flag.Int("extend-days", 0, "With --load-state: new calendar days after replay")
+	hot := flag.Bool("hot", false, "Production-style incremental sim: per-day PlanDoc in checkpoint.json")
+	burstDays := flag.Int("burst-days", 1, "With -hot: calendar days per save/load burst")
 	quiet := flag.Bool("quiet", false, "Only print JSON/errors")
 	flag.Parse()
 
@@ -118,12 +118,12 @@ func run() int {
 		return 2
 	}
 	if nDays < 1 {
-		if *loadState != "" && *extendDays >= 1 {
-			nDays = *extendDays
-		} else {
-			fmt.Fprintln(os.Stderr, "error: -d/--days must be >= 1 (or use --scenario)")
-			return 2
-		}
+		fmt.Fprintln(os.Stderr, "error: -d/--days must be >= 1 (or use --scenario)")
+		return 2
+	}
+	if *hot && *burstDays < 1 {
+		fmt.Fprintln(os.Stderr, "error: -burst-days must be >= 1 with -hot")
+		return 2
 	}
 
 	raw, err := os.ReadFile(zonesFile)
@@ -254,6 +254,9 @@ func run() int {
 		}
 		a := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 		anchorPtr = &a
+	} else if *hot {
+		a := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
+		anchorPtr = &a
 	}
 
 	if strings.TrimSpace(*rosterPath) != "" {
@@ -284,38 +287,20 @@ func run() int {
 	var recs []*guardsched.AssignmentRecord
 	var stats *guardsched.SimulationStats
 	var meta map[string]any
-	if strings.TrimSpace(*loadState) != "" {
-		raw, err := os.ReadFile(*loadState)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: read checkpoint: %v\n", err)
+	if *hot {
+		if anchorPtr == nil {
+			fmt.Fprintln(os.Stderr, "error: -hot requires -anchor-date or --scenario")
 			return 2
 		}
-		ckpt, err := guardsched.ParseCheckpointJSON(raw)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: parse checkpoint: %v\n", err)
-			return 2
-		}
-		prefixDays := ckpt.NumDays
-		ext := *extendDays
-		if ext < 1 {
-			ext = nDays
-		}
-		if ckpt.TargetHorizon != nil && *ckpt.TargetHorizon != prefixDays+ext {
-			fmt.Fprintf(os.Stderr, "error: checkpoint target_horizon=%d != prefix+extend=%d",
-				*ckpt.TargetHorizon, prefixDays+ext)
-			return 2
-		}
-		witness, prefix, err := guardsched.ExtendWitnessFromCheckpoint(ckpt, keys)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: checkpoint witness: %v\n", err)
-			return 2
-		}
-		recs, stats, meta, err = runBestOfExtendWitness(
-			zc, nSoldiers, prefixDays, ext, *simTrials, prefix, witness, seedPtr,
+		recs, stats, meta, err = guardsched.RunSimulationHot(
+			guardsched.DefaultHotStatePath(),
+			zc, nSoldiers, nDays, *burstDays, *simTrials, seedPtr,
 			*minFreeHours, *maxDutyBlocks, *minFreeShifts, *bandRelative,
-			planStartHour, avail, anchorPtr, typeCodes,
+			planStartHour, avail, *anchorPtr, typeCodes,
 		)
-		nDays = ext
+		if !*quiet {
+			fmt.Fprintf(os.Stderr, "Wrote hot store: %s\n", guardsched.DefaultHotStatePath())
+		}
 	} else {
 		recs, stats, meta, err = guardsched.RunSimulationBestOfZoneConfig(
 			zc, nSoldiers, nDays, *simTrials, seedPtr,
@@ -435,48 +420,6 @@ func run() int {
 		}
 	}
 	return 0
-}
-
-func runBestOfExtendWitness(
-	zc *guardsched.ZoneConfig,
-	numSoldiers, prefixDays, extendDays, trials int,
-	prefix []*guardsched.AssignmentRecord,
-	witness *guardsched.ExtendWitness,
-	baseSeed *int64,
-	minFreeHours float64,
-	maxDutyBlocks, minFreeShifts int,
-	bandRelative float64,
-	planStartHour int,
-	avail guardsched.AvailabilityChecker,
-	anchor *time.Time,
-	typeCodes []string,
-) ([]*guardsched.AssignmentRecord, *guardsched.SimulationStats, map[string]any, error) {
-	if trials != 1 {
-		return nil, nil, nil, fmt.Errorf("checkpoint extend with witness requires --sim-trials 1")
-	}
-	var seedUsed int64
-	if baseSeed == nil {
-		seedUsed = 0
-	} else {
-		seedUsed = *baseSeed
-	}
-	rng := guardsched.NewPyRandom(seedUsed)
-	recs, stats, err := guardsched.RunSimulationZoneConfigExtend(
-		zc, numSoldiers, prefixDays, extendDays, prefix, rng,
-		minFreeHours, true, 0,
-		maxDutyBlocks, minFreeShifts, bandRelative,
-		planStartHour, avail, anchor, typeCodes, witness,
-	)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	meta := map[string]any{
-		"trials_run":     1,
-		"trial_index":    0,
-		"trial_seed":     seedUsed,
-		"fairness_score": guardsched.FairnessScoreFromAssignments(recs, numSoldiers),
-	}
-	return recs, stats, meta, nil
 }
 
 func resolveAnchor(sc *guardsched.Scenario, flagAnchor string) (time.Time, error) {

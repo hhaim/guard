@@ -38,9 +38,9 @@ Guard scheduler fairness simulation (**hybrid_rel** soldier pick: relative band 
   window. Afterward we **verify**. If a block cannot be filled or rest is violated → **stop**.
 
 Usage:
-  python guard_scheduler_sim.py -x 10 -y 3 -d 30 --zones zones.yaml --save-state checkpoint.json
-  python guard_scheduler_sim.py -x 10 -y 3 --zones zones.yaml --load-state checkpoint.json --extend-days 5
-  python guard_scheduler_sim.py -x 10 -y 3 --zones zones.yaml --load-state big.json --replay-days 20 --extend-days 1 --save-state out.json
+  python guard_scheduler_sim.py -x 10 -y 3 -d 4 --zones zones.yaml --seed 42
+  python guard_scheduler_sim.py -x 10 -y 3 -d 4 --zones zones.yaml --hot --seed 42
+  python guard_scheduler_sim.py -x 10 -y 3 -d 4 --zones zones.yaml --hot --burst-days 4 --seed 42
 
 Requires: numpy, matplotlib, PyYAML  (pip install numpy matplotlib pyyaml).
 Optional PDF: ``pip install weasyprint`` then ``--pdf`` or ``--pdf-output PATH``.
@@ -3157,7 +3157,10 @@ def run_simulation(
 
     for day in range(days):
         if cp_days > 0:
-            continue
+            if day < cp_days:
+                continue
+            if checkpoint_suffix_stored:
+                continue
         deltas_loc[:] = 0.0
         deltas_time[:] = 0.0
         deltas_g[:] = 0.0
@@ -3197,7 +3200,10 @@ def run_simulation(
 
     for day in range(days):
         if cp_days > 0:
-            continue
+            if day < cp_days:
+                continue
+            if checkpoint_suffix_stored:
+                continue
         deltas_loc[:] = 0.0
         deltas_time[:] = 0.0
         deltas_g[:] = 0.0
@@ -3295,7 +3301,10 @@ def run_simulation(
 
     for day in range(days):
         if cp_days > 0:
-            continue
+            if day < cp_days:
+                continue
+            if checkpoint_suffix_stored:
+                continue
         deltas_loc[:] = 0.0
         deltas_time[:] = 0.0
         deltas_g[:] = 0.0
@@ -3814,7 +3823,14 @@ def run_simulation_checkpoint_extend(
         raise ValueError("extend_days must be >= 1 for checkpoint extension")
     prefix_list = list(prefix_assignments)
     blocks_pd = calendar_blocks_per_day(float(block_hours))
-    exp_pre = expected_assignment_count(zone, prefix_days, blocks_pd, slots_per_block)
+    exp_pre = expected_assignment_count(
+        zone,
+        prefix_days,
+        blocks_pd,
+        slots_per_block,
+        anchor=anchor,
+        plan_start_hour=plan_day_start_hour,
+    )
     if len(prefix_list) != exp_pre:
         raise ValueError(
             f"checkpoint prefix: got {len(prefix_list)} assignments, expected {exp_pre} "
@@ -4048,6 +4064,226 @@ def run_simulation_best_of(
         "trial_index": best_trial,
         "trial_seed": best_seed_used,
         "fairness": fm,
+    }
+    return pack, meta
+
+
+def run_simulation_hot(
+    *,
+    total_days: int,
+    burst_days: int,
+    state_path: Path,
+    num_soldiers: int,
+    slots_per_block: int,
+    zone: ZoneConfig,
+    block_hours: float,
+    base_seed: Optional[int],
+    sim_trials: int,
+    min_consecutive_free_hours: float,
+    balance_total_hours: bool,
+    total_hours_slack: float,
+    max_consecutive_duty_blocks: int,
+    min_free_shifts_after_duty: int,
+    band_relative: float,
+    plan_day_start_hour: int,
+    availability: Any,
+    anchor: datetime,
+    type_codes: Optional[Sequence[str]],
+) -> Tuple[
+    Tuple[
+        List[Soldier],
+        np.ndarray,
+        np.ndarray,
+        List[AssignmentRecord],
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        SimulationStats,
+    ],
+    Dict[str, Any],
+]:
+    """
+    Incremental production-style sim: per-day PlanDoc JSON in ``state_path``.
+
+    Clears the store, simulates in bursts, reloads from disk between extends.
+    """
+    from hot_store import (
+        append_hot_segment,
+        build_plan_continuation,
+        clear_hot_store,
+        continuation_to_witness,
+        load_hot_history,
+    )
+
+    if total_days < 1:
+        raise ValueError("total_days must be >= 1")
+    if burst_days < 1:
+        raise ValueError("burst_days must be >= 1")
+
+    keys = roster_keys(num_soldiers)
+    clear_hot_store(state_path)
+
+    sim_kw = dict(
+        num_soldiers=num_soldiers,
+        slots_per_block=slots_per_block,
+        zone=zone,
+        block_hours=block_hours,
+        min_consecutive_free_hours=min_consecutive_free_hours,
+        balance_total_hours=balance_total_hours,
+        total_hours_slack=total_hours_slack,
+        max_consecutive_duty_blocks=max_consecutive_duty_blocks,
+        min_free_shifts_after_duty=min_free_shifts_after_duty,
+        band_relative=band_relative,
+        plan_day_start_hour=plan_day_start_hour,
+        availability=availability,
+        anchor=anchor,
+        type_codes=type_codes,
+    )
+
+    saved_days = 0
+    seed_used: Optional[int] = int(base_seed) if base_seed is not None else None
+    last_meta: Dict[str, Any] = {}
+    pack: Optional[
+        Tuple[
+            List[Soldier],
+            np.ndarray,
+            np.ndarray,
+            List[AssignmentRecord],
+            np.ndarray,
+            np.ndarray,
+            np.ndarray,
+            np.ndarray,
+            SimulationStats,
+        ]
+    ] = None
+
+    while saved_days < total_days:
+        chunk = min(int(burst_days), int(total_days) - saved_days)
+        prefix_days = saved_days
+
+        if prefix_days == 0:
+            if sim_trials > 1 and base_seed is None:
+                raise ValueError("sim_trials > 1 requires --seed for --hot")
+            witness = SimWitnessCapture(split_day=chunk)
+            if sim_trials == 1:
+                rng_t = (
+                    random.Random(int(base_seed))
+                    if base_seed is not None
+                    else random.Random()
+                )
+                if base_seed is None:
+                    seed_used = None
+                pack = run_simulation(
+                    **sim_kw,
+                    days=chunk,
+                    rng=rng_t,
+                    witness=witness,
+                )
+            else:
+                pack, bo_meta = run_simulation_best_of(
+                    trials=sim_trials,
+                    base_seed=base_seed,
+                    days=chunk,
+                    **sim_kw,
+                )
+                seed_used = bo_meta.get("trial_seed")
+                rng_t = random.Random(int(seed_used))
+                witness = SimWitnessCapture(split_day=chunk)
+                pack = run_simulation(
+                    **sim_kw,
+                    days=chunk,
+                    rng=rng_t,
+                    witness=witness,
+                )
+                last_meta = bo_meta
+            all_recs = list(pack[3])
+            assert witness.captured and witness.rng_state is not None
+            witness.suffix_nonrot = suffix_nonrot_from_assignments(all_recs, chunk)
+            cont = build_plan_continuation(
+                rng_state=witness.rng_state,
+                horizon_days=chunk,
+                all_records=all_recs,
+                prefix_days=chunk,
+                segment_days=0,
+                seed=seed_used,
+                suffix_nonrot=witness.suffix_nonrot,
+            )
+            segment = [replace(a) for a in all_recs]
+        else:
+            if sim_trials > 1:
+                raise ValueError("--hot extend bursts require --sim-trials 1")
+            prefix, loaded_days, cont_doc, _ = load_hot_history(
+                state_path,
+                soldier_keys=keys,
+                shift_hours=float(block_hours),
+            )
+            if loaded_days != prefix_days:
+                raise RuntimeError(
+                    f"hot store has {loaded_days} days, expected prefix {prefix_days}"
+                )
+            witness_rng, witness_suffix = continuation_to_witness(cont_doc)
+            rng_t = random.Random(int(base_seed) if base_seed is not None else 0)
+            if witness_rng is not None:
+                rng_t.setstate(witness_rng)
+            pack = run_simulation_checkpoint_extend(
+                num_soldiers,
+                slots_per_block,
+                prefix,
+                prefix_days,
+                chunk,
+                zone,
+                block_hours,
+                rng_t,
+                type_codes=type_codes,
+                witness_rng_state=witness_rng,
+                witness_suffix_nonrot=witness_suffix,
+                min_consecutive_free_hours=min_consecutive_free_hours,
+                balance_total_hours=balance_total_hours,
+                total_hours_slack=total_hours_slack,
+                max_consecutive_duty_blocks=max_consecutive_duty_blocks,
+                min_free_shifts_after_duty=min_free_shifts_after_duty,
+                band_relative=band_relative,
+                plan_day_start_hour=plan_day_start_hour,
+                availability=availability,
+                anchor=anchor,
+            )
+            all_recs = list(pack[3])
+            horizon = prefix_days + chunk
+            cont = build_plan_continuation(
+                rng_state=rng_t.getstate(),
+                horizon_days=horizon,
+                all_records=all_recs,
+                prefix_days=prefix_days,
+                segment_days=chunk,
+                seed=seed_used,
+            )
+            segment = [
+                replace(a, day=int(a.day) - prefix_days)
+                for a in all_recs
+                if prefix_days <= int(a.day) < prefix_days + chunk
+            ]
+
+        append_hot_segment(
+            state_path,
+            anchor=anchor,
+            shift_hours=float(block_hours),
+            segment=segment,
+            day_offset=prefix_days,
+            continuation=cont,
+            soldier_keys=keys,
+        )
+        saved_days += chunk
+
+    if pack is None:
+        raise RuntimeError("hot run produced no simulation output")
+    fm = fairness_metrics(pack[1], pack[0])
+    meta: Dict[str, Any] = {
+        "trials_run": last_meta.get("trials_run", 1),
+        "trial_index": last_meta.get("trial_index", 0),
+        "trial_seed": seed_used,
+        "fairness": fm,
+        "hot_days_saved": saved_days,
     }
     return pack, meta
 
@@ -5153,10 +5389,7 @@ def main() -> None:
         type=int,
         default=None,
         required=False,
-        help=(
-            "Simulation days for a cold run. With --load-state, use --extend-days instead "
-            "(or pass the same value here as the number of new days after replay)."
-        ),
+        help="Simulation days for a cold or --hot run.",
     )
     p.add_argument(
         "--zones",
@@ -5304,32 +5537,19 @@ def main() -> None:
         ),
     )
     p.add_argument(
-        "--save-state",
-        type=str,
-        default=None,
-        metavar="PATH",
-        help="After simulation, write checkpoint JSON (run_meta + assignments + zones_yaml) to PATH.",
+        "--hot",
+        action="store_true",
+        help=(
+            "Production-style incremental sim: per-day PlanDoc JSON in checkpoint.json "
+            "(cleared at start, reloaded from disk each burst)."
+        ),
     )
     p.add_argument(
-        "--load-state",
-        type=str,
-        default=None,
-        metavar="PATH",
-        help="Load checkpoint JSON; replay prefix then simulate --extend-days new days (greedy rotating only).",
-    )
-    p.add_argument(
-        "--extend-days",
+        "--burst-days",
         type=int,
-        default=None,
+        default=1,
         metavar="N",
-        help="With --load-state: number of new calendar days after replay (or omit and use -d).",
-    )
-    p.add_argument(
-        "--replay-days",
-        type=int,
-        default=None,
-        metavar="N",
-        help="With --load-state: replay only the last N days from the file (reindexed to start at day 0).",
+        help="With --hot: calendar days per save/load burst (default 1). Use N=d for one cold burst.",
     )
     p.add_argument(
         "--sim-trials",
@@ -5430,23 +5650,12 @@ def main() -> None:
     if args.soldiers is None:
         raise SystemExit("-x/--soldiers is required unless using --scenario")
 
-    if args.load_state:
-        if args.sweep_band_relative is not None:
-            raise SystemExit("--load-state cannot be combined with --sweep-band-relative")
-        if args.sim_trials > 1:
-            raise SystemExit("--load-state requires --sim-trials 1")
-        ext_ck = args.extend_days if args.extend_days is not None else args.days
-        if ext_ck is None or ext_ck < 1:
-            raise SystemExit(
-                "--load-state requires --extend-days N (>=1) or -d N for how many new days to simulate"
-            )
-        if args.extend_days is not None and args.days is not None and args.extend_days != args.days:
-            raise SystemExit(
-                "--load-state: use only one of --extend-days and -d (they differ; pick one extension length)"
-            )
-    else:
-        if args.days is None:
-            raise SystemExit("-d/--days is required unless using --load-state")
+    if args.hot and args.sweep_band_relative is not None:
+        raise SystemExit("--hot cannot be combined with --sweep-band-relative")
+    if args.days is None:
+        raise SystemExit("-d/--days is required unless using --scenario")
+    if args.hot and int(args.burst_days) < 1:
+        raise SystemExit("--burst-days must be >= 1 with --hot")
 
     if args.sim_trials < 1:
         raise SystemExit("--sim-trials must be >= 1")
@@ -5555,48 +5764,22 @@ def main() -> None:
         raise SystemExit(0)
 
     try:
-        if args.load_state:
-            doc = read_checkpoint_json(Path(args.load_state))
-            if not isinstance(doc.get("assignments"), list):
-                raise SystemExit("Checkpoint missing assignments array")
-            asn_ck = [assignment_record_from_dict(x) for x in doc["assignments"]]
-            if args.replay_days is not None:
-                asn_ck = truncate_reindex_assignments(asn_ck, int(args.replay_days))
-            if not asn_ck:
-                raise SystemExit("--load-state: checkpoint has no assignments after optional truncate")
-            prefix_days = max(int(a.day) for a in asn_ck) + 1
-            extend_days = int(
-                args.extend_days if args.extend_days is not None else (args.days or 0)
-            )
-            validate_checkpoint_document(
-                doc, zone, zones_path, slots_eff, block_hours_eff, blocks_pd, args
-            )
-            witness_rng: Optional[Tuple[Any, ...]] = None
-            witness_suffix: Optional[List[AssignmentRecord]] = None
-            if isinstance(doc.get("rng_state"), dict):
-                witness_rng = rng_state_from_json(doc["rng_state"])
-            if isinstance(doc.get("suffix_nonrot"), list):
-                witness_suffix = [
-                    assignment_record_from_dict(x) for x in doc["suffix_nonrot"]
-                ]
-            th = doc.get("target_horizon")
-            if th is not None and int(th) != prefix_days + extend_days:
-                raise SystemExit(
-                    f"checkpoint target_horizon={th!r} != prefix_days+extend_days="
-                    f"{prefix_days + extend_days}"
-                )
-            rng_ck = random.Random(args.seed) if args.seed is not None else random.Random()
-            if witness_rng is not None:
-                rng_ck.setstate(witness_rng)
-            pack = run_simulation_checkpoint_extend(
+        if args.hot:
+            from hot_store import DEFAULT_HOT_STATE
+
+            hot_anchor = sim_anchor
+            if hot_anchor is None:
+                hot_anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+            pack, sim_meta = run_simulation_hot(
+                total_days=int(args.days),
+                burst_days=int(args.burst_days),
+                state_path=DEFAULT_HOT_STATE,
                 num_soldiers=args.soldiers,
                 slots_per_block=slots_eff,
-                prefix_assignments=asn_ck,
-                prefix_days=prefix_days,
-                extend_days=extend_days,
                 zone=zone,
                 block_hours=block_hours_eff,
-                rng=rng_ck,
+                base_seed=args.seed,
+                sim_trials=args.sim_trials,
                 min_consecutive_free_hours=args.min_consecutive_free_hours,
                 balance_total_hours=not args.no_total_hours_balance,
                 total_hours_slack=args.total_hours_balance_slack,
@@ -5604,14 +5787,11 @@ def main() -> None:
                 min_free_shifts_after_duty=args.min_free_shifts_after_duty,
                 band_relative=args.band_relative,
                 plan_day_start_hour=plan_day_start_hour,
-                anchor=sim_anchor,
+                availability=scenario_avail,
+                anchor=hot_anchor,
                 type_codes=type_codes,
-                witness_rng_state=witness_rng,
-                witness_suffix_nonrot=witness_suffix,
             )
-            args.days = prefix_days + extend_days
-            fm = fairness_metrics(pack[1], pack[0])
-            sim_meta = {"fairness": fm, "trial_seed": args.seed, "trial_index": 0}
+            print(f"Wrote hot store: {DEFAULT_HOT_STATE}", file=sys.stderr)
         else:
             pack, sim_meta = run_simulation_best_of(
                 trials=args.sim_trials,
@@ -5663,23 +5843,6 @@ def main() -> None:
         except AssertionError as e:
             print(f"ERROR: scenario expect: {e}", file=sys.stderr)
             raise SystemExit(1) from e
-    if args.save_state:
-        ck_meta = build_checkpoint_run_meta(zone, zones_path, slots_eff, block_hours_eff, args)
-        ck_doc = build_checkpoint_document(
-            zone=zone,
-            zones_path=zones_path,
-            zones_yaml_text=zones_path.read_text(encoding="utf-8"),
-            run_meta=ck_meta,
-            assignments=assignments,
-            num_days=int(args.days),
-            blocks_pd=blocks_pd,
-            slots_eff=slots_eff,
-            seed=args.seed,
-            rng_state=sim_meta.get("final_rng_state"),
-        )
-        ck_out = Path(args.save_state)
-        write_checkpoint_json(ck_out, ck_doc)
-        print(f"Wrote checkpoint: {ck_out}")
     asn_day = expected_assignment_count(zone, 1, blocks_pd, slots_eff, anchor=sim_anchor)
     print(
         f"Schedule: {args.days} days × {asn_day} assignments/day "

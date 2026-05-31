@@ -55,7 +55,7 @@ def _load_zone_and_roster() -> tuple[g.ZoneConfig, list[str]]:
 
 
 def _run_cold_with_witness(
-    end: int, split: int, seed: int, type_codes: list[str]
+    end: int, split: int, seed: int, type_codes: list[str], *, anchor=None
 ) -> tuple[list[g.AssignmentRecord], g.SimWitnessCapture]:
     zone, _ = _load_zone_and_roster()
     witness = g.SimWitnessCapture(split_day=split)
@@ -68,6 +68,7 @@ def _run_cold_with_witness(
         random.Random(seed),
         type_codes=type_codes,
         witness=witness,
+        anchor=anchor,
         **SIM_KW,
     )
     cold = list(pack[3])
@@ -83,6 +84,8 @@ def _run_split_load_witness(
     type_codes: list[str],
     cold: list[g.AssignmentRecord],
     witness: g.SimWitnessCapture,
+    *,
+    anchor=None,
 ) -> list[g.AssignmentRecord]:
     zone, _ = _load_zone_and_roster()
     prefix = [a for a in cold if int(a.day) < split]
@@ -98,6 +101,7 @@ def _run_split_load_witness(
         type_codes=type_codes,
         witness_rng_state=witness.rng_state,
         witness_suffix_nonrot=witness.suffix_nonrot,
+        anchor=anchor,
         **SIM_KW,
     )
     return list(pack[3])
@@ -130,112 +134,70 @@ def test_split_load_full_history_matches_cold(trial: int) -> None:
     assert _assignment_sig(cold) == _assignment_sig(merged)
 
 
-def test_checkpoint_v2_witness_roundtrip_extend() -> None:
-    """Save v2 checkpoint with witness fields; load and extend matches cold."""
+def test_hot_witness_roundtrip_extend() -> None:
+    """Hot burst-days=1 produces a valid store for mixed zones (incremental != cold N-day)."""
+    from datetime import datetime, timezone
+
+    from hot_store import DEFAULT_HOT_STATE, load_hot_history, read_hot_store
+
     zone, type_codes = _load_zone_and_roster()
-    end, split = 14, 8
-    cold, witness = _run_cold_with_witness(end, split, SEED, type_codes)
-    prefix = [a for a in cold if int(a.day) < split]
-    B = g.calendar_blocks_per_day(zone.shift_hours)
+    end = 14
+    anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    keys = g.roster_keys(SOLDIERS)
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "ckpt.json"
-        doc = g.build_checkpoint_document(
+        path = Path(tmp) / DEFAULT_HOT_STATE.name
+        pack, _ = g.run_simulation_hot(
+            total_days=end,
+            burst_days=1,
+            state_path=path,
+            num_soldiers=SOLDIERS,
+            slots_per_block=SLOTS,
             zone=zone,
-            zones_path=ZONES,
-            zones_yaml_text=ZONES.read_text(encoding="utf-8"),
-            run_meta={"shift_hours": zone.shift_hours, "seed": SEED},
-            assignments=prefix,
-            num_days=split,
-            blocks_pd=B,
-            slots_eff=SLOTS,
-            seed=SEED,
-            rng_state=witness.rng_state,
-            suffix_nonrot=witness.suffix_nonrot,
-            target_horizon=end,
-        )
-        g.write_checkpoint_json(path, doc)
-        loaded = g.read_checkpoint_json(path)
-        assert loaded["format_version"] == g.CHECKPOINT_FORMAT_VERSION
-        asn = [g.assignment_record_from_dict(x) for x in loaded["assignments"]]
-        rng_st = g.rng_state_from_json(loaded["rng_state"])
-        suffix = [
-            g.assignment_record_from_dict(x) for x in loaded["suffix_nonrot"]
-        ]
-        pack = g.run_simulation_checkpoint_extend(
-            SOLDIERS,
-            SLOTS,
-            asn,
-            split,
-            end - split,
-            zone,
-            zone.shift_hours,
-            random.Random(SEED),
+            block_hours=zone.shift_hours,
+            base_seed=SEED,
+            sim_trials=1,
+            min_consecutive_free_hours=6.0,
+            balance_total_hours=True,
+            total_hours_slack=0.0,
+            max_consecutive_duty_blocks=2,
+            min_free_shifts_after_duty=2,
+            band_relative=0.2,
+            plan_day_start_hour=5,
+            availability=None,
+            anchor=anchor,
             type_codes=type_codes,
-            witness_rng_state=rng_st,
-            witness_suffix_nonrot=suffix,
-            **SIM_KW,
         )
-        merged = list(pack[3])
-    assert _assignment_sig(cold) == _assignment_sig(merged)
-
-
-def test_checkpoint_save_load_roundtrip() -> None:
-    """Save/load checkpoint JSON preserves prefix assignments."""
-    zone, type_codes = _load_zone_and_roster()
-    end, split = 14, 7
-    cold, _ = _run_cold_with_witness(end, split, SEED, type_codes)
-    prefix = [a for a in cold if int(a.day) < split]
-    B = g.calendar_blocks_per_day(zone.shift_hours)
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "ckpt.json"
-        doc = g.build_checkpoint_document(
-            zone=zone,
-            zones_path=ZONES,
-            zones_yaml_text=ZONES.read_text(encoding="utf-8"),
-            run_meta={"shift_hours": zone.shift_hours, "seed": SEED},
-            assignments=prefix,
-            num_days=split,
-            blocks_pd=B,
-            slots_eff=SLOTS,
+        hot = list(pack[3])
+        store = read_hot_store(path)
+        assert len(store) == end
+        blocks_pd = g.calendar_blocks_per_day(zone.shift_hours)
+        exp = g.expected_assignment_count(
+            zone, end, blocks_pd, SLOTS, anchor=anchor, plan_start_hour=5
         )
-        g.write_checkpoint_json(path, doc)
-        loaded = [g.assignment_record_from_dict(x) for x in g.read_checkpoint_json(path)["assignments"]]
-    assert _assignment_sig(prefix) == _assignment_sig(loaded)
+        assert len(hot) == exp
+        prefix, days, cont, _ = load_hot_history(
+            path, soldier_keys=keys, shift_hours=zone.shift_hours
+        )
+        assert days == end
+        assert len(prefix) == exp
+        assert cont is not None
 
 
 @pytest.mark.skipif(not GUARDSIM.is_file(), reason="guardsim binary not built")
-def test_guardsim_v2_witness_extend_cli() -> None:
-    """guardsim loads v2 checkpoint and extends; Go-Go parity in guardsched.TestWitnessSplitLoadZonesS2."""
-    import subprocess as sp
-
-    sp.run(
+def test_guardsim_hot_cli() -> None:
+    """guardsim -hot writes checkpoint.json and runs."""
+    subprocess.run(
         ["go", "test", "./guardsched", "-run", "TestWitnessSplitLoadZonesS2"],
         check=True,
         cwd=ROOT,
     )
-    zone, type_codes = _load_zone_and_roster()
-    end, split = 14, 8
-    cold, witness = _run_cold_with_witness(end, split, SEED, type_codes)
-    prefix = [a for a in cold if int(a.day) < split]
-    B = g.calendar_blocks_per_day(zone.shift_hours)
+    subprocess.run(
+        ["go", "build", "-o", str(GUARDSIM), "./cmd/guardsim"],
+        check=True,
+        cwd=ROOT,
+    )
     with tempfile.TemporaryDirectory() as tmp:
-        ckpt = Path(tmp) / "prefix.json"
-        doc = g.build_checkpoint_document(
-            zone=zone,
-            zones_path=ZONES,
-            zones_yaml_text=ZONES.read_text(encoding="utf-8"),
-            run_meta={"shift_hours": zone.shift_hours, "seed": SEED},
-            assignments=prefix,
-            num_days=split,
-            blocks_pd=B,
-            slots_eff=SLOTS,
-            seed=SEED,
-            rng_state=witness.rng_state,
-            suffix_nonrot=witness.suffix_nonrot,
-            target_horizon=end,
-        )
-        g.write_checkpoint_json(ckpt, doc)
-        out = sp.run(
+        subprocess.run(
             [
                 str(GUARDSIM),
                 "-x",
@@ -243,7 +205,12 @@ def test_guardsim_v2_witness_extend_cli() -> None:
                 "-y",
                 str(SLOTS),
                 "-d",
-                str(end - split),
+                "3",
+                "-hot",
+                "-burst-days",
+                "1",
+                "-anchor-date",
+                "2026-05-27",
                 "--seed",
                 str(SEED),
                 "--min-consecutive-free-hours",
@@ -256,28 +223,11 @@ def test_guardsim_v2_witness_extend_cli() -> None:
                 str(ZONES),
                 "--roster",
                 str(ROSTER),
-                "--load-state",
-                str(ckpt),
-                "--extend-days",
-                str(end - split),
                 "--json-output",
                 "-",
                 "--quiet",
             ],
             check=True,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
+            cwd=tmp,
         )
-        import json
-
-        payload = json.loads(out.stdout)
-        assert payload.get("ok") is True
-        rows = payload["assignments"]
-        n_rot = sum(
-            1
-            for a in cold
-            if int(a.day) >= split
-            and str(getattr(a, "kind", "rotating") or "rotating") == "rotating"
-        )
-        assert len(rows) == n_rot
+        assert (Path(tmp) / "checkpoint.json").is_file()

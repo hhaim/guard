@@ -594,9 +594,7 @@ func RunSimulationZoneConfigExtend(
 	if xCool > 0 && len(rotIdx) > 0 &&
 		nChooseK(numSoldiers, len(rotIdx)) <= maxRotatingDfsCombinations {
 		dr := new3DBool(totalDays, numSoldiers, blocksPd)
-		if witness == nil {
-			copy3D(dr, busyRot)
-		}
+		copy3D(dr, busyRot)
 		nodes := 0
 		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, totalDays, blocksPd, len(rotIdx), kRestMask, maxConsecutiveDutyBlocks, xCool, extendAvail, planDayStartHour, sh, &nodes) {
 			copy3D(busyRot, dr)
@@ -773,12 +771,13 @@ func RunSimulationZoneConfigExtend(
 	}
 
 	maxFree := computeMaxConsecutiveFreeHours(busy, sh)
-	validateAsn := newAssignments
+	normNew := normalizeExtendNewRecords(newAssignments, prefixDays)
+	validateAsn := normNew
 	if witness != nil {
-		validateAsn = make([]*AssignmentRecord, 0, len(prefixAssignments)+len(witness.SuffixNonrot)+len(newAssignments))
+		validateAsn = make([]*AssignmentRecord, 0, len(prefixAssignments)+len(witness.SuffixNonrot)+len(normNew))
 		validateAsn = append(validateAsn, prefixAssignments...)
 		validateAsn = append(validateAsn, witness.SuffixNonrot...)
-		validateAsn = append(validateAsn, newAssignments...)
+		validateAsn = append(validateAsn, normNew...)
 	}
 	if err := validateScheduleRest(maxFree, minConsecutiveFreeHours, validateAsn); err != nil {
 		return nil, nil, err
