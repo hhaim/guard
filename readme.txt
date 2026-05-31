@@ -14,6 +14,10 @@ python3 guard_scheduler_sim.py -x 12 -y 4 -d 4 --hot --burst-days 4 --seed 42 --
 
 
 ================
-
+* add daniel use-case 
+* create a test 
 2. add a test that verify from the results that constraint are meet 
 3. verify that simulation json and what we save is the same need to have the same function same engine 
+
+
+* time shift range for 05:00 need to be aligned 

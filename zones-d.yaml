@@ -4,6 +4,7 @@ slots_types:
   - id: rotating_slot
     name: שמירה
     pattern: rotating
+  
   - id: kitchen
     name: מטבח
     pattern: full_day
@@ -11,17 +12,25 @@ slots_types:
       start: 06:00
       end: 22:00
       rest_after_hours: 6
-      weight_multiplier: 0.3
+      weight_multiplier: 0.5
       headcount: 2
+      
   - id: carmel
     name: כרמל
     pattern: full_day_team
+    # optional: skip this slot type on these weekdays
+    disabled_weekdays: []
     config:
-      start: 05:00
-      end: 22:00
-      rest_after_hours: 6
-      weight_multiplier: 0.3
+      start: "09:00"
+      end: "09:00"
+      rest_after_hours: 0
+      weight_multiplier: 1.0
+      hours_factor: 0.33
       headcount: 10
+      type_quotas:
+        A: 1
+        B: 2
+        C: 1
   - id: rasar
     name: רסר
     pattern: full_day
@@ -34,65 +43,77 @@ slots_types:
       rest_after_hours: 6
       weight_multiplier: 0.4
       headcount: 1
+  
   - id: valero
     name: בית ולרו
-    pattern: full_day_team
-    rest_after_hours: 6
-    config:
-      start: 06:00
-      end: 22:00
-      rest_after_hours: 6
-      weight_multiplier: 1
-      headcount: 2
+    pattern: rotating
+
 slots:
   - location_id: loc_gate
-    name: g1
+    name: hadas9
+
   - location_id: loc_gate
-    name: g2
+    name: hadas3
+
   - location_id: loc_gate
-    name: g3
+    name: romano12
+
   - location_id: loc_gate
-    name: g4
+    name: gros
+
   - location_id: loc_gate
-    name: g5
+    name: avraham10
+
   - location_id: loc_gate
-    name: g6
-  - location_id: loc_gate
-    name: s6
-  - location_id: loc_k
-    name: k1
+    name: tanovah10
+
+
+  - location_id: loc_v
+    name: valero1
+
+  - location_id: loc_v
+    name: valero2
+
   - location_id: loc_carmel
     name: c1
+
   - location_id: loc_rasar
     name: r1
-  - location_id: loc_v
-    name: v1
+
+  - location_id: loc_k
+    name: k1
+
 zone_loc:
   - id: loc_gate
     type: rotating_slot
     name: G
     weight: 1
     full_name: עמדה
-  - id: loc_k
-    type: kitchen
-    name: K
-    weight: 1
-    full_name: מטבח
-  - id: loc_carmel
-    type: carmel
-    name: C
-    weight: 1
-    full_name: כרמל
-  - id: loc_rasar
-    type: rasar
-    name: R
-    weight: 1
-    full_name: רסר
+
   - id: loc_v
     type: valero
     name: V
     weight: 1
     full_name: ולרו
+
+  - id: loc_k
+    type: kitchen
+    name: K
+    weight: 1
+    full_name: מטבח
+
+  - id: loc_carmel
+    type: carmel
+    name: C
+    weight: 1
+    full_name: כרמל
+  
+  - id: loc_rasar
+    type: rasar
+    name: R
+    weight: 1
+    full_name: רסר
+
 time_zones:
   - id: zt_night
     name: Night
