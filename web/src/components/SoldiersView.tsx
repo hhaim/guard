@@ -427,7 +427,7 @@ export function SoldiersView() {
         }}
       />
 
-      <details className="soldiers-section-accordion" open>
+      <details className="soldiers-section-accordion">
         <summary>Soldier types</summary>
         <SoldierTypesSection
           types={typesCfg}
@@ -440,7 +440,7 @@ export function SoldiersView() {
         />
       </details>
 
-      <details className="soldiers-section-accordion" open>
+      <details className="soldiers-section-accordion">
         <summary>Soldier platoons</summary>
         <SoldierPlatoonsSection
           platoons={platoonsCfg}

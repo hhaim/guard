@@ -98,7 +98,7 @@ zone_loc:
 # Half-open [from_hour, to_hour); wrap when from >= to (e.g. 21:00 → 01:00).
 time_zones:
   - id: zone01
-    name: night
+    name: overnight
     weight: 1.8
     from_hour: 1
     to_hour: 5
@@ -118,7 +118,7 @@ time_zones:
     from_hour: 17
     to_hour: 21
   - id: zone05
-    name: before_night
+    name: night
     weight: 1
     from_hour: 21
     to_hour: 1

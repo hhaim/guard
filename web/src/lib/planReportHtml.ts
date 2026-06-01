@@ -292,9 +292,9 @@ function matrixCellHtml(
   if (indices.length === 0) {
     return esc(cell.label);
   }
-  const labels =
-    cell.labels ??
-    indices.map((idx) => (useFullNames ? display.fullLabel(idx) : labelForIdx(idx)));
+  const labels = useFullNames
+    ? indices.map((idx) => display.fullLabel(idx))
+    : (cell.labels ?? indices.map((idx) => labelForIdx(idx)));
   if (indices.length > 1) {
     const show = indices.slice(0, MATRIX_CELL_MAX_SOLDIERS);
     const showLabels = labels.slice(0, MATRIX_CELL_MAX_SOLDIERS);
