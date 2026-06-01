@@ -21,3 +21,7 @@ python3 guard_scheduler_sim.py -x 12 -y 4 -d 4 --hot --burst-days 4 --seed 42 --
 
 
 * time shift range for 05:00 need to be aligned 
+* fix the zones cycles, need to verify that it works 
+* add id to soldiers 
+* add accordion to slots 
+* add color setting 

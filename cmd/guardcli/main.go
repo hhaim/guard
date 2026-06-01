@@ -7,13 +7,14 @@
 //	guardcli users list
 //	guardcli users invites
 //	guardcli users debug
+//	guardcli users export -o users.csv [--invites invites.csv]
+//	guardcli users import -i users.csv [--invites invites.csv] [--replace]
 //	guardcli users invite --email ADDR --role admin|readonly [--invited-by CLERK_ID] [--replace]
 //	guardcli users bootstrap-admin --email ADDR
 package main
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"flag"
 	"fmt"
@@ -62,6 +63,8 @@ Usage:
   guardcli users list
   guardcli users invites
   guardcli users debug
+  guardcli users export -o users.csv [--invites invites.csv]
+  guardcli users import -i users.csv [--invites invites.csv] [--replace]
   guardcli users invite --email ADDR --role admin|readonly [--invited-by CLERK_ID] [--replace]
   guardcli users bootstrap-admin --email ADDR
 
@@ -73,6 +76,8 @@ Examples:
   guardcli db reset --yes
   guardcli schedule clear
   guardcli schedule export --end 2026-05-19 --days-back 10 -o verified.yaml
+  DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" guardcli users export -o users.csv --invites invites.csv
+  DATABASE_URL=... guardcli db reset --yes && DATABASE_URL=... guardcli users import -i users.csv --invites invites.csv --replace
   DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)" guardcli users invite --email they@example.com --role readonly
 `)
 }
@@ -154,14 +159,14 @@ By default also clears schema_migrations (omit with --keep-migrations).`)
 	}
 	fmt.Fprintln(os.Stderr, "db reset ok: app tables removed")
 	if !*keepMigrations {
-		fmt.Fprintln(os.Stderr, "schema_migrations cleared; start the API to apply 000001_schema.sql")
+		fmt.Fprintln(os.Stderr, "schema_migrations cleared; run guardcli users import or start the API to apply 000001_schema.sql")
 	}
 	return 0
 }
 
 func runUsers(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "error: users subcommand required (list|invites|debug|invite|bootstrap-admin)")
+		fmt.Fprintln(os.Stderr, "error: users subcommand required (list|invites|debug|export|import|invite|bootstrap-admin)")
 		return 2
 	}
 	switch args[0] {
@@ -171,6 +176,10 @@ func runUsers(args []string) int {
 		return cmdUsersInvites()
 	case "debug":
 		return cmdUsersDebug()
+	case "export":
+		return cmdUsersExport(args[1:])
+	case "import":
+		return cmdUsersImport(args[1:])
 	case "bootstrap-admin":
 		return cmdUsersBootstrapAdmin(args[1:])
 	case "invite":
@@ -219,6 +228,143 @@ func cmdUsersList() int {
 		return 1
 	}
 	return writeAppUsersCSV(os.Stdout, users)
+}
+
+func cmdUsersExport(args []string) int {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	out := fs.String("o", "", "Output CSV for app_users (default: stdout)")
+	invitesOut := fs.String("invites", "", "Optional output CSV for user_invites")
+	_ = fs.Parse(args)
+
+	pool, err := openPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+
+	ctx := context.Background()
+	users, err := repo.ListAppUsers(ctx, pool)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+
+	userW := os.Stdout
+	if *out != "" && *out != "-" {
+		f, err := os.Create(*out)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+		defer f.Close()
+		userW = f
+	} else if *invitesOut != "" {
+		fmt.Fprintln(os.Stderr, "error: --invites requires -o (cannot write both to stdout)")
+		return 2
+	}
+	if writeAppUsersCSV(userW, users) != 0 {
+		return 1
+	}
+	if *out != "" && *out != "-" {
+		fmt.Fprintf(os.Stderr, "exported %d app_user(s) to %s\n", len(users), *out)
+	}
+
+	if *invitesOut == "" {
+		return 0
+	}
+	invites, err := repo.ListInvites(ctx, pool)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	f, err := os.Create(*invitesOut)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	defer f.Close()
+	if writeUserInvitesCSV(f, invites) != 0 {
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "exported %d invite(s) to %s\n", len(invites), *invitesOut)
+	return 0
+}
+
+func cmdUsersImport(args []string) int {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	in := fs.String("i", "", "Input CSV for app_users (required)")
+	invitesIn := fs.String("invites", "", "Optional input CSV for user_invites")
+	replace := fs.Bool("replace", false, "Truncate app_users and user_invites before import")
+	_ = fs.Parse(args)
+
+	if strings.TrimSpace(*in) == "" {
+		fmt.Fprintln(os.Stderr, "error: --i is required")
+		return 2
+	}
+
+	userData, err := os.ReadFile(*in)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	users, err := repo.ParseAppUsersCSV(strings.NewReader(string(userData)))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+
+	var invites []repo.UserInvite
+	if *invitesIn != "" {
+		inviteData, err := os.ReadFile(*invitesIn)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+		invites, err = repo.ParseUserInvitesCSV(strings.NewReader(string(inviteData)))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+	}
+
+	pool, err := openPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	defer pool.Close()
+
+	ctx := context.Background()
+	if err := db.EnsureAppSchema(ctx, pool.Pool); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	if *replace {
+		if err := repo.TruncateUsers(ctx, pool); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "truncated app_users and user_invites")
+	}
+
+	nUsers, err := repo.ImportAppUsers(ctx, pool, users, *replace)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "imported %d app_user(s) from %s\n", nUsers, *in)
+
+	if *invitesIn == "" {
+		return 0
+	}
+	nInvites, err := repo.ImportUserInvites(ctx, pool, invites)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "imported %d invite(s) from %s\n", nInvites, *invitesIn)
+	return 0
 }
 
 func cmdUsersInvites() int {
@@ -331,29 +477,7 @@ func cmdUsersInvite(args []string) int {
 }
 
 func writeAppUsersCSV(w *os.File, users []repo.AppUser) int {
-	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"clerk_user_id", "email", "role", "created_at", "invited_by"}); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return 1
-	}
-	for _, u := range users {
-		invitedBy := ""
-		if u.InvitedBy != nil {
-			invitedBy = *u.InvitedBy
-		}
-		if err := cw.Write([]string{
-			u.ClerkUserID,
-			u.Email,
-			u.Role,
-			u.CreatedAt.UTC().Format(time.RFC3339),
-			invitedBy,
-		}); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			return 1
-		}
-	}
-	cw.Flush()
-	if err := cw.Error(); err != nil {
+	if err := repo.WriteAppUsersCSV(w, users); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
@@ -361,42 +485,7 @@ func writeAppUsersCSV(w *os.File, users []repo.AppUser) int {
 }
 
 func writeUserInvitesCSV(w *os.File, invites []repo.UserInvite) int {
-	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{
-		"id", "email", "role", "invited_by", "clerk_invitation_id", "created_at", "accepted_at", "pending",
-	}); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return 1
-	}
-	for _, inv := range invites {
-		clerkInvID := ""
-		if inv.ClerkInvitationID != nil {
-			clerkInvID = *inv.ClerkInvitationID
-		}
-		acceptedAt := ""
-		if inv.AcceptedAt != nil {
-			acceptedAt = inv.AcceptedAt.UTC().Format(time.RFC3339)
-		}
-		pending := "true"
-		if inv.AcceptedAt != nil {
-			pending = "false"
-		}
-		if err := cw.Write([]string{
-			fmt.Sprintf("%d", inv.ID),
-			inv.Email,
-			inv.Role,
-			inv.InvitedBy,
-			clerkInvID,
-			inv.CreatedAt.UTC().Format(time.RFC3339),
-			acceptedAt,
-			pending,
-		}); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			return 1
-		}
-	}
-	cw.Flush()
-	if err := cw.Error(); err != nil {
+	if err := repo.WriteUserInvitesCSV(w, invites); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
@@ -424,7 +513,9 @@ func openPool() (*db.Pool, error) {
 	if url == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
-	return db.Connect(context.Background(), url)
+	// Admin CLI: connect without Migrate so export/import work on legacy schemas
+	// (e.g. remote Neon before squashed 000001_schema.sql is recorded).
+	return db.OpenPool(context.Background(), url)
 }
 
 func cmdScheduleClear() int {

@@ -138,6 +138,18 @@ func appSchemaPresent(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	return false, nil
 }
 
+// EnsureAppSchema applies embedded migrations when app tables are missing (e.g. after db reset).
+func EnsureAppSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	present, err := appSchemaPresent(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if present {
+		return nil
+	}
+	return Migrate(ctx, pool)
+}
+
 // maintainRetention ensures 40-day partition blocks exist and drops blocks past 30-day retention.
 func maintainRetention(ctx context.Context, pool *pgxpool.Pool) error {
 	var hasFn bool
