@@ -5844,6 +5844,7 @@ def main() -> None:
         )
         raise SystemExit(0)
 
+    count_anchor = sim_anchor
     try:
         if args.hot:
             from hot_store import DEFAULT_HOT_STATE
@@ -5851,6 +5852,7 @@ def main() -> None:
             hot_anchor = sim_anchor
             if hot_anchor is None:
                 hot_anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+            count_anchor = hot_anchor
             pack, sim_meta = run_simulation_hot(
                 total_days=int(args.days),
                 burst_days=int(args.burst_days),
@@ -5908,7 +5910,7 @@ def main() -> None:
         print(f"ERROR: {e}", file=sys.stderr)
         raise SystemExit(1) from e
     n_asn = len(assignments)
-    expect = expected_assignment_count(zone, args.days, blocks_pd, slots_eff, anchor=sim_anchor)
+    expect = expected_assignment_count(zone, args.days, blocks_pd, slots_eff, anchor=count_anchor)
     if n_asn != expect:
         raise RuntimeError(f"internal: assignment count {n_asn} != expected {expect}")
     if args.scenario and args.check_expect and scenario_doc is not None:
@@ -5924,7 +5926,7 @@ def main() -> None:
         except AssertionError as e:
             print(f"ERROR: scenario expect: {e}", file=sys.stderr)
             raise SystemExit(1) from e
-    asn_day = expected_assignment_count(zone, 1, blocks_pd, slots_eff, anchor=sim_anchor)
+    asn_day = expected_assignment_count(zone, 1, blocks_pd, slots_eff, anchor=count_anchor)
     print(
         f"Schedule: {args.days} days × {asn_day} assignments/day "
         f"= {n_asn} shift rows (schema_version={zone.schema_version})"
