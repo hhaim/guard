@@ -14,6 +14,7 @@ import {
   type PlanDoc,
 } from "../api/plan";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
+import { parsePlatoonColorsFromGlobal } from "../lib/platoonColors";
 import { planDocFromGenerate } from "../lib/planDoc";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
 import { downloadPlanReportPdf } from "../lib/planPdfExport";
@@ -95,10 +96,20 @@ export function PlanView({
   const soldiersQ = useQuery({
     queryKey: ["cfg", "soldiers"],
     queryFn: () =>
-      apiGet<{ value: { soldiers?: { id?: string; key?: string; state?: string }[] } }>(
+      apiGet<{ value: { soldiers?: { id?: string; key?: string; state?: string; platoon_code?: string }[] } }>(
         "/api/cfg/soldiers"
       ),
   });
+
+  const globalQ = useQuery({
+    queryKey: ["cfg", "global"],
+    queryFn: () => apiGet<{ value: unknown }>("/api/cfg/global"),
+  });
+
+  const platoonColors = useMemo(
+    () => parsePlatoonColorsFromGlobal(globalQ.data?.value),
+    [globalQ.data]
+  );
 
   const soldierIds = useMemo(() => {
     const list = soldiersQ.data?.value?.soldiers ?? [];
@@ -338,6 +349,7 @@ export function PlanView({
         zones: zonesDoc,
         soldierIds,
         soldiers,
+        platoonColors,
         effectiveToday: planCtx?.effective_today,
       });
     } catch (e) {
@@ -641,6 +653,7 @@ export function PlanView({
               zones={zonesDoc}
               soldierIds={soldierIds}
               soldiers={soldiers}
+              platoonColors={platoonColors}
               onPlanChange={readOnly ? undefined : onProposalChange}
               readOnly={readOnly}
             />

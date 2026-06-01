@@ -431,6 +431,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 }
 
 // loadPlanInputs reads cfg needed to convert proposals or apply to schedule rows.
+// soldiers cfg may include platoon_code (UI/roster); scheduler ignores it until wired.
 func (s *Server) loadPlanInputs(ctx context.Context) (yamlBytes []byte, soldierKeys []string, slotLabels []string, shiftHours float64, err error) {
 	slotsRow, err := repo.GetCfg(ctx, s.Pool, "slots")
 	if err != nil {

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { countEnabledSlots, type ZonesDoc } from "../lib/zones";
+import type { PlatoonColorEntry } from "../lib/platoonColors";
 import { buildSoldierDisplay, type SoldierDisplay } from "../lib/soldierDisplay";
 import { docFromServer, type Soldier } from "../lib/soldiers";
 import {
@@ -45,6 +46,7 @@ type Props = {
   zones: ZonesDoc;
   soldierIds?: string[];
   soldiers?: Soldier[];
+  platoonColors?: PlatoonColorEntry[];
   sections?: ScheduleReportSections;
 };
 
@@ -383,6 +385,7 @@ export function ScheduleResultsReport({
   zones,
   soldierIds = [],
   soldiers = [],
+  platoonColors = [],
   sections: sectionsProp,
 }: Props) {
   const plan = useMemo(() => normalizePlanDoc(planProp), [planProp]);
@@ -424,8 +427,8 @@ export function ScheduleResultsReport({
   }, [assignments, days, shiftHours, zones, anchorDate, planDayStartHour, soldierIds, plan.soldiers]);
 
   const display = useMemo(
-    () => buildSoldierDisplay(soldierIds, soldiers, report.soldierCount),
-    [soldierIds, soldiers, report.soldierCount]
+    () => buildSoldierDisplay(soldierIds, soldiers, report.soldierCount, platoonColors),
+    [soldierIds, soldiers, report.soldierCount, platoonColors]
   );
 
   const soldierRows = useMemo(() => {

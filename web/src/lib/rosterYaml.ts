@@ -1,6 +1,11 @@
 import YAML from "yaml";
 import { docFromServer as soldiersFromRaw, parseDocFromJson, validateDoc as validateSoldiers, type SoldiersDoc } from "./soldiers";
 import {
+  docFromServer as platoonsFromRaw,
+  validateDoc as validatePlatoons,
+  type SoldierPlatoonsDoc,
+} from "./soldierPlatoons";
+import {
   docFromServer as typesFromRaw,
   validateDoc as validateTypes,
   type SoldierTypesDoc,
@@ -9,6 +14,7 @@ import { parseStatusBlock, type SoldierStatusYamlDoc } from "./rosterStatusYaml"
 
 export type RosterYamlImport = {
   typesDoc?: SoldierTypesDoc;
+  platoonsDoc?: SoldierPlatoonsDoc;
   soldiersDoc?: SoldiersDoc;
   statusDoc?: SoldierStatusYamlDoc;
 };
@@ -26,6 +32,15 @@ function parseTypesBlock(raw: unknown): SoldierTypesDoc {
     return typesFromRaw({ types: block.types });
   }
   return typesFromRaw(block);
+}
+
+function parsePlatoonsBlock(raw: unknown): SoldierPlatoonsDoc {
+  const block = asRecord(raw);
+  if (!block) return { platoons: [] };
+  if (Array.isArray(block.platoons)) {
+    return platoonsFromRaw({ platoons: block.platoons });
+  }
+  return platoonsFromRaw(block);
 }
 
 function parseSoldiersList(raw: unknown): SoldiersDoc {
@@ -52,11 +67,12 @@ export function parseRosterYaml(text: string): RosterYamlImport {
   }
 
   const hasTypes = raw.soldier_types != null;
+  const hasPlatoons = raw.soldier_platoons != null;
   const hasSoldiers = raw.soldiers != null;
   const hasStatus = raw.soldier_status != null;
 
-  if (!hasTypes && !hasSoldiers && !hasStatus) {
-    throw new Error("YAML must include soldier_types, soldiers, and/or soldier_status");
+  if (!hasTypes && !hasPlatoons && !hasSoldiers && !hasStatus) {
+    throw new Error("YAML must include soldier_types, soldier_platoons, soldiers, and/or soldier_status");
   }
 
   const out: RosterYamlImport = {};
@@ -68,13 +84,23 @@ export function parseRosterYaml(text: string): RosterYamlImport {
     out.typesDoc = typesDoc;
   }
 
+  if (hasPlatoons) {
+    const platoonsDoc = parsePlatoonsBlock(raw.soldier_platoons);
+    const err = validatePlatoons(platoonsDoc);
+    if (err) throw new Error(err);
+    out.platoonsDoc = platoonsDoc;
+  }
+
   if (hasSoldiers) {
     const soldiersDoc = parseSoldiersList(raw.soldiers);
-    const err = validateSoldiers(soldiersDoc, out.typesDoc);
+    const err = validateSoldiers(soldiersDoc, out.typesDoc, out.platoonsDoc);
     if (err) throw new Error(err);
     out.soldiersDoc = soldiersDoc;
   } else if (out.typesDoc) {
     const err = validateTypes(out.typesDoc);
+    if (err) throw new Error(err);
+  } else if (out.platoonsDoc) {
+    const err = validatePlatoons(out.platoonsDoc);
     if (err) throw new Error(err);
   }
 
@@ -89,6 +115,7 @@ export function stringifyRosterYaml(
   typesDoc: SoldierTypesDoc,
   soldiersDoc: SoldiersDoc,
   statusDoc?: SoldierStatusYamlDoc,
+  platoonsDoc?: SoldierPlatoonsDoc,
 ): string {
   const obj: Record<string, unknown> = {
     schema_version: ROSTER_SCHEMA_VERSION,
@@ -102,9 +129,15 @@ export function stringifyRosterYaml(
         full_name: s.full_name,
       };
       if (s.type_code?.trim()) row.type_code = s.type_code.trim();
+      if (s.platoon_code?.trim()) row.platoon_code = s.platoon_code.trim();
       return row;
     }),
   };
+  if (platoonsDoc && platoonsDoc.platoons.length > 0) {
+    obj.soldier_platoons = {
+      platoons: platoonsDoc.platoons.map((p) => ({ code: p.code, label: p.label })),
+    };
+  }
   if (statusDoc) {
     obj.soldier_status = {
       range: statusDoc.range,

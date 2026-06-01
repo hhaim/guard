@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { ZonesDoc } from "../lib/zones";
 import type { PlanDoc } from "../lib/planDoc";
 import { normalizePlanDoc } from "../lib/planDoc";
+import type { PlatoonColorEntry } from "../lib/platoonColors";
 import type { Soldier } from "../lib/soldiers";
 import { PlanChangeTable } from "./PlanChangeTable";
 import { PlanTopMetrics } from "./PlanTopMetrics";
@@ -13,6 +14,7 @@ export type PlanDocViewProps = {
   zones: ZonesDoc;
   soldierIds: string[];
   soldiers?: Soldier[];
+  platoonColors?: PlatoonColorEntry[];
   sections?: ScheduleReportSections;
   /** When set, show the editable change table above the report. */
   onPlanChange?: (next: PlanDoc) => void;
@@ -28,6 +30,7 @@ export function PlanDocView({
   zones,
   soldierIds,
   soldiers = [],
+  platoonColors = [],
   sections,
   onPlanChange,
   readOnly = false,
@@ -55,6 +58,7 @@ export function PlanDocView({
           zones={zones}
           soldierIds={soldierIds}
           soldiers={soldiers}
+          platoonColors={platoonColors}
           sections={sections}
         />
       ) : (

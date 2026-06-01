@@ -2581,6 +2581,85 @@
   font-size: 0.85rem;
 }
 
+.soldiers-th-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  justify-content: center;
+}
+
+.column-filter-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.column-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem;
+  border: none;
+  background: transparent;
+  color: rgba(60, 60, 67, 0.55);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.column-filter-btn-active {
+  color: var(--accent, #007aff);
+}
+
+.column-filter-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  min-width: 10rem;
+  max-height: 14rem;
+  overflow: auto;
+  margin-top: 0.25rem;
+  padding: 0.5rem;
+  background: var(--glass-bg, #fff);
+  border: 1px solid rgba(60, 60, 67, 0.15);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.column-filter-actions {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.35rem;
+}
+
+.column-filter-action {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.35rem;
+}
+
+.column-filter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.column-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  padding: 0.2rem 0;
+  cursor: pointer;
+}
+
+.platoon-colors-table input[type="color"] {
+  width: 2.5rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid rgba(60, 60, 67, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
 .status-board .availability-summary {
   margin: 0 0 10px;
 }

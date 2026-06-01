@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPut } from "../api";
 import { fetchPlanContext } from "../api/plan";
 import { useDevPanel } from "../context/AppStateContext";
+import { useSoldierPlatoonsDocument } from "../hooks/useSoldierPlatoonsDocument";
 import {
   clampPlanDebugDayOffset,
   DEFAULT_GLOBAL,
@@ -11,8 +12,10 @@ import {
   formFromServerValue,
   MAX_PLAN_DEBUG_DAY_OFFSET,
   parseFormFromJson,
+  validateGlobalForm,
   type GlobalFormData,
 } from "../lib/globalConfig";
+import { platoonBadgeStyle, type PlatoonColorEntry } from "../lib/platoonColors";
 import { parsePlanDayStart } from "../lib/planDay";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 
@@ -54,9 +57,24 @@ function NumberField({
   );
 }
 
+function upsertPlatoonColor(
+  colors: PlatoonColorEntry[],
+  code: string,
+  patch: Partial<Pick<PlatoonColorEntry, "bg" | "fg">>
+): PlatoonColorEntry[] {
+  const existing = colors.find((c) => c.code === code);
+  const bg = patch.bg ?? existing?.bg ?? platoonBadgeStyle(code, colors, 0).backgroundColor;
+  const next: PlatoonColorEntry = { code, bg, ...(patch.fg ? { fg: patch.fg } : existing?.fg ? { fg: existing.fg } : {}) };
+  if (existing) {
+    return colors.map((c) => (c.code === code ? next : c));
+  }
+  return [...colors, next];
+}
+
 export function GlobalConfigView() {
   const qc = useQueryClient();
   const { openPanel } = useDevPanel();
+  const platoonsCfg = useSoldierPlatoonsDocument();
 
   const globalQ = useQuery({
     queryKey: ["cfg", "global"],
@@ -89,14 +107,14 @@ export function GlobalConfigView() {
   }, [formData, jsonOverride]);
 
   const jsonError = useMemo(() => {
-    if (jsonOverride == null) return null;
+    if (jsonOverride == null) return validateGlobalForm(formData);
     try {
-      JSON.parse(jsonOverride);
-      return null;
+      const parsed = parseFormFromJson(JSON.parse(jsonOverride));
+      return validateGlobalForm(parsed);
     } catch (e) {
       return e instanceof Error ? e.message : "Invalid JSON";
     }
-  }, [jsonOverride]);
+  }, [jsonOverride, formData]);
 
   const editorText =
     jsonOverride ?? JSON.stringify(deriveJsonFromForm(formData), null, 2);
@@ -126,9 +144,12 @@ export function GlobalConfigView() {
 
   const saveM = useMutation({
     mutationFn: async () => {
+      const payload = jsonOverride != null ? parseFormFromJson(JSON.parse(jsonOverride)) : formData;
+      const err = validateGlobalForm(payload);
+      if (err) throw new Error(err);
       if (jsonError) throw new Error(jsonError);
       await apiPut("/api/cfg/global", {
-        value: liveJson,
+        value: deriveJsonFromForm(payload),
         expected_version: version ?? 0,
       });
     },
@@ -251,6 +272,73 @@ export function GlobalConfigView() {
             value={formData.random_seed}
             onChange={(n) => updateField("random_seed", n)}
           />
+        </section>
+
+        <section className="glass-card" aria-label="Platoon colors">
+          <h2 className="settings-section-header">Platoon colors</h2>
+          <p className="contacts-count" style={{ marginBottom: "0.75rem" }}>
+            Background colors for platoon badges on the roster and plan schedule.
+          </p>
+          {platoonsCfg.platoonsQ.isLoading && <p className="contacts-empty">Loading platoons…</p>}
+          {!platoonsCfg.platoonsQ.isLoading && platoonsCfg.doc.platoons.length === 0 && (
+            <p className="contacts-empty">Define platoons on the Soldiers tab first.</p>
+          )}
+          {platoonsCfg.doc.platoons.length > 0 && (
+            <table className="contacts-table platoon-colors-table">
+              <thead>
+                <tr>
+                  <th scope="col">Code</th>
+                  <th scope="col">Label</th>
+                  <th scope="col">Background</th>
+                  <th scope="col">Preview</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...platoonsCfg.doc.platoons]
+                  .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
+                  .map((p) => {
+                    const style = platoonBadgeStyle(p.code, formData.platoon_colors, 0);
+                    const hasEntry = formData.platoon_colors.some((c) => c.code === p.code);
+                    return (
+                      <tr key={p.code}>
+                        <td>
+                          <code>{p.code}</code>
+                        </td>
+                        <td>{p.label}</td>
+                        <td>
+                          <input
+                            type="color"
+                            aria-label={`Background color for platoon ${p.code}`}
+                            value={style.backgroundColor}
+                            onChange={(e) => {
+                              const bg = e.target.value;
+                              updateField(
+                                "platoon_colors",
+                                upsertPlatoonColor(formData.platoon_colors, p.code, { bg })
+                              );
+                            }}
+                          />
+                          {!hasEntry && (
+                            <span className="hint" style={{ marginLeft: "0.5rem" }}>
+                              default
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <code
+                            className="soldier-type-badge"
+                            style={style}
+                            title={p.label}
+                          >
+                            {p.code}
+                          </code>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          )}
         </section>
 
         <section className="glass-card" aria-label="Planning debug">

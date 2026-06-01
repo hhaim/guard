@@ -2074,9 +2074,13 @@ def type_codes_for_roster(keys: Sequence[str], id_to_type: Dict[str, str]) -> Li
     return [str(id_to_type.get(k, "")).strip() for k in keys]
 
 
+# TODO: load platoon by soldier id for zone constraints (platoon_code on soldiers[]).
+
+
 def load_roster_type_codes_yaml(path: Path, keys: Sequence[str]) -> List[str]:
     """
     Read ``type_code`` by soldier id from roster YAML and return values in ``keys`` order.
+    ``platoon_code`` on soldiers is ignored until scheduler support is added.
 
     Supports both UI export shape (``soldiers: [ ... ]``) and legacy nested
     shape (``soldiers: { soldiers: [ ... ] }``).

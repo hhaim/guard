@@ -38,7 +38,10 @@ func TypeCodesForRoster(keys []string, idToType map[string]string) []string {
 	return out
 }
 
+// TODO: load platoon by soldier id for zone constraints (platoon_code on soldiers[]).
+
 // LoadRosterTypeCodesYAML reads soldiers[].type_code from roster YAML in roster key order.
+// platoon_code on soldiers is ignored until scheduler support is added.
 func LoadRosterTypeCodesYAML(raw []byte, keys []string) ([]string, error) {
 	var root any
 	if err := yaml.Unmarshal(raw, &root); err != nil {

@@ -3,6 +3,7 @@ import { Trash2 } from "lucide-react";
 import { fetchPlanContext } from "../api/plan";
 import { parsePlanDayStart } from "../lib/planDay";
 import { soldierInitials, type Soldier } from "../lib/soldiers";
+import type { Platoon } from "../lib/soldierPlatoons";
 import type { SoldierType } from "../lib/soldierTypes";
 import { SoldierStatusTimeline } from "./SoldierStatusTimeline";
 
@@ -11,6 +12,7 @@ type SoldierEditorSheetProps = {
   mode: "edit" | "new";
   soldier: Soldier;
   types: SoldierType[];
+  platoons: Platoon[];
   onChange: (s: Soldier) => void;
   onDone: () => void;
   onCancel: () => void;
@@ -54,6 +56,7 @@ export function SoldierEditorSheet({
   mode,
   soldier,
   types,
+  platoons,
   onChange,
   onDone,
   onCancel,
@@ -135,6 +138,26 @@ export function SoldierEditorSheet({
               {types.map((t) => (
                 <option key={t.code} value={t.code}>
                   {t.code} — {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="settings-row">
+            <label className="settings-row-label">
+              <span className="title">Platoon</span>
+            </label>
+            <select
+              className="settings-input settings-input-wide"
+              value={soldier.platoon_code ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                onChange({ ...soldier, platoon_code: v || undefined });
+              }}
+            >
+              <option value="">— None —</option>
+              {platoons.map((p) => (
+                <option key={p.code} value={p.code}>
+                  {p.code} — {p.label}
                 </option>
               ))}
             </select>

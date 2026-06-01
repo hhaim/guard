@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPut } from "../api";
 import { useDevPanel } from "../context/AppStateContext";
 import { formatApiError } from "../lib/apiError";
+import { useSoldierPlatoonsDocument } from "../hooks/useSoldierPlatoonsDocument";
 import { useSoldierTypesDocument } from "../hooks/useSoldierTypesDocument";
 import {
   deriveJsonFromDoc,
@@ -16,11 +17,15 @@ import {
   type SoldiersDoc,
 } from "../lib/soldiers";
 import { importSoldierStatus } from "../api/soldierStatus";
+import { parsePlatoonColorsFromGlobal, platoonBadgeStyle } from "../lib/platoonColors";
+import { platoonLabel } from "../lib/soldierPlatoons";
 import { typeLabel } from "../lib/soldierTypes";
 import { downloadText, pickTextFile } from "../lib/fileIo";
+import { ColumnFilterMenu } from "./ColumnFilterMenu";
 import { ContactsRowEditButton } from "./ContactsRowEdit";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { SoldierEditorSheet } from "./SoldierEditorSheet";
+import { SoldierPlatoonsSection } from "./SoldierPlatoonsSection";
 import { SoldierTypesSection } from "./SoldierTypesSection";
 import { SoldiersStatusBoard } from "./SoldiersStatusBoard";
 import { SoldiersYamlToolbar } from "./SoldiersYamlToolbar";
@@ -29,19 +34,32 @@ type CfgResp = { key: string; value: unknown; version: number; updated_at: strin
 
 const ROSTER_AUTOSAVE_MS = 600;
 
-type DevJsonSource = "soldiers" | "types";
+type DevJsonSource = "soldiers" | "types" | "platoons";
 
 export function SoldiersView() {
   const qc = useQueryClient();
   const { openPanel } = useDevPanel();
   const typesCfg = useSoldierTypesDocument();
+  const platoonsCfg = useSoldierPlatoonsDocument();
   const [devJsonSource, setDevJsonSource] = useState<DevJsonSource>("soldiers");
   const [searchText, setSearchText] = useState("");
+  const [selectedTypeCodes, setSelectedTypeCodes] = useState<Set<string> | null>(null);
+  const [selectedPlatoonCodes, setSelectedPlatoonCodes] = useState<Set<string> | null>(null);
 
   const soldiersQ = useQuery({
     queryKey: ["cfg", "soldiers"],
     queryFn: () => apiGet<CfgResp>("/api/cfg/soldiers"),
   });
+
+  const globalQ = useQuery({
+    queryKey: ["cfg", "global"],
+    queryFn: () => apiGet<CfgResp>("/api/cfg/global"),
+  });
+
+  const platoonColors = useMemo(
+    () => parsePlatoonColorsFromGlobal(globalQ.data?.value),
+    [globalQ.data]
+  );
 
   const [doc, setDoc] = useState<SoldiersDoc>({ soldiers: [] });
   const [jsonOverride, setJsonOverride] = useState<string | null>(null);
@@ -82,14 +100,14 @@ export function SoldiersView() {
   }, [doc, jsonOverride]);
 
   const jsonError = useMemo(() => {
-    if (jsonOverride == null) return validateDoc(doc, typesCfg.doc);
+    if (jsonOverride == null) return validateDoc(doc, typesCfg.doc, platoonsCfg.doc);
     try {
       const parsed = parseDocFromJson(JSON.parse(jsonOverride));
-      return validateDoc(parsed, typesCfg.doc);
+      return validateDoc(parsed, typesCfg.doc, platoonsCfg.doc);
     } catch (e) {
       return e instanceof Error ? e.message : "Invalid JSON";
     }
-  }, [jsonOverride, doc, typesCfg.doc]);
+  }, [jsonOverride, doc, typesCfg.doc, platoonsCfg.doc]);
 
   const editorText = jsonOverride ?? JSON.stringify(liveJson, null, 2);
 
@@ -102,23 +120,71 @@ export function SoldiersView() {
       const fullName = s.full_name.trim();
       const code = s.type_code?.trim() ?? "";
       const label = code ? typeLabel(typesCfg.doc, code) : "";
-      const haystack = `${id} ${fullName} ${code} ${label}`.toLowerCase();
+      const pCode = s.platoon_code?.trim() ?? "";
+      const pLabel = pCode ? platoonLabel(platoonsCfg.doc, pCode) : "";
+      const haystack = `${id} ${fullName} ${code} ${label} ${pCode} ${pLabel}`.toLowerCase();
       return haystack.includes(normalizedSearch);
     });
-  }, [doc.soldiers, normalizedSearch, typesCfg.doc]);
+  }, [doc.soldiers, normalizedSearch, typesCfg.doc, platoonsCfg.doc]);
+
+  const columnFilteredRows = useMemo(() => {
+    return filteredSoldierRows.filter(({ s }) => {
+      const tc = s.type_code?.trim() ?? "";
+      if (selectedTypeCodes != null) {
+        const key = tc || "__none__";
+        if (!selectedTypeCodes.has(key)) return false;
+      }
+      const pc = s.platoon_code?.trim() ?? "";
+      if (selectedPlatoonCodes != null) {
+        const key = pc || "__none__";
+        if (!selectedPlatoonCodes.has(key)) return false;
+      }
+      return true;
+    });
+  }, [filteredSoldierRows, selectedTypeCodes, selectedPlatoonCodes]);
+
+  const typeFilterOptions = useMemo(() => {
+    const codes = new Set<string>();
+    let hasNone = false;
+    for (const s of doc.soldiers) {
+      const c = s.type_code?.trim();
+      if (c) codes.add(c);
+      else hasNone = true;
+    }
+    const opts = [...codes]
+      .sort((a, b) => a.localeCompare(b))
+      .map((value) => ({ value, label: `${value} — ${typeLabel(typesCfg.doc, value)}` }));
+    if (hasNone) opts.unshift({ value: "__none__", label: "(No type)" });
+    return opts;
+  }, [doc.soldiers, typesCfg.doc]);
+
+  const platoonFilterOptions = useMemo(() => {
+    const codes = new Set<string>();
+    let hasNone = false;
+    for (const s of doc.soldiers) {
+      const c = s.platoon_code?.trim();
+      if (c) codes.add(c);
+      else hasNone = true;
+    }
+    const opts = [...codes]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((value) => ({ value, label: `${value} — ${platoonLabel(platoonsCfg.doc, value)}` }));
+    if (hasNone) opts.unshift({ value: "__none__", label: "(No platoon)" });
+    return opts;
+  }, [doc.soldiers, platoonsCfg.doc]);
 
   const sortedRows = useMemo(() => {
-    const rows = [...filteredSoldierRows];
+    const rows = [...columnFilteredRows];
     return rows.sort((a, b) => {
       const na = a.s.full_name.trim() || a.s.id;
       const nb = b.s.full_name.trim() || b.s.id;
       return na.localeCompare(nb, undefined, { sensitivity: "base" });
     });
-  }, [filteredSoldierRows]);
+  }, [columnFilteredRows]);
 
   const saveRosterM = useMutation({
     mutationFn: async (payload: SoldiersDoc) => {
-      const err = validateDoc(payload, typesCfg.doc);
+      const err = validateDoc(payload, typesCfg.doc, platoonsCfg.doc);
       if (err) throw new Error(err);
       const res = (await apiPut("/api/cfg/soldiers", {
         value: deriveJsonFromDoc(payload),
@@ -315,7 +381,7 @@ export function SoldiersView() {
           className="settings-input settings-input-wide soldiers-search-input"
           type="text"
           value={searchText}
-          placeholder="Search by soldier name, ID, type code, or type label"
+          placeholder="Search by name, ID, type, or platoon"
           aria-label="Search soldiers and types"
           autoComplete="off"
           autoCorrect="off"
@@ -334,11 +400,13 @@ export function SoldiersView() {
       </div>
 
       <SoldiersYamlToolbar
-        disabled={soldiersQ.isLoading || typesCfg.typesQ.isLoading}
+        disabled={soldiersQ.isLoading || typesCfg.typesQ.isLoading || platoonsCfg.platoonsQ.isLoading}
         typesDoc={typesCfg.doc}
+        platoonsDoc={platoonsCfg.doc}
         soldiersDoc={doc}
-        onImport={async ({ typesDoc, soldiersDoc, statusDoc }) => {
+        onImport={async ({ typesDoc, platoonsDoc, soldiersDoc, statusDoc }) => {
           if (typesDoc) typesCfg.replaceDoc(typesDoc);
+          if (platoonsDoc) platoonsCfg.replaceDoc(platoonsDoc);
           if (soldiersDoc) {
             setDoc(soldiersDoc);
             setJsonOverride(null);
@@ -367,6 +435,19 @@ export function SoldiersView() {
           searchTerm={normalizedSearch}
           onOpenTypesJson={() => {
             setDevJsonSource("types");
+            openPanel("json");
+          }}
+        />
+      </details>
+
+      <details className="soldiers-section-accordion" open>
+        <summary>Soldier platoons</summary>
+        <SoldierPlatoonsSection
+          platoons={platoonsCfg}
+          soldiers={doc.soldiers}
+          searchTerm={normalizedSearch}
+          onOpenPlatoonsJson={() => {
+            setDevJsonSource("platoons");
             openPanel("json");
           }}
         />
@@ -411,7 +492,26 @@ export function SoldiersView() {
                 <tr>
                   <th className="contacts-th-avatar" scope="col" />
                   <th scope="col" className="soldiers-th-type">
-                    Type
+                    <span className="soldiers-th-filter">
+                      Type
+                      <ColumnFilterMenu
+                        label="type"
+                        options={typeFilterOptions}
+                        selected={selectedTypeCodes}
+                        onChange={setSelectedTypeCodes}
+                      />
+                    </span>
+                  </th>
+                  <th scope="col" className="soldiers-th-type">
+                    <span className="soldiers-th-filter">
+                      Platoon
+                      <ColumnFilterMenu
+                        label="platoon"
+                        options={platoonFilterOptions}
+                        selected={selectedPlatoonCodes}
+                        onChange={setSelectedPlatoonCodes}
+                      />
+                    </span>
                   </th>
                   <th scope="col">Name</th>
                   <th scope="col">ID</th>
@@ -434,6 +534,21 @@ export function SoldiersView() {
                       {s.type_code?.trim() ? (
                         <code className="soldier-type-badge" title={typeLabel(typesCfg.doc, s.type_code)}>
                           {s.type_code.trim()}
+                        </code>
+                      ) : (
+                        <span className="soldiers-type-empty" aria-hidden>
+                          —
+                        </span>
+                      )}
+                    </td>
+                    <td className="soldiers-type-cell">
+                      {s.platoon_code?.trim() ? (
+                        <code
+                          className="soldier-type-badge"
+                          title={platoonLabel(platoonsCfg.doc, s.platoon_code)}
+                          style={platoonBadgeStyle(s.platoon_code.trim(), platoonColors, index)}
+                        >
+                          {s.platoon_code.trim()}
                         </code>
                       ) : (
                         <span className="soldiers-type-empty" aria-hidden>
@@ -474,6 +589,7 @@ export function SoldiersView() {
         mode={editorMode}
         soldier={draft ?? emptySoldier(doc.soldiers)}
         types={typesCfg.doc.types}
+        platoons={platoonsCfg.doc.platoons}
         onChange={setDraft}
         onDone={commitEditor}
         onCancel={() => {
@@ -491,18 +607,40 @@ export function SoldiersView() {
         }}
       />
       <DeveloperPanel
-        jsonText={devJsonSource === "types" ? typesCfg.editorText : editorText}
-        onJsonTextChange={devJsonSource === "types" ? typesCfg.syncJson : syncJsonToForm}
+        jsonText={
+          devJsonSource === "types"
+            ? typesCfg.editorText
+            : devJsonSource === "platoons"
+              ? platoonsCfg.editorText
+              : editorText
+        }
+        onJsonTextChange={
+          devJsonSource === "types"
+            ? typesCfg.syncJson
+            : devJsonSource === "platoons"
+              ? platoonsCfg.syncJson
+              : syncJsonToForm
+        }
         jsonError={
           devJsonSource === "types"
             ? typeof typesCfg.jsonError === "string"
               ? typesCfg.jsonError
               : null
-            : typeof jsonError === "string"
-              ? jsonError
-              : null
+            : devJsonSource === "platoons"
+              ? typeof platoonsCfg.jsonError === "string"
+                ? platoonsCfg.jsonError
+                : null
+              : typeof jsonError === "string"
+                ? jsonError
+                : null
         }
-        onResetDefaults={devJsonSource === "types" ? typesCfg.resetToServer : resetToServer}
+        onResetDefaults={
+          devJsonSource === "types"
+            ? typesCfg.resetToServer
+            : devJsonSource === "platoons"
+              ? platoonsCfg.resetToServer
+              : resetToServer
+        }
       />
     </>
   );

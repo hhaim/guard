@@ -1,3 +1,4 @@
+import { type SoldierPlatoonsDoc, platoonByCode } from "./soldierPlatoons";
 import { type SoldierTypesDoc, typeByCode } from "./soldierTypes";
 
 export type Soldier = {
@@ -5,6 +6,7 @@ export type Soldier = {
   key?: string;
   full_name: string;
   type_code?: string;
+  platoon_code?: string;
   /** @deprecated use status board entries; read-only from legacy cfg */
   state?: string;
 };
@@ -59,6 +61,14 @@ function normalizeSoldier(raw: Record<string, unknown>): Soldier {
     ...(raw.type_code != null && String(raw.type_code).trim()
       ? { type_code: String(raw.type_code).trim() }
       : {}),
+    ...((): { platoon_code?: string } => {
+      const fromCode = raw.platoon_code != null ? String(raw.platoon_code).trim() : "";
+      if (fromCode) return { platoon_code: fromCode };
+      if (raw.platoon != null && String(raw.platoon).trim()) {
+        return { platoon_code: String(raw.platoon).trim() };
+      }
+      return {};
+    })(),
   };
 }
 
@@ -87,6 +97,7 @@ export function deriveJsonFromDoc(doc: SoldiersDoc): Record<string, unknown> {
       };
       if (s.key && s.key !== s.id) row.key = s.key;
       if (s.type_code?.trim()) row.type_code = s.type_code.trim();
+      if (s.platoon_code?.trim()) row.platoon_code = s.platoon_code.trim();
       return row;
     }),
   };
@@ -115,7 +126,11 @@ export function sortSoldiers(list: Soldier[]): Soldier[] {
   });
 }
 
-export function validateDoc(doc: SoldiersDoc, types?: SoldierTypesDoc): string | null {
+export function validateDoc(
+  doc: SoldiersDoc,
+  types?: SoldierTypesDoc,
+  platoons?: SoldierPlatoonsDoc
+): string | null {
   const ids = new Set<string>();
   for (const s of doc.soldiers) {
     if (!s.id.trim()) return "Every soldier needs an ID.";
@@ -124,6 +139,10 @@ export function validateDoc(doc: SoldiersDoc, types?: SoldierTypesDoc): string |
     const tc = s.type_code?.trim();
     if (tc && types && !typeByCode(types, tc)) {
       return `Soldier ${s.id}: unknown type_code "${tc}"`;
+    }
+    const pc = s.platoon_code?.trim();
+    if (pc && platoons && !platoonByCode(platoons, pc)) {
+      return `Soldier ${s.id}: unknown platoon_code "${pc}"`;
     }
   }
   return null;

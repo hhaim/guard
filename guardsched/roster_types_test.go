@@ -42,6 +42,22 @@ soldiers:
 	}
 }
 
+func TestLoadRosterTypeCodesYAML_PlatoonCodeIgnored(t *testing.T) {
+	raw := []byte(`
+soldiers:
+  - { id: s0, type_code: A, platoon_code: "1" }
+  - { id: s1, type_code: B, platoon: 2 }
+`)
+	got, err := LoadRosterTypeCodesYAML(raw, []string{"s0", "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"A", "B"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v (platoon fields must not affect type codes)", got, want)
+	}
+}
+
 func TestLoadRosterTypeCodesYAML_MissingSoldiersList(t *testing.T) {
 	raw := []byte("schema_version: 2\nsoldier_types: {}\n")
 	_, err := LoadRosterTypeCodesYAML(raw, []string{"s0"})

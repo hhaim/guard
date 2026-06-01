@@ -15,6 +15,7 @@ import {
   timelineSegmentKind,
   type MatrixDay,
 } from "./scheduleReport";
+import type { PlatoonColorEntry } from "./platoonColors";
 import { buildSoldierDisplay, type SoldierDisplay } from "./soldierDisplay";
 import {
   buildPlanAvailabilityReport,
@@ -29,6 +30,7 @@ export type PlanReportInput = {
   zones: ZonesDoc;
   soldierIds: string[];
   soldiers: Soldier[];
+  platoonColors?: PlatoonColorEntry[];
   effectiveToday?: string;
 };
 
@@ -639,7 +641,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
     zone.blocksPerDay = Math.round(24 / shiftHours);
   }
   const soldierCount = inferSoldierCount(assignments);
-  const display = buildSoldierDisplay(soldierIds, soldiers, soldierCount);
+  const display = buildSoldierDisplay(soldierIds, soldiers, soldierCount, input.platoonColors ?? []);
   const matrices = buildScheduleMatrices(assignments, days, zone, {
     planDayStartHour,
     anchorDate,

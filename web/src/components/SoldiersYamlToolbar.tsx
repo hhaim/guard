@@ -9,15 +9,18 @@ import {
 import { listSoldierStatus } from "../api/soldierStatus";
 import { fetchPlanContext } from "../api/plan";
 import { parsePlanDayStart } from "../lib/planDay";
+import type { SoldierPlatoonsDoc } from "../lib/soldierPlatoons";
 import type { SoldierTypesDoc } from "../lib/soldierTypes";
 import type { SoldiersDoc } from "../lib/soldiers";
 
 type SoldiersYamlToolbarProps = {
   disabled?: boolean;
   typesDoc: SoldierTypesDoc;
+  platoonsDoc: SoldierPlatoonsDoc;
   soldiersDoc: SoldiersDoc;
   onImport: (payload: {
     typesDoc?: SoldierTypesDoc;
+    platoonsDoc?: SoldierPlatoonsDoc;
     soldiersDoc?: SoldiersDoc;
     statusDoc?: SoldierStatusYamlDoc;
   }) => void | Promise<void>;
@@ -26,6 +29,7 @@ type SoldiersYamlToolbarProps = {
 export function SoldiersYamlToolbar({
   disabled,
   typesDoc,
+  platoonsDoc,
   soldiersDoc,
   onImport,
 }: SoldiersYamlToolbarProps) {
@@ -34,7 +38,7 @@ export function SoldiersYamlToolbar({
       const text = await pickTextFile(".yaml,.yml,text/yaml,text/plain");
       if (
         !confirm(
-          "Import roster YAML? This updates soldier types and/or roster in the UI (save to persist cfg). " +
+          "Import roster YAML? This updates soldier types, platoons, and/or roster in the UI (save to persist cfg). " +
             "If the file includes soldier_status, absence/vacation timelines are applied immediately for that range."
         )
       ) {
@@ -61,7 +65,7 @@ export function SoldiersYamlToolbar({
       }
       downloadText(
         `roster-${new Date().toISOString().slice(0, 10)}.yaml`,
-        stringifyRosterYaml(typesDoc, soldiersDoc, statusDoc),
+        stringifyRosterYaml(typesDoc, soldiersDoc, statusDoc, platoonsDoc),
         "text/yaml"
       );
     } catch (e) {

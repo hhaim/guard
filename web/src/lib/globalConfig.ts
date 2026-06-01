@@ -1,4 +1,9 @@
 import { DEFAULT_PLAN_DAY_START, parsePlanDayStart } from "./planDay";
+import {
+  parsePlatoonColorsFromGlobal,
+  validatePlatoonColors,
+  type PlatoonColorEntry,
+} from "./platoonColors";
 
 export const MAX_PLAN_DEBUG_DAY_OFFSET = 366;
 
@@ -8,6 +13,7 @@ export type GlobalFormData = {
   random_seed: number;
   plan_debug_day_offset: number;
   plan_day_start: string;
+  platoon_colors: PlatoonColorEntry[];
   [key: string]: unknown;
 };
 
@@ -17,6 +23,7 @@ export const DEFAULT_GLOBAL: GlobalFormData = {
   random_seed: 42,
   plan_debug_day_offset: 0,
   plan_day_start: DEFAULT_PLAN_DAY_START,
+  platoon_colors: [],
 };
 
 const KNOWN_KEYS = [
@@ -25,6 +32,7 @@ const KNOWN_KEYS = [
   "random_seed",
   "plan_debug_day_offset",
   "plan_day_start",
+  "platoon_colors",
 ] as const;
 
 function asInt(v: unknown, fallback: number): number {
@@ -39,9 +47,21 @@ function asInt(v: unknown, fallback: number): number {
 export function deriveJsonFromForm(form: GlobalFormData): Record<string, unknown> {
   const out: Record<string, unknown> = { ...form };
   for (const k of KNOWN_KEYS) {
-    out[k] = form[k];
+    if (k === "platoon_colors") {
+      out.platoon_colors = form.platoon_colors.map((e) => ({
+        code: e.code,
+        bg: e.bg,
+        ...(e.fg ? { fg: e.fg } : {}),
+      }));
+    } else {
+      out[k] = form[k];
+    }
   }
   return out;
+}
+
+export function validateGlobalForm(form: GlobalFormData): string | null {
+  return validatePlatoonColors(form.platoon_colors);
 }
 
 export function parseFormFromJson(raw: unknown): GlobalFormData {
@@ -60,6 +80,7 @@ export function parseFormFromJson(raw: unknown): GlobalFormData {
       const p = parsePlanDayStart(o.plan_day_start);
       return p.ok ? p.value : base.plan_day_start;
     })(),
+    platoon_colors: parsePlatoonColorsFromGlobal(o),
   };
   for (const [k, v] of Object.entries(o)) {
     if (!(KNOWN_KEYS as readonly string[]).includes(k)) {

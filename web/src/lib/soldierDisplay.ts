@@ -1,3 +1,5 @@
+import type { PlatoonColorEntry } from "./platoonColors";
+import { platoonBadgeStyle } from "./platoonColors";
 import type { Soldier } from "./soldiers";
 
 /** Readable badge colors (background + text) for soldier cells. */
@@ -26,7 +28,8 @@ export type SoldierDisplay = {
 export function buildSoldierDisplay(
   soldierIds: string[],
   soldiers: Soldier[],
-  soldierCount: number
+  soldierCount: number,
+  platoonColors: PlatoonColorEntry[] = []
 ): SoldierDisplay {
   const byId = new Map(soldiers.map((s) => [s.id, s]));
   const count = Math.max(soldierCount, soldierIds.length);
@@ -45,6 +48,12 @@ export function buildSoldierDisplay(
     return shortLabel(idx);
   };
   const badgeStyle = (idx: number) => {
+    const id = soldierIds[idx];
+    const s = id ? byId.get(id) : undefined;
+    const pc = s?.platoon_code?.trim();
+    if (pc) {
+      return platoonBadgeStyle(pc, platoonColors, idx);
+    }
     const c = SOLDIER_BADGE_COLORS[idx % SOLDIER_BADGE_COLORS.length];
     return { backgroundColor: c.bg, color: c.fg };
   };
