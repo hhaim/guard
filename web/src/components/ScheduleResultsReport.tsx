@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { ZonesDoc } from "../lib/zones";
+import { countEnabledSlots, type ZonesDoc } from "../lib/zones";
 import { buildSoldierDisplay, type SoldierDisplay } from "../lib/soldierDisplay";
 import { docFromServer, type Soldier } from "../lib/soldiers";
 import {
@@ -394,7 +394,7 @@ export function ScheduleResultsReport({
   const [showJson, setShowJson] = useState(false);
 
   const report = useMemo(() => {
-    const slotsPerBlock = zones.slots.length;
+    const slotsPerBlock = countEnabledSlots(zones);
     const zone = buildZoneReportView(zones, slotsPerBlock);
     if (shiftHours > 0) {
       zone.shiftHours = shiftHours;

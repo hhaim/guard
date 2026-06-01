@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Braces, Plus, Save, Trash2 } from "lucide-react";
+import { Braces, Plus, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { apiGet } from "../api";
 import { DecimalNumField } from "./DecimalNumField";
@@ -14,6 +14,7 @@ import {
   normalizeShiftHours,
   zoneLocCountForType,
   slotCountForLocation,
+  countEnabledSlots,
   slotDisplayLabel,
   validateShiftHours,
   validateSlotTypePattern,
@@ -56,7 +57,7 @@ type CfgResp = { key: string; value: unknown; version: number; updated_at: strin
 
 export function SlotsView() {
   const { openPanel } = useDevPanel();
-  const { slotsQ, doc, dirty, loadError, markDirty, replaceDoc, resetToServer, validationError, saveM } =
+  const { slotsQ, doc, dirty, loadError, markDirty, replaceDoc, resetToServer, validationError, saveState, saveError } =
     useZonesDocument();
 
   const typesQ = useQuery({
@@ -139,17 +140,15 @@ export function SlotsView() {
   const canDeleteLoc = (id: string) => slotCountForLocation(doc, id) === 0;
 
   const slotsStatusLabel =
-    saveM.isPending
+    saveState === "pending"
       ? "Saving slots…"
-      : saveM.isSuccess && !dirty
+      : saveState === "saved" && !dirty
         ? "Slots saved"
-        : saveM.isError
+        : saveState === "error"
           ? "Slots save failed"
           : dirty
             ? "Slots pending save…"
             : "";
-
-  const saveDisabled = !!jsonError || slotsQ.isLoading || !dirty;
 
   return (
     <>
@@ -158,6 +157,7 @@ export function SlotsView() {
           <h2 className="contacts-title">Slots & zones</h2>
           <p className="contacts-count">
             {doc.slots_types.length} types · {doc.zone_loc.length} zone locs · {doc.slots.length} slots
+            {doc.slots.length > 0 ? ` (${countEnabledSlots(doc)} active)` : ""}
             {slotsStatusLabel ? ` · ${slotsStatusLabel}` : ""}
           </p>
         </div>
@@ -175,9 +175,14 @@ export function SlotsView() {
 
       <ZonesYamlToolbar disabled={slotsQ.isLoading} doc={doc} onImport={(d) => replaceDoc(d)} />
 
-      <p className="contacts-hint contacts-list-hint">Double-click a row to edit, or tap the › button</p>
+      <p className="contacts-hint contacts-list-hint">
+        Double-click a row to edit, or tap the › button. Edits save automatically.
+      </p>
 
       {loadError && <div className="err glass-card">{loadError}</div>}
+      {(saveState === "error" || jsonError) && (
+        <p className="msg-err">{saveState === "error" ? saveError : jsonError}</p>
+      )}
 
       <div className="settings-row glass-card" style={{ marginBottom: "1rem", padding: "0.65rem 1.1rem" }}>
         <label className="settings-row-label">
@@ -200,118 +205,91 @@ export function SlotsView() {
         </select>
       </div>
 
-      <div className="btn-row">
-        <button
-          type="button"
-          className="btn btn-filled"
-          disabled={saveDisabled || saveM.isPending}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            saveM.mutate();
+      <details className="soldiers-section-accordion" open>
+        <summary>Slot types</summary>
+        <SectionAddButton
+          label="slot type"
+          onAdd={() =>
+            setStEdit({ mode: "new", index: doc.slots_types.length, draft: emptySlotType(doc.slots_types.length) })
+          }
+        />
+        <EntityTable
+          headers={["Name", "ID", "Pattern", ""]}
+          empty="Add a slot type to begin"
+          rows={doc.slots_types.map((st, index) => ({
+            key: st.id,
+            cells: [st.name, st.id, patternLabel(st.pattern)],
+            index,
+            inUse: !canDeleteType(st.id),
+            inUseMsg: `Used by ${zoneLocCountForType(doc, st.id)} zone location(s)`,
+          }))}
+          onEdit={(index) => setStEdit({ mode: "edit", index, draft: { ...doc.slots_types[index] } })}
+        />
+      </details>
+
+      <details className="soldiers-section-accordion" open>
+        <summary>Zone locations</summary>
+        <SectionAddButton
+          label="zone location"
+          onAdd={() => {
+            const typeId = doc.slots_types[0]?.id ?? "";
+            if (!typeId) {
+              alert("Add a slot type first");
+              return;
+            }
+            setLocEdit({
+              mode: "new",
+              index: doc.zone_loc.length,
+              draft: emptyZoneLoc(doc.zone_loc.length, typeId),
+            });
           }}
-        >
-          <Save size={18} strokeWidth={2} />
-          Save slots
-        </button>
-        {dirty && (
-          <button
-            type="button"
-            className="btn btn-plain"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              resetToServer();
-            }}
-          >
-            Discard
-          </button>
-        )}
-      </div>
-      {(saveM.isError || jsonError) && (
-        <p className="msg-err">{saveM.isError ? (saveM.error as Error).message : jsonError}</p>
-      )}
-      {saveM.isSuccess && !dirty && <p className="msg-ok">Slots saved.</p>}
+          disabled={doc.slots_types.length === 0}
+        />
+        <EntityTable
+          headers={["Name", "Short", "ID", "Type", ""]}
+          empty={doc.slots_types.length === 0 ? "Add slot types first" : "Add a zone location"}
+          rows={doc.zone_loc.map((loc, index) => ({
+            key: loc.id,
+            cells: [zoneLocDisplayLabel(loc), loc.name, loc.id, loc.type],
+            index,
+            inUse: !canDeleteLoc(loc.id),
+            inUseMsg: `Used by ${slotCountForLocation(doc, loc.id)} slot(s)`,
+          }))}
+          onEdit={(index) => setLocEdit({ mode: "edit", index, draft: { ...doc.zone_loc[index] } })}
+        />
+      </details>
 
-      {/* Slot types */}
-      <SectionHeader
-        title="Slot types"
-        hint="Define patterns first"
-        onAdd={() =>
-          setStEdit({ mode: "new", index: doc.slots_types.length, draft: emptySlotType(doc.slots_types.length) })
-        }
-      />
-      <EntityTable
-        headers={["Name", "ID", "Pattern", ""]}
-        empty="Add a slot type to begin"
-        rows={doc.slots_types.map((st, index) => ({
-          key: st.id,
-          cells: [st.name, st.id, patternLabel(st.pattern)],
-          index,
-          inUse: !canDeleteType(st.id),
-          inUseMsg: `Used by ${zoneLocCountForType(doc, st.id)} zone location(s)`,
-        }))}
-        onEdit={(index) => setStEdit({ mode: "edit", index, draft: { ...doc.slots_types[index] } })}
-      />
-
-      {/* Zone locations */}
-      <SectionHeader
-        title="Zone locations"
-        hint="Each location references a slot type"
-        onAdd={() => {
-          const typeId = doc.slots_types[0]?.id ?? "";
-          if (!typeId) {
-            alert("Add a slot type first");
-            return;
-          }
-          setLocEdit({
-            mode: "new",
-            index: doc.zone_loc.length,
-            draft: emptyZoneLoc(doc.zone_loc.length, typeId),
-          });
-        }}
-        disabled={doc.slots_types.length === 0}
-      />
-      <EntityTable
-        headers={["Name", "Short", "ID", "Type", ""]}
-        empty={doc.slots_types.length === 0 ? "Add slot types first" : "Add a zone location"}
-        rows={doc.zone_loc.map((loc, index) => ({
-          key: loc.id,
-          cells: [zoneLocDisplayLabel(loc), loc.name, loc.id, loc.type],
-          index,
-          inUse: !canDeleteLoc(loc.id),
-          inUseMsg: `Used by ${slotCountForLocation(doc, loc.id)} slot(s)`,
-        }))}
-        onEdit={(index) => setLocEdit({ mode: "edit", index, draft: { ...doc.zone_loc[index] } })}
-      />
-
-      {/* Slots */}
-      <SectionHeader
-        title="Slots"
-        hint="Concurrent slots per block"
-        onAdd={() => {
-          const locId = doc.zone_loc[0]?.id ?? "";
-          if (!locId) {
-            alert("Add a location first");
-            return;
-          }
-          setSlotEdit({
-            mode: "new",
-            index: doc.slots.length,
-            draft: emptySlot(locId, doc.slots.length),
-          });
-        }}
-        disabled={doc.zone_loc.length === 0}
-      />
-      <EntityTable
-        headers={["Name", "Short", "Zone loc", ""]}
-        empty={doc.zone_loc.length === 0 ? "Add zone locations first" : "Add a slot"}
-        rows={doc.slots.map((sl, index) => ({
-          key: `${sl.location_id}-${sl.name}-${index}`,
-          cells: [slotDisplayLabel(sl), sl.name, sl.location_id],
-          index,
-          inUse: false,
-        }))}
-        onEdit={(index) => setSlotEdit({ mode: "edit", index, draft: { ...doc.slots[index] } })}
-      />
+      <details className="soldiers-section-accordion" open>
+        <summary>Slots</summary>
+        <SectionAddButton
+          label="slot"
+          onAdd={() => {
+            const locId = doc.zone_loc[0]?.id ?? "";
+            if (!locId) {
+              alert("Add a location first");
+              return;
+            }
+            setSlotEdit({
+              mode: "new",
+              index: doc.slots.length,
+              draft: emptySlot(locId, doc.slots.length),
+            });
+          }}
+          disabled={doc.zone_loc.length === 0}
+        />
+        <EntityTable
+          headers={["Name", "Short", "Zone loc", "Status", ""]}
+          empty={doc.zone_loc.length === 0 ? "Add zone locations first" : "Add a slot"}
+          rows={doc.slots.map((sl, index) => ({
+            key: `${sl.location_id}-${sl.name}-${index}`,
+            cells: [slotDisplayLabel(sl), sl.name, sl.location_id, sl.disabled ? "Off" : "Active"],
+            index,
+            inUse: false,
+            rowClassName: sl.disabled ? "slots-row-disabled" : undefined,
+          }))}
+          onEdit={(index) => setSlotEdit({ mode: "edit", index, draft: { ...doc.slots[index] } })}
+        />
+      </details>
 
       {slotsQ.data && (
         <p className="meta-line">
@@ -413,27 +391,21 @@ export function SlotsView() {
   );
 }
 
-function SectionHeader({
-  title,
-  hint,
+function SectionAddButton({
+  label,
   onAdd,
   disabled,
 }: {
-  title: string;
-  hint: string;
+  label: string;
   onAdd: () => void;
   disabled?: boolean;
 }) {
   return (
-    <div className="section-header-row">
-      <div>
-        <h3 className="section-title">{title}</h3>
-        <p className="section-hint">{hint}</p>
-      </div>
+    <div className="section-add-row">
       <button
         type="button"
         className="contacts-add-btn"
-        aria-label={`Add ${title}`}
+        aria-label={`Add ${label}`}
         disabled={disabled}
         onPointerDown={(e) => {
           e.preventDefault();
@@ -460,6 +432,7 @@ function EntityTable({
     index: number;
     inUse?: boolean;
     inUseMsg?: string;
+    rowClassName?: string;
   }[];
   onEdit: (index: number) => void;
 }) {
@@ -480,9 +453,24 @@ function EntityTable({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.key} className="contacts-row" onDoubleClick={() => onEdit(row.index)}>
+              <tr
+                key={row.key}
+                className={["contacts-row", row.rowClassName].filter(Boolean).join(" ")}
+                onDoubleClick={() => onEdit(row.index)}
+              >
                 {row.cells.map((c, i) => (
-                  <td key={i} className={i === 0 ? "contacts-name" : i === 1 ? "contacts-id" : ""}>
+                  <td
+                    key={i}
+                    className={
+                      i === 0
+                        ? "contacts-name"
+                        : i === 1
+                          ? "contacts-id"
+                          : headers[i] === "Status"
+                            ? "slots-status-cell"
+                            : ""
+                    }
+                  >
                     {i === 1 ? <code>{c}</code> : c}
                   </td>
                 ))}
@@ -575,6 +563,16 @@ function SlotTypeSheet({
             onChange({
               ...d,
               disabled_weekdays: disabled_weekdays.length > 0 ? disabled_weekdays : undefined,
+            })
+          }
+        />
+        <ExcludedSoldierTypesField
+          soldierTypes={soldierTypes}
+          exclude={d.exclude ?? []}
+          onChange={(exclude) =>
+            onChange({
+              ...d,
+              exclude: exclude.length > 0 ? exclude : undefined,
             })
           }
         />
@@ -748,8 +746,98 @@ function SlotSheet({
             />
           </>
         )}
+        <div className="settings-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+          <label className="slot-weekday-check">
+            <input
+              type="checkbox"
+              checked={!!d.disabled}
+              onChange={(e) =>
+                onChange({
+                  ...d,
+                  disabled: e.target.checked ? true : undefined,
+                })
+              }
+            />
+            <span>
+              <span className="title">Disabled</span>
+              <span className="hint"> — excluded from scheduling (kept in config for testing)</span>
+            </span>
+          </label>
+        </div>
       </section>
     </ZoneEditSheet>
+  );
+}
+
+function ExcludedSoldierTypesField({
+  soldierTypes,
+  exclude,
+  onChange,
+}: {
+  soldierTypes: SoldierType[];
+  exclude: string[];
+  onChange: (codes: string[]) => void;
+}) {
+  const catalogCodes = new Set(soldierTypes.map((t) => t.code));
+  const orphanCodes = exclude.filter((c) => !catalogCodes.has(c));
+  const toggle = (code: string) => {
+    const set = new Set(exclude);
+    if (set.has(code)) set.delete(code);
+    else set.add(code);
+    const ordered = [
+      ...soldierTypes.map((t) => t.code).filter((c) => set.has(c)),
+      ...[...set].filter((c) => !catalogCodes.has(c)),
+    ];
+    onChange(ordered);
+  };
+  return (
+    <div className="settings-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+      <span className="settings-row-label title">Excluded soldier types</span>
+      <span className="hint">
+        Checked types cannot fill slots using this slot type (requires roster with type_code).
+      </span>
+      {soldierTypes.length === 0 ? (
+        <>
+          <span className="hint">Configure soldier types first to pick from the catalog.</span>
+          {orphanCodes.length > 0 ? (
+            <div className="slot-weekday-grid">
+              {orphanCodes.map((code) => (
+                <label key={`orphan-${code}`} className="slot-weekday-check">
+                  <input type="checkbox" checked disabled />
+                  <span>
+                    {code} <span className="hint">(not in catalog)</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="slot-weekday-grid">
+          {soldierTypes.map((t) => (
+            <label key={t.code} className="slot-weekday-check">
+              <input
+                type="checkbox"
+                checked={exclude.includes(t.code)}
+                onChange={() => toggle(t.code)}
+              />
+              <span>
+                {t.code}
+                {t.label ? ` — ${t.label}` : ""}
+              </span>
+            </label>
+          ))}
+          {orphanCodes.map((code) => (
+            <label key={`orphan-${code}`} className="slot-weekday-check">
+              <input type="checkbox" checked disabled />
+              <span>
+                {code} <span className="hint">(not in catalog)</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

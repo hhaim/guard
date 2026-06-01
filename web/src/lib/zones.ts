@@ -1,5 +1,12 @@
 import YAML from "yaml";
 
+/** PyYAML treats unquoted `22:00` as sexagesimal int 1320; quote HH:MM on export. */
+const YAML_TIME_FIELD_RE = /^(\s*(?:start|end|from_hour|to_hour):\s+)(\d{1,2}:\d{2})\s*$/gm;
+
+function quoteYamlTimeFields(yaml: string): string {
+  return yaml.replace(YAML_TIME_FIELD_RE, '$1"$2"');
+}
+
 export type SlotTypePattern = "rotating" | "full_day" | "full_day_team" | "windowed_slots";
 
 export const WEEKDAY_NAMES = [
@@ -74,6 +81,8 @@ export type SlotType = {
   pattern: SlotTypePattern;
   full_day_shift?: number;
   rest_after_hours?: number;
+  /** Roster type codes blocked from slots using this slots_types id (requires roster). */
+  exclude?: string[];
   disabled_weekdays?: WeekdayName[];
   config?: Record<string, unknown>;
 };
@@ -201,6 +210,8 @@ export type ZoneSlot = {
   name: string;
   full_name: string;
   soldiers_required?: number;
+  /** When true, slot is kept in config but excluded from scheduling. */
+  disabled?: boolean;
 };
 
 export type TimeBand = {
@@ -448,6 +459,10 @@ function parseSlotType(raw: Record<string, unknown>): SlotType {
   if (raw.rest_after_hours != null) st.rest_after_hours = asNum(raw.rest_after_hours, 6);
   const dw = parseDisabledWeekdays(raw.disabled_weekdays);
   if (dw) st.disabled_weekdays = dw;
+  if (Array.isArray(raw.exclude)) {
+    const codes = raw.exclude.map((x) => String(x).trim()).filter((c) => c.length > 0);
+    if (codes.length > 0) st.exclude = codes;
+  }
   if (raw.config != null && typeof raw.config === "object" && !Array.isArray(raw.config)) {
     st.config = raw.config as Record<string, unknown>;
   }
@@ -497,11 +512,13 @@ export function parseZonesYaml(text: string): ZonesDoc {
         const full_name = asStr(m.full_name) || name;
         const soldiers_required =
           m.soldiers_required != null ? Math.max(1, Math.round(asNum(m.soldiers_required, 1))) : undefined;
+        const disabled = m.disabled === true;
         return {
           location_id: asStr(m.location_id),
           name,
           full_name,
           ...(soldiers_required != null && soldiers_required !== 1 ? { soldiers_required } : {}),
+          ...(disabled ? { disabled: true } : {}),
         };
       })
       .filter((s) => s.location_id !== ""),
@@ -532,6 +549,7 @@ function slotTypeToYaml(st: SlotType): Record<string, unknown> {
   if (st.full_day_shift != null) row.full_day_shift = st.full_day_shift;
   if (st.rest_after_hours != null) row.rest_after_hours = st.rest_after_hours;
   if (st.disabled_weekdays?.length) row.disabled_weekdays = [...st.disabled_weekdays];
+  if (st.exclude?.length) row.exclude = [...st.exclude];
   if (st.pattern === "full_day") {
     row.config = fullDayConfigToRecord(parseFullDayConfig(st.config));
   } else if (st.pattern === "full_day_team") {
@@ -552,6 +570,9 @@ function slotToYaml(s: ZoneSlot): Record<string, unknown> {
   }
   if (s.soldiers_required != null && s.soldiers_required > 1) {
     row.soldiers_required = s.soldiers_required;
+  }
+  if (s.disabled) {
+    row.disabled = true;
   }
   return row;
 }
@@ -587,7 +608,7 @@ export function zonesDocToYamlObject(doc: ZonesDoc): Record<string, unknown> {
 }
 
 export function stringifyZonesYaml(doc: ZonesDoc): string {
-  return YAML.stringify(zonesDocToYamlObject(doc), { lineWidth: 0 });
+  return quoteYamlTimeFields(YAML.stringify(zonesDocToYamlObject(doc), { lineWidth: 0 }));
 }
 
 export function cfgValueToYamlText(value: unknown): string {
@@ -628,6 +649,14 @@ export function slotCountForLocation(doc: ZonesDoc, locationId: string): number 
   return doc.slots.filter((s) => s.location_id === locationId).length;
 }
 
+export function enabledSlots(doc: ZonesDoc): ZoneSlot[] {
+  return doc.slots.filter((s) => !s.disabled);
+}
+
+export function countEnabledSlots(doc: ZonesDoc): number {
+  return enabledSlots(doc).length;
+}
+
 export function validateZonesDoc(doc: ZonesDoc): string | null {
   try {
     validateShiftHours(doc.shift_hours);
@@ -656,6 +685,9 @@ export function validateZonesDoc(doc: ZonesDoc): string | null {
       return `Slot ${sl.name}: soldiers_required must be >= 1`;
     }
   }
+  if (doc.slots.length > 0 && countEnabledSlots(doc) < 1) {
+    return "At least one slot must be enabled (not disabled)";
+  }
   const tzIds = new Set<string>();
   for (const tz of doc.time_zones) {
     if (!tz.id) return "Time zone missing id";
@@ -665,6 +697,15 @@ export function validateZonesDoc(doc: ZonesDoc): string | null {
   for (const st of doc.slots_types) {
     const patErr = validateSlotTypePattern(st);
     if (patErr) return patErr;
+    if (st.exclude?.length) {
+      const seen = new Set<string>();
+      for (const code of st.exclude) {
+        if (!code.trim()) return `Slot type ${st.id}: empty exclude code`;
+        if (code === "*") return `Slot type ${st.id}: exclude may not contain '*'`;
+        if (seen.has(code)) return `Slot type ${st.id}: duplicate exclude code ${code}`;
+        seen.add(code);
+      }
+    }
   }
   return null;
 }

@@ -381,9 +381,14 @@ func rotatingEligibleForMask(
 	avail AvailabilityChecker,
 	planDayStartHour int,
 	sh float64,
+	typeCodes []string,
+	typeExclude map[string]struct{},
 ) []*Soldier {
 	var out []*Soldier
 	for _, s := range soldiers {
+		if soldierExcludedByType(typeCodes, s.Idx, typeExclude) {
+			continue
+		}
 		if soldierMustRestThisBlock(s.Idx, day, b, blocksPd, kRest) {
 			continue
 		}
@@ -501,13 +506,15 @@ func dfsRotatingOnlyMask(
 	avail AvailabilityChecker,
 	planDayStartHour int,
 	sh float64,
+	typeCodes []string,
+	typeExclude map[string]struct{},
 	nodes *int,
 ) bool {
 	if L >= days*blocksPd {
 		return true
 	}
 	day, b := L/blocksPd, L%blocksPd
-	cands := rotatingEligibleForMask(soldiers, draftRot, busy, day, b, blocksPd, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh)
+	cands := rotatingEligibleForMask(soldiers, draftRot, busy, day, b, blocksPd, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh, typeCodes, typeExclude)
 	if len(cands) < nRot {
 		return false
 	}
@@ -530,7 +537,7 @@ func dfsRotatingOnlyMask(
 			}
 		}
 		if !bad {
-			if dfsRotatingOnlyMask(draftRot, busy, soldiers, L+1, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh, nodes) {
+			if dfsRotatingOnlyMask(draftRot, busy, soldiers, L+1, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh, typeCodes, typeExclude, nodes) {
 				return true
 			}
 		}
@@ -633,7 +640,7 @@ func RunSimulationAllRotating(
 		rotatingDfsTried = true
 		dr := new3DBool(days, numSoldiers, B)
 		nodes := 0
-		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, B, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, nil, planDayStartHour, sh, &nodes) {
+		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, B, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, nil, planDayStartHour, sh, nil, nil, &nodes) {
 			copy3D(busyRot, dr)
 			dfsOk = true
 			for day := 0; day < days; day++ {

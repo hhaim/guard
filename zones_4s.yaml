@@ -2,6 +2,7 @@
 #
 # - shift_hours: hours per calendar block (must tile 24 h); set in this file or override with --shift-hours.
 # - zone_loc reference slots_types by id (pattern: rotating | full_day | windowed_slots).
+# - exclude: [type codes] on slots_types blocks roster soldiers with those type_code values.
 # - Fill order in sim: full_day → windowed_slots → rotating.
 
 schema_version: 2

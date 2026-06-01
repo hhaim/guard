@@ -132,10 +132,14 @@ func RunSimulationZoneConfig(
 			clear2D(deltasTime)
 			clear1D(deltasG)
 			timeMid := timeCategoryForHour((sh0+sh1)/2, simZ)
+			excl := zone.slotTypeExclude(locI)
 			poolFn := func(assigned []*Soldier) []*Soldier {
 				var pool []*Soldier
 				for _, s := range soldiers {
 					if containsSoldier(assigned, s) {
+						continue
+					}
+					if soldierExcludedByType(typeCodes, s.Idx, excl) {
 						continue
 					}
 					if !anyBusySpan(busy, s.Idx, L0, span, B, days) &&
@@ -212,8 +216,12 @@ func RunSimulationZoneConfig(
 					continue
 				}
 				L0w, spanw := linearBusySpanDutyHoursPlusRest(day, B, sh, h0, h1x, true, restH, planDayStartHour)
+				excl := zone.slotTypeExclude(locI)
 				var pool []*Soldier
 				for _, s := range soldiers {
+					if soldierExcludedByType(typeCodes, s.Idx, excl) {
+						continue
+					}
 					if !anyBusySpan(busy, s.Idx, L0w, spanw, B, days) &&
 						soldierAvail(avail, s.Idx, day, func() bool {
 							return avail.AvailDutyWallHours(s.Idx, day, h0, h1x)
@@ -272,10 +280,14 @@ func RunSimulationZoneConfig(
 			clear2D(deltasLoc)
 			clear2D(deltasTime)
 			clear1D(deltasG)
+			excl := zone.slotTypeExclude(locI)
 			poolFn := func(assigned []*Soldier) []*Soldier {
 				var pool []*Soldier
 				for _, s := range soldiers {
 					if containsSoldier(assigned, s) {
+						continue
+					}
+					if soldierExcludedByType(typeCodes, s.Idx, excl) {
 						continue
 					}
 					if !anyBusySpan(busy, s.Idx, L0, span, B, days) &&
@@ -327,12 +339,13 @@ func RunSimulationZoneConfig(
 	}
 	dfsRotOk := false
 	rotatingDfsTried := false
-	if xCool > 0 && len(rotIdx) > 0 &&
+	dfsExcl, dfsMayRun := zone.rotatingDfsTypeExclude(rotIdx)
+	if dfsMayRun && xCool > 0 && len(rotIdx) > 0 &&
 		nChooseK(numSoldiers, len(rotIdx)) <= maxRotatingDfsCombinations {
 		rotatingDfsTried = true
 		dr := new3DBool(days, numSoldiers, blocksPd)
 		nodes := 0
-		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, blocksPd, len(rotIdx), kRestMask, maxConsecutiveDutyBlocks, xCool, avail, planDayStartHour, sh, &nodes) {
+		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, blocksPd, len(rotIdx), kRestMask, maxConsecutiveDutyBlocks, xCool, avail, planDayStartHour, sh, typeCodes, dfsExcl, &nodes) {
 			copy3D(busyRot, dr)
 			dfsRotOk = true
 			for day := 0; day < days; day++ {
@@ -363,12 +376,17 @@ func RunSimulationZoneConfig(
 						lw := zone.Locations[locI].Weight
 						weight := sh * lw * tw
 						nReq := zone.Slots[sidx].SoldiersRequired
+						excl := zone.slotTypeExclude(locI)
 						poolFn := func(already []*Soldier) []*Soldier {
 							var pool []*Soldier
 							for _, s := range inBlock {
-								if !containsSoldier(already, s) && !containsSoldier(assigned, s) {
-									pool = append(pool, s)
+								if containsSoldier(already, s) || containsSoldier(assigned, s) {
+									continue
 								}
+								if soldierExcludedByType(typeCodes, s.Idx, excl) {
+									continue
+								}
+								pool = append(pool, s)
 							}
 							return pool
 						}
@@ -426,10 +444,14 @@ func RunSimulationZoneConfig(
 					lw := zone.Locations[locI].Weight
 					weight := sh * lw * tw
 					nReq := zone.Slots[sidx].SoldiersRequired
+					excl := zone.slotTypeExclude(locI)
 					poolFn := func(already []*Soldier) []*Soldier {
 						var base []*Soldier
 						for _, s := range soldiers {
 							if containsSoldier(assigned, s) || containsSoldier(already, s) {
+								continue
+							}
+							if soldierExcludedByType(typeCodes, s.Idx, excl) {
 								continue
 							}
 							if soldierMustRestThisBlock(s.Idx, day, b, blocksPd, kRestMask) {

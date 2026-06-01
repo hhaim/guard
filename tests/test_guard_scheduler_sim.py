@@ -255,6 +255,18 @@ def test_parse_inclusive_full_day_hours() -> None:
     assert g._parse_inclusive_full_day_hours("06:00", "22:00") == (6, 22)
 
 
+def test_parse_inclusive_full_day_hours_sexagesimal_yaml() -> None:
+    # PyYAML parses unquoted 22:00 as int 1320 (sexagesimal).
+    assert g._parse_inclusive_full_day_hours(360, 1320) == (6, 22)
+    assert g._parse_inclusive_full_day_hours("09:00", 540) == (9, 9)
+
+
+def test_parse_time_band_bound_sexagesimal_yaml() -> None:
+    assert g._parse_time_band_bound(1320) == 1320
+    assert g._parse_time_band_bound(1020) == 1020
+    assert g._parse_time_band_bound(17) == 17 * 60
+
+
 def test_parse_inclusive_full_day_rejects_24_start() -> None:
     with pytest.raises(ValueError, match="0..23"):
         g._parse_inclusive_full_day_hours("24:00", "22:00")
@@ -1423,3 +1435,83 @@ def test_rotating_dfs_spreads_extra_soldiers_zones_s1() -> None:
     assert soldiers[12].total_raw_guard_hours() > 0.0
     assert soldiers[13].total_raw_guard_hours() > 0.0
     assert soldiers[14].total_raw_guard_hours() > 0.0
+
+
+def test_load_zone_slots_types_exclude(tmp_path: Path) -> None:
+    cfg = {
+        "schema_version": 2,
+        "shift_hours": 4,
+        "slots_types": [
+            {"id": "t_rot", "name": "R", "pattern": "rotating", "exclude": ["A", "B"]},
+        ],
+        "zone_loc": [{"id": "loc_a", "type": "t_rot", "name": "A", "weight": 1.0}],
+        "slots": [{"location_id": "loc_a"}],
+        "time_zones": [
+            {"id": "z0", "name": "All", "weight": 1.0, "from_hour": 0, "to_hour": "24:00"},
+        ],
+    }
+    p = tmp_path / "zones_exclude.yaml"
+    p.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    zone = g.load_zone_config(p, slots_per_block=1)
+    assert zone.type_excludes["t_rot"] == frozenset({"A", "B"})
+
+
+def test_load_zone_rejects_bad_exclude(tmp_path: Path) -> None:
+    cfg = {
+        "schema_version": 2,
+        "shift_hours": 4,
+        "slots_types": [{"id": "t", "name": "T", "pattern": "rotating", "exclude": ["*"]}],
+        "zone_loc": [{"id": "l", "type": "t", "name": "L", "weight": 1.0}],
+        "slots": [{"location_id": "l"}],
+        "time_zones": [
+            {"id": "z0", "name": "All", "weight": 1.0, "from_hour": 0, "to_hour": "24:00"},
+        ],
+    }
+    p = tmp_path / "zones_bad_exclude.yaml"
+    p.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    with pytest.raises(ValueError, match="exclude may not contain"):
+        g.load_zone_config(p, slots_per_block=1)
+
+
+def test_run_simulation_rotating_respects_exclude(tmp_path: Path) -> None:
+    """Soldiers with excluded type codes must not fill rotating slots when roster is provided."""
+    cfg = {
+        "schema_version": 2,
+        "shift_hours": 4,
+        "slots_types": [
+            {"id": "t_rot", "name": "R", "pattern": "rotating", "exclude": ["A", "B"]},
+        ],
+        "zone_loc": [
+            {"id": "loc_a", "type": "t_rot", "name": "Gate", "weight": 1.0},
+            {"id": "loc_b", "type": "t_rot", "name": "Tower", "weight": 1.0},
+        ],
+        "slots": [{"location_id": "loc_a"}, {"location_id": "loc_b"}],
+        "time_zones": [
+            {"id": "z0", "name": "Day", "weight": 1.0, "from_hour": 0, "to_hour": "12:00"},
+            {"id": "z1", "name": "Night", "weight": 1.0, "from_hour": "12:00", "to_hour": "24:00"},
+        ],
+    }
+    zp = tmp_path / "zones_exclude_run.yaml"
+    zp.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    zone = g.load_zone_config(zp, slots_per_block=2)
+    type_codes = ["A", "B", "C", "D"] * 8  # 32 soldiers
+    rng = random.Random(42)
+    pack = g.run_simulation(
+        num_soldiers=len(type_codes),
+        slots_per_block=2,
+        days=2,
+        zone=zone,
+        block_hours=float(zone.shift_hours),
+        rng=rng,
+        min_consecutive_free_hours=8.0,
+        max_consecutive_duty_blocks=2,
+        type_codes=type_codes,
+    )
+    assignments = pack[3]
+    excluded_idxs = {i for i, tc in enumerate(type_codes) if tc in ("A", "B")}
+    for a in assignments:
+        if (a.kind or "rotating") != "rotating":
+            continue
+        assert a.soldier_idx not in excluded_idxs, (
+            f"soldier S{a.soldier_idx} type {type_codes[a.soldier_idx]!r} on rotating slot"
+        )

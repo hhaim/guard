@@ -13,6 +13,7 @@ import {
   weekdayLongName,
 } from "./planDay";
 import {
+  enabledSlots,
   parseFullDayConfig,
   parseFullDayTeamConfig,
   parseTimeBandBound,
@@ -277,7 +278,9 @@ export function soldierLabel(
   return `S${a.soldier_idx}`;
 }
 
-export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneReportView {
+export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock?: number): ZoneReportView {
+  const activeSlots = enabledSlots(doc);
+  const effectiveSlotsPerBlock = slotsPerBlock ?? activeSlots.length;
   const locById = new Map(doc.zone_loc.map((z) => [z.id, z]));
   const patternByType = new Map(doc.slots_types.map((st) => [st.id, st.pattern]));
   const weekdayNameToIndex: Record<string, number> = {
@@ -323,8 +326,9 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneR
   const slotLabels: string[] = [];
   const slotLocIndices: number[] = [];
   const slotTypeIds: string[] = [];
-  for (let j = 0; j < slotsPerBlock; j++) {
-    const slot = doc.slots[j];
+  const slotsForReport = activeSlots.slice(0, effectiveSlotsPerBlock);
+  for (let j = 0; j < slotsForReport.length; j++) {
+    const slot = slotsForReport[j];
     if (!slot) {
       slotLabels.push(`Slot ${j + 1}`);
       slotLocIndices.push(0);
@@ -342,7 +346,7 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneR
   return {
     shiftHours: doc.shift_hours,
     blocksPerDay: calendarBlocksPerDay(doc.shift_hours),
-    slotsPerBlock,
+    slotsPerBlock: slotsForReport.length,
     locNames,
     locIds,
     locWeights,

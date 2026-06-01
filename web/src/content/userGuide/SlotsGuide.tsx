@@ -78,6 +78,12 @@ export function SlotsGuide() {
         05:00→next 05:00 uses the first day&apos;s weekday, not the calendar date after midnight.
       </p>
       <p>
+        <strong>Disabled slot:</strong> on each slot row, check <strong>Disabled</strong> to set{" "}
+        <code>disabled: true</code>. The slot stays in the config (saved to the database) but is excluded from
+        scheduling and plan generation. Disabled rows appear muted in the Slots table. At least one slot must remain
+        active.
+      </p>
+      <p>
         <strong>Soldiers required:</strong> on each slot row for <code>rotating</code> only.{" "}
         <code>full_day</code>, <code>full_day_team</code>, and <code>windowed_slots</code> use <code>headcount</code> on
         the slot type. Default <code>1</code>.
@@ -109,12 +115,11 @@ export function SlotsGuide() {
       </p>
       <p className="contacts-hint">
         <strong>Wall-clock times</strong> for full day and windowed patterns must be whole hours (<code>HH:00</code>;
-        <code>24:00</code> allowed for window ends). The Slots tab JSON editor and slot-type form check this before save
+        <code>24:00</code> allowed for window ends). The Slots tab JSON editor and slot-type form validate before autosave
         so simulation and plan generation do not fail.
       </p>
       <p className="contacts-hint">
-        Use <strong>Save slots</strong> on the Slots tab and <strong>Save time zones</strong> on the Time zones tab before
-        generating a plan.
+        Slots and Time zones edits save automatically to the same zones document (<code>PUT /api/cfg/slots</code>).
       </p>
     </>
   );

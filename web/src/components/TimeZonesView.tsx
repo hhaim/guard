@@ -1,4 +1,4 @@
-import { Braces, Plus, Save } from "lucide-react";
+import { Braces, Plus } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { DecimalNumField } from "./DecimalNumField";
 import { useDevPanel } from "../context/AppStateContext";
@@ -17,7 +17,7 @@ import { ZonesYamlToolbar } from "./ZonesYamlToolbar";
 
 export function TimeZonesView() {
   const { openPanel } = useDevPanel();
-  const { slotsQ, doc, dirty, loadError, markDirty, replaceDoc, resetToServer, validationError, saveM } =
+  const { slotsQ, doc, dirty, loadError, markDirty, replaceDoc, resetToServer, validationError, saveState, saveError } =
     useZonesDocument();
 
   const [jsonOverride, setJsonOverride] = useState<string | null>(null);
@@ -80,17 +80,15 @@ export function TimeZonesView() {
   }
 
   const tzStatusLabel =
-    saveM.isPending
+    saveState === "pending"
       ? "Saving time zones…"
-      : saveM.isSuccess && !dirty
+      : saveState === "saved" && !dirty
         ? "Time zones saved"
-        : saveM.isError
+        : saveState === "error"
           ? "Time zones save failed"
           : dirty
             ? "Time zones pending save…"
             : "";
-
-  const saveDisabled = !!jsonError || slotsQ.isLoading || !dirty;
 
   return (
     <>
@@ -131,41 +129,15 @@ export function TimeZonesView() {
 
       <ZonesYamlToolbar disabled={slotsQ.isLoading} doc={doc} onImport={(d) => replaceDoc(d)} />
 
-      <div className="btn-row">
-        <button
-          type="button"
-          className="btn btn-filled"
-          disabled={saveDisabled || saveM.isPending}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            saveM.mutate();
-          }}
-        >
-          <Save size={18} strokeWidth={2} />
-          Save time zones
-        </button>
-        {dirty && (
-          <button
-            type="button"
-            className="btn btn-plain"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              resetToServer();
-            }}
-          >
-            Discard
-          </button>
-        )}
-      </div>
-      {(saveM.isError || jsonError) && (
-        <p className="msg-err">{saveM.isError ? (saveM.error as Error).message : jsonError}</p>
+      {(saveState === "error" || jsonError) && (
+        <p className="msg-err">{saveState === "error" ? saveError : jsonError}</p>
       )}
-      {saveM.isSuccess && !dirty && <p className="msg-ok">Time zones saved.</p>}
 
       {loadError && <div className="err glass-card">{loadError}</div>}
 
       <p className="contacts-hint" style={{ marginTop: 0 }}>
         Piecewise fairness weights by hour (same as <code>time_zones</code> in zones YAML). Stored with slots config.
+        Edits save automatically.
       </p>
 
       <section className="glass-card contacts-list-card">

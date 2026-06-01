@@ -19,6 +19,29 @@ func TestParseTimeBandBound(t *testing.T) {
 	if err != nil || m != 1440 {
 		t.Fatalf("int 24: got %d err=%v", m, err)
 	}
+	m, err = parseTimeBandBound(1320)
+	if err != nil || m != 1320 {
+		t.Fatalf("sexagesimal 1320 (22:00): got %d err=%v", m, err)
+	}
+	m, err = parseTimeBandBound(1020)
+	if err != nil || m != 1020 {
+		t.Fatalf("sexagesimal 1020 (17:00): got %d err=%v", m, err)
+	}
+}
+
+func TestParseClockHour_sexagesimal(t *testing.T) {
+	h, err := parseClockHour(1320)
+	if err != nil || h != 22 {
+		t.Fatalf("1320: got %d err=%v", h, err)
+	}
+	h, err = parseClockHour(540)
+	if err != nil || h != 9 {
+		t.Fatalf("540: got %d err=%v", h, err)
+	}
+	lo, hi, err := parseInclusiveFullDayHours(360, 1320)
+	if err != nil || lo != 6 || hi != 22 {
+		t.Fatalf("full_day sexagesimal: got (%d,%d) err=%v", lo, hi, err)
+	}
 }
 
 func TestTimeBandContainsStartMin_normal(t *testing.T) {

@@ -3,7 +3,7 @@
  * Usage: npx tsx scripts/verify-plan-soldier-weight.ts <zones.yaml> <assignments.json>
  */
 import { readFileSync } from "fs";
-import { parseZonesYaml } from "../src/lib/zones.ts";
+import { parseZonesYaml, countEnabledSlots } from "../src/lib/zones.ts";
 import { buildZoneReportView, buildSoldierBlockRows } from "../src/lib/scheduleReport.ts";
 import { normalizeAssignment } from "../src/lib/planDoc.ts";
 
@@ -19,7 +19,7 @@ const go = JSON.parse(readFileSync(assignPath, "utf8")) as {
   assignments: Record<string, unknown>[];
 };
 const assignments = go.assignments.map((a) => normalizeAssignment(a));
-const zone = buildZoneReportView(zones, zones.slots.length);
+const zone = buildZoneReportView(zones, countEnabledSlots(zones));
 if (zones.shift_hours > 0) {
   zone.shiftHours = zones.shift_hours;
   zone.blocksPerDay = Math.round(24 / zone.shiftHours);

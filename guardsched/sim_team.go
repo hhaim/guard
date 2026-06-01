@@ -46,6 +46,50 @@ func soldierTypeCode(typeCodes []string, idx int) string {
 	return strings.TrimSpace(typeCodes[idx])
 }
 
+func (z *ZoneConfig) slotTypeExclude(locI int) map[string]struct{} {
+	if locI < 0 || locI >= len(z.Locations) {
+		return nil
+	}
+	return z.TypeExcludes[z.Locations[locI].TypeID]
+}
+
+func soldierExcludedByType(typeCodes []string, idx int, excluded map[string]struct{}) bool {
+	if len(excluded) == 0 || len(typeCodes) == 0 {
+		return false
+	}
+	_, ok := excluded[soldierTypeCode(typeCodes, idx)]
+	return ok
+}
+
+// rotatingDfsTypeExclude returns the exclude set for rotating DFS when all rotating slots share
+// one type id. ok is false when mixed rotating type ids and any has a non-empty exclude (skip DFS).
+func (z *ZoneConfig) rotatingDfsTypeExclude(rotSlotIndices []int) (excluded map[string]struct{}, ok bool) {
+	if len(rotSlotIndices) == 0 {
+		return nil, true
+	}
+	tids := map[string]struct{}{}
+	var only string
+	for _, sidx := range rotSlotIndices {
+		if sidx < 0 || sidx >= len(z.Slots) {
+			continue
+		}
+		tid := z.Locations[z.Slots[sidx].LocationIndex].TypeID
+		tids[tid] = struct{}{}
+		if only == "" {
+			only = tid
+		}
+	}
+	if len(tids) == 1 {
+		return z.TypeExcludes[only], true
+	}
+	for tid := range tids {
+		if len(z.TypeExcludes[tid]) > 0 {
+			return nil, false
+		}
+	}
+	return nil, true
+}
+
 func fillFullDayTeamPost(
 	zone *ZoneConfig,
 	day, assignmentDay, sidx, locI int,
@@ -84,6 +128,7 @@ func fillFullDayTeamPost(
 
 	var assigned []*Soldier
 
+	excl := zone.slotTypeExclude(locI)
 	pickN := func(n int, typeFilter string) error {
 		for pick := 0; pick < n; pick++ {
 			var pool []*Soldier
@@ -92,6 +137,9 @@ func fillFullDayTeamPost(
 					continue
 				}
 				if typeFilter != "" && soldierTypeCode(typeCodes, s.Idx) != typeFilter {
+					continue
+				}
+				if soldierExcludedByType(typeCodes, s.Idx, excl) {
 					continue
 				}
 				if !anyBusySpan(busy, s.Idx, L0, span, B, days) &&

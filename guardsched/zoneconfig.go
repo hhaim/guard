@@ -73,6 +73,8 @@ type ZoneConfig struct {
 	WindowedHeadcount  map[string]int
 	// DisabledWeekdays[typeID] = weekday indices 0=Sunday..6=Saturday when slot type is off.
 	DisabledWeekdays map[string][]int
+	// TypeExcludes[typeID] = roster type codes blocked from slots using that slots_types id.
+	TypeExcludes map[string]map[string]struct{}
 }
 
 // ToZone builds the minimal Zone used by timeCategoryForHour and rotating sim.
@@ -123,6 +125,7 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		return nil, fmt.Errorf("zones: slots_types must be non-empty list")
 	}
 	typePattern := map[string]string{}
+	typeExcludes := map[string]map[string]struct{}{}
 	fullDay := map[string]FullDaySpec{}
 	fullDayTeam := map[string]FullDayTeamSpec{}
 	disabledWD := map[string][]int{}
@@ -138,6 +141,15 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		pat := strings.TrimSpace(fmt.Sprint(m["pattern"]))
 		if tid == "" {
 			return nil, fmt.Errorf("slots_types: missing id")
+		}
+		if exclRaw, ok := m["exclude"]; ok {
+			excl, err := parseTypeExcludes(exclRaw, tid)
+			if err != nil {
+				return nil, err
+			}
+			if len(excl) > 0 {
+				typeExcludes[tid] = excl
+			}
 		}
 		if dw, ok := m["disabled_weekdays"]; ok {
 			wds, err := ParseDisabledWeekdays(dw)
@@ -210,7 +222,7 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 				if !ok {
 					return nil, fmt.Errorf("windowed_slots %q: bad slots entry", tid)
 				}
-				h0, h1x, err := windowHalfOpenHours(fmt.Sprint(sm["start"]), fmt.Sprint(sm["end"]))
+				h0, h1x, err := windowHalfOpenHours(sm["start"], sm["end"])
 				if err != nil {
 					return nil, fmt.Errorf("windowed_slots %q: %w", tid, err)
 				}
@@ -372,8 +384,37 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		WindowedRestHours:  winRest,
 		WindowedHeadcount:  winHeadcount,
 		DisabledWeekdays:  disabledWD,
+		TypeExcludes:    typeExcludes,
 	}
 	return zc, nil
+}
+
+func parseTypeExcludes(raw any, tid string) (map[string]struct{}, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("slots_types %q: exclude must be a list", tid)
+	}
+	if len(arr) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]struct{})
+	for _, item := range arr {
+		code := strings.TrimSpace(fmt.Sprint(item))
+		if code == "" {
+			return nil, fmt.Errorf("slots_types %q: exclude entries must be non-empty strings", tid)
+		}
+		if code == "*" {
+			return nil, fmt.Errorf("slots_types %q: exclude may not contain '*'", tid)
+		}
+		if _, dup := out[code]; dup {
+			return nil, fmt.Errorf("slots_types %q: duplicate exclude code %q", tid, code)
+		}
+		out[code] = struct{}{}
+	}
+	return out, nil
 }
 
 func parseFullDaySpecFromConfig(cfgAny any, tid, kind string, requireHeadcount bool) (FullDaySpec, error) {
@@ -381,7 +422,7 @@ func parseFullDaySpecFromConfig(cfgAny any, tid, kind string, requireHeadcount b
 	if cfg == nil {
 		return FullDaySpec{}, fmt.Errorf("%s %q: missing config", kind, tid)
 	}
-	sh0, sh1, err := parseInclusiveFullDayHours(fmt.Sprint(cfg["start"]), fmt.Sprint(cfg["end"]))
+	sh0, sh1, err := parseInclusiveFullDayHours(cfg["start"], cfg["end"])
 	if err != nil {
 		return FullDaySpec{}, fmt.Errorf("%s %q: %w", kind, tid, err)
 	}
@@ -545,12 +586,12 @@ func parseHHMMClock(s string) (int, error) {
 	return h, nil
 }
 
-func parseInclusiveFullDayHours(startS, endS string) (int, int, error) {
-	lo, err := parseHHMMClock(startS)
+func parseInclusiveFullDayHours(startV, endV any) (int, int, error) {
+	lo, err := parseClockHour(startV)
 	if err != nil {
 		return 0, 0, err
 	}
-	hi, err := parseHHMMClock(endS)
+	hi, err := parseClockHour(endV)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -560,16 +601,31 @@ func parseInclusiveFullDayHours(startS, endS string) (int, int, error) {
 	return lo, hi, nil
 }
 
-func windowHalfOpenHours(startS, endS string) (int, int, error) {
-	h0, err := parseHHMMClock(startS)
+func windowHalfOpenHours(startV, endV any) (int, int, error) {
+	h0, err := parseClockHour(startV)
 	if err != nil {
 		return 0, 0, err
 	}
-	es := strings.TrimSpace(endS)
-	if es == "24:00" || es == "24:0" || es == "24" {
-		return h0, 24, nil
+	switch x := endV.(type) {
+	case string:
+		es := strings.TrimSpace(x)
+		if es == "24:00" || es == "24:0" || es == "24" {
+			return h0, 24, nil
+		}
+	case int:
+		if x == 24 || x == 1440 {
+			return h0, 24, nil
+		}
+	case int64:
+		if x == 24 || x == 1440 {
+			return h0, 24, nil
+		}
+	case float64:
+		if int(x) == 24 || int(x) == 1440 {
+			return h0, 24, nil
+		}
 	}
-	h1, err := parseHHMMClock(es)
+	h1, err := parseClockHour(endV)
 	if err != nil {
 		return 0, 0, err
 	}

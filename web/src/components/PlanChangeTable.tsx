@@ -23,7 +23,7 @@ function dayOffset(anchor: string, tsDate: string): number {
 }
 
 function slotLabels(zones: ZonesDoc): string[] {
-  return buildZoneReportView(zones, zones.slots.length).slotLabels;
+  return buildZoneReportView(zones).slotLabels;
 }
 
 function shiftsFor(

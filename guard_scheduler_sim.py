@@ -455,6 +455,8 @@ class ZoneConfig:
     windowed_rest_hours: Dict[str, float] = field(default_factory=dict)
     windowed_headcount: Dict[str, int] = field(default_factory=dict)
     disabled_weekdays: Dict[str, Tuple[int, ...]] = field(default_factory=dict)
+    # slots_types id → type codes blocked from slots using that type (requires roster type_codes)
+    type_excludes: Dict[str, frozenset[str]] = field(default_factory=dict)
     slot_soldiers_required: Tuple[int, ...] = ()
 
     @property
@@ -1164,7 +1166,11 @@ def _parse_time_band_bound(v: Any) -> int:
     if isinstance(v, bool):
         raise ValueError("time band bound must be int or str")
     if isinstance(v, int):
-        return int(v) * 60
+        if v > 24 and v <= 1440 and v % 60 == 0:
+            return v
+        if 0 <= v <= 24:
+            return int(v) * 60
+        raise ValueError(f"time band bound {v!r} out of range")
     if isinstance(v, float):
         h = int(v)
         if float(h) != float(v):
@@ -1394,6 +1400,64 @@ def _soldier_type_code(type_codes: Optional[Sequence[str]], idx: int) -> str:
     return str(type_codes[idx]).strip()
 
 
+def _parse_type_exclude_list(raw: Any, tid: str) -> Optional[frozenset[str]]:
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError(f"slots_types[{tid!r}]: exclude must be a list")
+    codes: List[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        code = str(item).strip()
+        if not code:
+            raise ValueError(f"slots_types[{tid!r}]: exclude entries must be non-empty strings")
+        if code == "*":
+            raise ValueError(f"slots_types[{tid!r}]: exclude may not contain '*'")
+        if code in seen:
+            raise ValueError(f"slots_types[{tid!r}]: duplicate exclude code {code!r}")
+        seen.add(code)
+        codes.append(code)
+    if not codes:
+        return None
+    return frozenset(codes)
+
+
+def _slot_type_exclude(zone: ZoneConfig, loc_i: int) -> frozenset[str]:
+    tid = zone.location_type_ids[loc_i]
+    return zone.type_excludes.get(tid, frozenset())
+
+
+def _slot_type_exclude_for_slot(zone: ZoneConfig, sidx: int) -> frozenset[str]:
+    return _slot_type_exclude(zone, zone.slot_location_indices[sidx])
+
+
+def _soldier_excluded_by_type(
+    type_codes: Optional[Sequence[str]], soldier_idx: int, excluded: frozenset[str]
+) -> bool:
+    if not excluded or not type_codes:
+        return False
+    return _soldier_type_code(type_codes, soldier_idx) in excluded
+
+
+def _rotating_dfs_type_exclude(
+    zone: ZoneConfig, rot_slot_indices: Sequence[int]
+) -> Optional[frozenset[str]]:
+    """Exclude set for rotating DFS, or None to skip DFS (mixed types with any exclude)."""
+    if not rot_slot_indices:
+        return frozenset()
+    tids: List[str] = []
+    for sidx in rot_slot_indices:
+        loc_i = zone.slot_location_indices[sidx]
+        tids.append(zone.location_type_ids[loc_i])
+    unique = set(tids)
+    if len(unique) == 1:
+        return zone.type_excludes.get(next(iter(unique)), frozenset())
+    for tid in unique:
+        if zone.type_excludes.get(tid):
+            return None
+    return frozenset()
+
+
 def _pick_soldiers_for_slot(
     n: int,
     pool_base,
@@ -1489,11 +1553,13 @@ def _fill_full_day_team_post(
     def pick_n(n: int, type_filter: str) -> None:
         nonlocal assigned
         for pick in range(n):
+            excl = _slot_type_exclude(zone, loc_i)
             pool = [
                 s
                 for s in soldiers
                 if s not in assigned
                 and (not type_filter or _soldier_type_code(type_codes, s.idx) == type_filter)
+                and not _soldier_excluded_by_type(type_codes, s.idx, excl)
                 and not _any_busy_span(busy, s.idx, L0, span, B, days)
                 and _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
             ]
@@ -1616,6 +1682,28 @@ def parse_slot_location_indices(
     return tuple(out), tuple(names), tuple(n_req)
 
 
+def _clock_hour_from_int(x: int) -> int:
+    """YAML int shorthand (0..24) or sexagesimal minutes (unquoted 22:00 → 1320)."""
+    if 0 <= x <= 24:
+        return x
+    if x > 24 and x <= 1440 and x % 60 == 0:
+        return x // 60
+    raise ValueError(f"invalid clock hour value {x!r}")
+
+
+def _coerce_clock_hour(v: Any) -> int:
+    if isinstance(v, bool):
+        raise ValueError("clock value must be int or str")
+    if isinstance(v, int):
+        return _clock_hour_from_int(v)
+    if isinstance(v, float):
+        h = int(v)
+        if float(h) != float(v):
+            raise ValueError(f"clock value {v!r} must be a whole hour")
+        return _clock_hour_from_int(h)
+    return _parse_hhmm_clock(str(v).strip())
+
+
 def _parse_hhmm_clock(s: str) -> int:
     """Hour 0..23, or 24 meaning end-of-day exclusive sentinel for window parsing."""
     p = str(s).strip().split(":")
@@ -1630,24 +1718,30 @@ def _parse_hhmm_clock(s: str) -> int:
     return h
 
 
-def _window_half_open_hours(start_s: str, end_s: str) -> Tuple[int, int]:
+def _window_half_open_hours(start_v: Any, end_v: Any) -> Tuple[int, int]:
     """Wall-clock window [h0, h1_excl) in integer hours; end 24:00 → h1_excl=24."""
-    h0 = _parse_hhmm_clock(start_s)
-    es = str(end_s).strip()
-    if es in ("24:00", "24:0", "24"):
+    h0 = _coerce_clock_hour(start_v)
+    if isinstance(end_v, str):
+        es = end_v.strip()
+        if es in ("24:00", "24:0", "24"):
+            return h0, 24
+    elif isinstance(end_v, int):
+        if end_v in (24, 1440):
+            return h0, 24
+    elif isinstance(end_v, float) and int(end_v) in (24, 1440):
         return h0, 24
-    h1 = _parse_hhmm_clock(end_s)
+    h1 = _coerce_clock_hour(end_v)
     if h1 == 24:
         return h0, 24
     return h0, h1
 
 
-def _parse_inclusive_full_day_hours(start_s: str, end_s: str) -> Tuple[int, int]:
+def _parse_inclusive_full_day_hours(start_v: Any, end_v: Any) -> Tuple[int, int]:
     """Full-day active hours inclusive (both ends on 0..23)."""
-    lo = _parse_hhmm_clock(start_s)
-    hi = _parse_hhmm_clock(end_s)
+    lo = _coerce_clock_hour(start_v)
+    hi = _coerce_clock_hour(end_v)
     if lo == 24 or hi == 24:
-        raise ValueError(f"full_day start/end must be 0..23, got {start_s!r}..{end_s!r}")
+        raise ValueError(f"full_day start/end must be 0..23, got {start_v!r}..{end_v!r}")
     return lo, hi
 
 
@@ -1711,6 +1805,7 @@ def _load_zone_config(
         raise ValueError("zones YAML requires slots_types (non-empty list)")
 
     type_map: Dict[str, Dict[str, Any]] = {}
+    type_excludes: Dict[str, frozenset[str]] = {}
     full_day_specs: Dict[str, Dict[str, Any]] = {}
     full_day_team_specs: Dict[str, Dict[str, Any]] = {}
     disabled_wd: Dict[str, Tuple[int, ...]] = {}
@@ -1728,13 +1823,16 @@ def _load_zone_config(
         if pat not in ("rotating", "full_day", "full_day_team", "windowed_slots"):
             raise ValueError(f"slots_types[{tid!r}]: unknown pattern {pat!r}")
         type_map[tid] = {"pattern": pat, "raw": row}
+        excl = _parse_type_exclude_list(row.get("exclude"), tid)
+        if excl is not None:
+            type_excludes[tid] = excl
         if row.get("disabled_weekdays") is not None:
             disabled_wd[tid] = tuple(_parse_disabled_weekdays(row["disabled_weekdays"]))
         if pat == "full_day":
             cfg = row.get("config") or {}
             if not isinstance(cfg, dict):
                 raise ValueError(f"full_day {tid!r}: config must be a mapping")
-            sh0, sh1 = _parse_inclusive_full_day_hours(str(cfg["start"]), str(cfg["end"]))
+            sh0, sh1 = _parse_inclusive_full_day_hours(cfg["start"], cfg["end"])
             hc = int(cfg.get("headcount", 1))
             if hc < 1:
                 raise ValueError(f"full_day {tid!r}: headcount must be >= 1")
@@ -1751,7 +1849,7 @@ def _load_zone_config(
             cfg = row.get("config") or {}
             if not isinstance(cfg, dict):
                 raise ValueError(f"full_day_team {tid!r}: config must be a mapping")
-            sh0, sh1 = _parse_inclusive_full_day_hours(str(cfg["start"]), str(cfg["end"]))
+            sh0, sh1 = _parse_inclusive_full_day_hours(cfg["start"], cfg["end"])
             rest_after = float(cfg.get("rest_after_hours", cfg.get("rest_after", 6)))
             if rest_after < 0:
                 raise ValueError(f"full_day_team {tid!r}: rest_after_hours must be >= 0")
@@ -1799,7 +1897,7 @@ def _load_zone_config(
             for sw in slots_w:
                 if not isinstance(sw, dict):
                     raise ValueError("windowed config.slots entries must be mappings")
-                h0, h1x = _window_half_open_hours(str(sw["start"]), str(sw["end"]))
+                h0, h1x = _window_half_open_hours(sw["start"], sw["end"])
                 wl.append(
                     {
                         "name": str(sw.get("name", "")).strip(),
@@ -1899,6 +1997,7 @@ def _load_zone_config(
         windowed_rest_hours=windowed_rest,
         windowed_headcount=windowed_headcount,
         disabled_weekdays=disabled_wd,
+        type_excludes=type_excludes,
         slot_soldiers_required=slot_n_req,
     )
 
@@ -2434,9 +2533,13 @@ def _rotating_eligible_for_mask(
     availability: Any = None,
     plan_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
     shift_hours: float = 4.0,
+    type_codes: Optional[Sequence[str]] = None,
+    type_exclude: frozenset[str] = frozenset(),
 ) -> List[Soldier]:
     out: List[Soldier] = []
     for s in soldiers:
+        if _soldier_excluded_by_type(type_codes, s.idx, type_exclude):
+            continue
         if soldier_must_rest_this_block(s.idx, day, b, blocks_pd, k_rest):
             continue
         if busy[day, s.idx, b] or draft_rot[day, s.idx, b]:
@@ -2477,6 +2580,8 @@ def _dfs_rotating_only_mask(
     availability: Any = None,
     plan_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
     shift_hours: float = 4.0,
+    type_codes: Optional[Sequence[str]] = None,
+    type_exclude: frozenset[str] = frozenset(),
 ) -> bool:
     """Fill ``draft_rot`` with exactly ``n_rot`` soldiers on duty per (day, block)."""
     if L >= days * blocks_pd:
@@ -2495,6 +2600,8 @@ def _dfs_rotating_only_mask(
         availability,
         plan_start_hour,
         shift_hours,
+        type_codes,
+        type_exclude,
     )
     if len(cands) < n_rot:
         return False
@@ -2528,6 +2635,8 @@ def _dfs_rotating_only_mask(
             availability=availability,
             plan_start_hour=plan_start_hour,
             shift_hours=shift_hours,
+            type_codes=type_codes,
+            type_exclude=type_exclude,
         ):
             return True
         for s in comb:
@@ -2961,8 +3070,10 @@ def consume_rng_rotating_fill_days(
     k_rest_mask = k_rest if len(rot_slot_indices) == slots_per_block else 0
     dr = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
     dfs_nodes = [0]
+    dfs_type_exclude = _rotating_dfs_type_exclude(zone, rot_slot_indices)
     if not (
-        x_cool > 0
+        dfs_type_exclude is not None
+        and x_cool > 0
         and len(rot_slot_indices) > 0
         and math.comb(num_soldiers, len(rot_slot_indices))
         <= _ROTATING_COOLDOWN_DFS_MAX_COMBINATIONS
@@ -2981,6 +3092,8 @@ def consume_rng_rotating_fill_days(
             availability=availability,
             plan_start_hour=plan_start,
             shift_hours=sh,
+            type_codes=type_codes,
+            type_exclude=dfs_type_exclude,
         )
     ):
         return
@@ -3007,9 +3120,15 @@ def consume_rng_rotating_fill_days(
                 weight = sh * lw * tw
                 n_req = _soldiers_required(zone, sidx)
 
+                excl_r = _slot_type_exclude_for_slot(zone, sidx)
+
                 def pool_fn_r(already: List[Soldier]) -> List[Soldier]:
                     return [
-                        s for s in in_block if s not in assigned and s not in already
+                        s
+                        for s in in_block
+                        if s not in assigned
+                        and s not in already
+                        and not _soldier_excluded_by_type(type_codes, s.idx, excl_r)
                     ]
 
                 _pick_soldiers_for_slot(
@@ -3313,11 +3432,14 @@ def run_simulation(
             time_mid = time_category_for_hour((sh0 + sh1) // 2, zone)
             n_req = max(1, int(cfg.get("headcount", 1)))
 
+            excl_fd = _slot_type_exclude(zone, loc_i)
+
             def pool_fn(assigned: List[Soldier]) -> List[Soldier]:
                 return [
                     s
                     for s in soldiers
                     if s not in assigned
+                    and not _soldier_excluded_by_type(type_codes, s.idx, excl_fd)
                     and not _any_busy_span(busy, s.idx, L0, span, B, days)
                     and _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
                 ]
@@ -3396,6 +3518,7 @@ def run_simulation(
             wins = zone.windowed_specs[tid]
             rest_h = float(zone.windowed_rest_hours.get(tid, 6.0))
             lw = loc_w[loc_i]
+            excl_win = _slot_type_exclude(zone, loc_i)
             best: Optional[Tuple[Tuple[Any, ...], int, Soldier, Dict[str, Any], float, str]] = None
             for wi, wdef in enumerate(wins):
                 h0, h1x = int(wdef["h0"]), int(wdef["h1_excl"])
@@ -3416,7 +3539,8 @@ def run_simulation(
                 pool = [
                     s
                     for s in soldiers
-                    if not _any_busy_span(busy, s.idx, L0w, spanw, B, days)
+                    if not _soldier_excluded_by_type(type_codes, s.idx, excl_win)
+                    and not _any_busy_span(busy, s.idx, L0w, spanw, B, days)
                     and _soldier_avail_wall(availability, s.idx, day, h0, h1x)
                 ]
                 if not pool:
@@ -3472,11 +3596,14 @@ def run_simulation(
             if h1x > h0 + 1:
                 time_mid = time_category_for_hour((h0 + h1x - 1) // 2, zone)
 
+            excl_w = _slot_type_exclude(zone, loc_i)
+
             def pool_fn_w(assigned: List[Soldier]) -> List[Soldier]:
                 return [
                     s
                     for s in soldiers
                     if s not in assigned
+                    and not _soldier_excluded_by_type(type_codes, s.idx, excl_w)
                     and not _any_busy_span(busy, s.idx, L0, span, B, days)
                     and _soldier_avail_wall(availability, s.idx, day, h0, h1x)
                 ]
@@ -3538,8 +3665,10 @@ def run_simulation(
     k_rest_mask = k_rest if len(rot_slot_indices) == slots_per_block else 0
     dfs_rot_ok = False
     rotating_dfs_tried = False
+    dfs_type_exclude = _rotating_dfs_type_exclude(zone, rot_slot_indices)
     if (
-        x_cool > 0
+        dfs_type_exclude is not None
+        and x_cool > 0
         and len(rot_slot_indices) > 0
         and math.comb(num_soldiers, len(rot_slot_indices)) <= _ROTATING_COOLDOWN_DFS_MAX_COMBINATIONS
     ):
@@ -3561,6 +3690,8 @@ def run_simulation(
             availability=availability,
             plan_start_hour=plan_day_start_hour,
             shift_hours=sh,
+            type_codes=type_codes,
+            type_exclude=dfs_type_exclude,
         ):
             np.copyto(busy_rot, dr)
             dfs_rot_ok = True
@@ -3615,11 +3746,15 @@ def run_simulation(
                         weight = sh * lw * tw
                         n_req = _soldiers_required(zone, sidx)
 
+                        excl_r = _slot_type_exclude_for_slot(zone, sidx)
+
                         def pool_fn_r(already: List[Soldier]) -> List[Soldier]:
                             return [
                                 s
                                 for s in in_block
-                                if s not in assigned and s not in already
+                                if s not in assigned
+                                and s not in already
+                                and not _soldier_excluded_by_type(type_codes, s.idx, excl_r)
                             ]
 
                         try:
@@ -3722,12 +3857,15 @@ def run_simulation(
                     weight = sh * lw * tw
                     n_req = _soldiers_required(zone, sidx)
 
+                    excl_rot = _slot_type_exclude_for_slot(zone, sidx)
+
                     def pool_fn_rot(already: List[Soldier]) -> List[Soldier]:
                         base_pool = [
                             s
                             for s in soldiers
                             if s not in assigned
                             and s not in already
+                            and not _soldier_excluded_by_type(type_codes, s.idx, excl_rot)
                             and not soldier_must_rest_this_block(
                                 s.idx, day, b, blocks_pd, k_rest_mask
                             )

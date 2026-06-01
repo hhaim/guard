@@ -279,15 +279,18 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		return nil, 400, `{"error":"need at least one soldier"}`, fmt.Errorf("no soldiers")
 	}
 
-	slotsPerBlock := countYAMLSlots(yamlBytes)
+	simYaml, slotsPerBlock, err := guardsched.ZonesYAMLForSimulation(yamlBytes)
+	if err != nil {
+		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+	}
 	if slotsPerBlock < 1 {
-		return nil, 400, `{"error":"could not determine slots count from YAML"}`, fmt.Errorf("bad yaml slots")
+		return nil, 400, `{"error":"no enabled slots in zones config"}`, fmt.Errorf("no enabled slots")
 	}
 	if len(keys) < slotsPerBlock {
 		return nil, 400, fmt.Sprintf(`{"error":"need at least %d soldiers"}`, slotsPerBlock), fmt.Errorf("not enough soldiers")
 	}
 
-	zc, err := guardsched.LoadZoneConfigYAML(yamlBytes, slotsPerBlock, body.ShiftHours)
+	zc, err := guardsched.LoadZoneConfigYAML(simYaml, slotsPerBlock, body.ShiftHours)
 	if err != nil {
 		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
 	}
@@ -478,8 +481,14 @@ func (s *Server) loadPlanInputs(ctx context.Context) (yamlBytes []byte, soldierK
 	}
 	soldierKeys = availability.RosterFromIDs(soldierKeys)
 
-	slotsPerBlock := countYAMLSlots(yamlBytes)
-	zc, err := guardsched.LoadZoneConfigYAML(yamlBytes, slotsPerBlock, slotsDoc.ShiftHours)
+	simYaml, slotsPerBlock, err := guardsched.ZonesYAMLForSimulation(yamlBytes)
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+	if slotsPerBlock < 1 {
+		return nil, nil, nil, 0, fmt.Errorf("no enabled slots in zones config")
+	}
+	zc, err := guardsched.LoadZoneConfigYAML(simYaml, slotsPerBlock, slotsDoc.ShiftHours)
 	if err != nil {
 		return nil, nil, nil, 0, err
 	}
@@ -488,5 +497,5 @@ func (s *Server) loadPlanInputs(ctx context.Context) (yamlBytes []byte, soldierK
 	for i, sl := range zc.Slots {
 		slotLabels[i] = sl.DisplayName
 	}
-	return yamlBytes, soldierKeys, slotLabels, shiftHours, nil
+	return simYaml, soldierKeys, slotLabels, shiftHours, nil
 }

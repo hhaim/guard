@@ -21,7 +21,7 @@ import {
   classificationLabel,
   formatAvailabilityWindows,
 } from "./planSoldierAvailability";
-import type { ZonesDoc } from "./zones";
+import { countEnabledSlots, type ZonesDoc } from "./zones";
 
 export type PlanReportInput = {
   proposal: PlanDoc;
@@ -632,7 +632,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
   const shiftHours = proposal.shift_hours;
   const planDayStartHour = resolvePlanDayStartHour(proposal.meta);
   const anchorDate = proposal.anchor_date;
-  const slotsPerBlock = zones.slots.length;
+  const slotsPerBlock = countEnabledSlots(zones);
   const zone = buildZoneReportView(zones, slotsPerBlock);
   if (shiftHours > 0) {
     zone.shiftHours = shiftHours;
