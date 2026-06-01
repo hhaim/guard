@@ -12,7 +12,13 @@ import {
   planDayTitle,
   weekdayLongName,
 } from "./planDay";
-import { parseFullDayConfig, parseFullDayTeamConfig, slotDisplayLabel } from "./zones";
+import {
+  parseFullDayConfig,
+  parseFullDayTeamConfig,
+  parseTimeBandBound,
+  slotDisplayLabel,
+  timeBandContainsStartMin,
+} from "./zones";
 
 export type { ScheduleAssignment } from "./planDoc";
 
@@ -33,8 +39,8 @@ export type ZoneReportView = {
   disabledWeekdays: Record<string, number[]>;
   timeNames: string[];
   timeWeights: number[];
-  timeFrom: number[];
-  timeTo: number[];
+  timeFromMin: number[];
+  timeToExclMin: number[];
 };
 
 export type SoldierBlockRow = {
@@ -349,8 +355,8 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock: number): ZoneR
     disabledWeekdays,
     timeNames: doc.time_zones.map((t) => t.name),
     timeWeights: doc.time_zones.map((t) => (typeof t.weight === "number" ? t.weight : 1)),
-    timeFrom: doc.time_zones.map((t) => t.from_hour),
-    timeTo: doc.time_zones.map((t) => t.to_hour),
+    timeFromMin: doc.time_zones.map((t) => parseTimeBandBound(t.from_hour)),
+    timeToExclMin: doc.time_zones.map((t) => parseTimeBandBound(t.to_hour)),
   };
 }
 
@@ -391,9 +397,11 @@ export function assignmentBlockWeight(
 }
 
 export function timeCategoryForHour(h: number, zone: ZoneReportView): number {
-  const hour = ((h % 24) + 24) % 24;
+  const startMin = (((h % 24) + 24) % 24) * 60;
   for (let j = 0; j < zone.timeNames.length; j++) {
-    if (hour >= zone.timeFrom[j] && hour <= zone.timeTo[j]) return j;
+    if (timeBandContainsStartMin(zone.timeFromMin[j], zone.timeToExclMin[j], startMin)) {
+      return j;
+    }
   }
   return 0;
 }

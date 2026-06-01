@@ -42,13 +42,13 @@ type ZoneLocation struct {
 	TypeID   string // slots_types id for this location
 }
 
-// ZoneTimeBand is one row from YAML `time_zones`.
+// ZoneTimeBand is one row from YAML `time_zones` (half-open [FromMin, ToExclMin) in wall minutes).
 type ZoneTimeBand struct {
-	ID       string
-	Name     string
-	Weight   float64
-	FromHour int
-	ToHour   int
+	ID        string
+	Name      string
+	Weight    float64
+	FromMin   int
+	ToExclMin int
 }
 
 // ZoneSlot is one concurrent slot row from YAML `slots` (order = slot index).
@@ -86,8 +86,8 @@ func (z *ZoneConfig) ToZone() *Zone {
 	tt := make([]int, len(z.TimeBands))
 	for i, tb := range z.TimeBands {
 		tw[i] = tb.Weight
-		tf[i] = tb.FromHour
-		tt[i] = tb.ToHour
+		tf[i] = tb.FromMin
+		tt[i] = tb.ToExclMin
 	}
 	sli := make([]int, len(z.Slots))
 	sp := make([]string, len(z.Slots))
@@ -99,8 +99,8 @@ func (z *ZoneConfig) ToZone() *Zone {
 		ShiftHours:      z.ShiftHours,
 		LocWeights:      lw,
 		TimeWeights:     tw,
-		TimeFrom:        tf,
-		TimeTo:          tt,
+		TimeFromMin:     tf,
+		TimeToExclMin:   tt,
 		SlotLocationIdx: sli,
 		SlotPatterns:    sp,
 	}
@@ -312,8 +312,8 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 	if !ok || len(tzs) == 0 {
 		return nil, fmt.Errorf("time_zones required")
 	}
-	defFrom := []int{0, 6, 12}
-	defTo := []int{5, 11, 23}
+	defFrom := []any{0, "06:00", "12:00"}
+	defTo := []any{"06:00", "12:00", "24:00"}
 	var timeBands []ZoneTimeBand
 	for i, row := range tzs {
 		m, ok := row.(map[string]any)
@@ -332,12 +332,31 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 		if di >= len(defFrom) {
 			di = len(defFrom) - 1
 		}
+		fromV := m["from_hour"]
+		if fromV == nil {
+			fromV = defFrom[di]
+		}
+		toV := m["to_hour"]
+		if toV == nil {
+			toV = defTo[di]
+		}
+		fromMin, err := parseTimeBandBound(fromV)
+		if err != nil {
+			return nil, fmt.Errorf("time_zones[%d] from_hour: %w", i, err)
+		}
+		toExclMin, err := parseTimeBandBound(toV)
+		if err != nil {
+			return nil, fmt.Errorf("time_zones[%d] to_hour: %w", i, err)
+		}
+		if timeBandSpanHours(fromMin, toExclMin) <= 0 {
+			return nil, fmt.Errorf("time_zones[%d]: empty band span", i)
+		}
 		timeBands = append(timeBands, ZoneTimeBand{
-			ID:       zid,
-			Name:     name,
-			Weight:   floatFromAny(m["weight"]),
-			FromHour: int(intFromAny(m["from_hour"], defFrom[di])),
-			ToHour:   int(intFromAny(m["to_hour"], defTo[di])),
+			ID:        zid,
+			Name:      name,
+			Weight:    floatFromAny(m["weight"]),
+			FromMin:   fromMin,
+			ToExclMin: toExclMin,
 		})
 	}
 

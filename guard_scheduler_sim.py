@@ -5,7 +5,7 @@ Guard scheduler fairness simulation (**hybrid_rel** soldier pick: relative band 
 - Zone **names and weights** load from YAML (3 locations + 3 time *categories*).
 - **Calendar shifts per day** = `24 / shift_hours` (YAML `shift_hours` or ``--shift-hours``). Each block runs **-y**
   concurrent slot assignments → **6 × y** shifts per day (e.g. y=3 → 18).
-- Each block’s **start hour** maps to one time category via YAML `from_hour` / `to_hour` (weights).
+- Each block’s **start hour** maps to one time category via YAML `from_hour` / `to_hour` half-open `[from, to)` (weights).
 - Heatmaps: **locations** = each soldier’s raw share across posts (row sums to 100%). **Time bands** =
   each soldier’s share of their **own** guard hours in Night / Morning / Day: ``raw_time[j] / sum(raw_time)``
   (row sums to 100%). Fairness **score** uses weights; raw logs unchanged.
@@ -436,8 +436,8 @@ class ZoneConfig:
     time_names: Tuple[str, ...]
     time_weights: Tuple[float, ...]
     # Inclusive hour-of-day [0..23] for mapping block start hour → time category
-    time_hour_from: Tuple[int, ...]
-    time_hour_to: Tuple[int, ...]
+    time_min_from: Tuple[int, ...]
+    time_min_to_excl: Tuple[int, ...]
     # ``slot_location_indices[s]`` = location index for concurrent slot ``s`` (0-based)
     slot_location_indices: Tuple[int, ...]
     schema_version: int = 2
@@ -1157,11 +1157,51 @@ def calendar_blocks_per_day(block_hours: float) -> int:
     return n
 
 
+def _parse_time_band_bound(v: Any) -> int:
+    """YAML from_hour / to_hour: int hour shorthand or HH:MM string → minutes [0, 1440]."""
+    if v is None:
+        raise ValueError("time band bound is required")
+    if isinstance(v, bool):
+        raise ValueError("time band bound must be int or str")
+    if isinstance(v, int):
+        return int(v) * 60
+    if isinstance(v, float):
+        h = int(v)
+        if float(h) != float(v):
+            raise ValueError(f"time band bound {v!r} must be a whole hour")
+        return h * 60
+    s = str(v).strip()
+    if not s:
+        raise ValueError("time band bound is required")
+    h = _parse_hhmm_clock(s)
+    return h * 60
+
+
+def _time_band_contains_start_min(from_min: int, to_excl_min: int, start_min: int) -> bool:
+    start_min = int(start_min) % 1440
+    if from_min < to_excl_min:
+        return from_min <= start_min < to_excl_min
+    if from_min == to_excl_min:
+        return False
+    return start_min >= from_min or start_min < to_excl_min
+
+
+def _time_band_span_hours(from_min: int, to_excl_min: int) -> float:
+    if from_min < to_excl_min:
+        span = to_excl_min - from_min
+    elif from_min == to_excl_min:
+        return 0.0
+    else:
+        span = 1440 - from_min + to_excl_min
+    return span / 60.0
+
+
 def time_category_for_hour(h: int, zone: ZoneConfig) -> int:
-    h = int(h) % 24
+    start_min = (int(h) % 24) * 60
     for j in range(zone.n_time):
-        lo, hi = zone.time_hour_from[j], zone.time_hour_to[j]
-        if lo <= h <= hi:
+        if _time_band_contains_start_min(
+            zone.time_min_from[j], zone.time_min_to_excl[j], start_min
+        ):
             return j
     raise ValueError(
         f"Hour {h} is not covered by any time_zones from_hour..to_hour; fix zones YAML"
@@ -1170,15 +1210,14 @@ def time_category_for_hour(h: int, zone: ZoneConfig) -> int:
 
 def time_band_clock_spans_hours(zone: ZoneConfig) -> np.ndarray:
     """
-    Inclusive wall-clock span of each YAML time band in one 24 h day (integer hours).
+    Wall-clock span of each YAML time band in one 24 h day (half-open [from, to) in hours).
 
-    Used to normalize raw guard hours so wide bands (e.g. Day 12–23) are not
-    confounded with narrow bands (e.g. Morning 6–11) when comparing exposure.
+    Used to normalize raw guard hours so wide bands (e.g. Day 12–24) are not
+    confounded with narrow bands (e.g. Morning 6–12) when comparing exposure.
     """
     out = np.zeros(zone.n_time, dtype=np.float64)
     for j in range(zone.n_time):
-        lo, hi = zone.time_hour_from[j], zone.time_hour_to[j]
-        out[j] = float(hi - lo + 1)
+        out[j] = _time_band_span_hours(zone.time_min_from[j], zone.time_min_to_excl[j])
         if out[j] <= 0:
             raise ValueError(f"time_zones[{j}] has invalid from_hour..to_hour span")
     return out
@@ -1810,8 +1849,8 @@ def _load_zone_config(
         sh_eff = validate_shift_hours(sh_yaml)
     calendar_blocks_per_day(sh_eff)
 
-    default_from = (0, 6, 12)
-    default_to = (5, 11, 23)
+    default_from: Tuple[Any, ...] = (0, "06:00", "12:00")
+    default_to: Tuple[Any, ...] = ("06:00", "12:00", "24:00")
     t_from: List[int] = []
     t_to: List[int] = []
     tp_ids: List[str] = []
@@ -1826,8 +1865,14 @@ def _load_zone_config(
         if not zid:
             raise ValueError("time_zone entry missing id")
         di = min(i, len(default_from) - 1)
-        t_from.append(int(row.get("from_hour", default_from[di])))
-        t_to.append(int(row.get("to_hour", default_to[di])))
+        from_v = row.get("from_hour", default_from[di])
+        to_v = row.get("to_hour", default_to[di])
+        from_min = _parse_time_band_bound(from_v)
+        to_excl_min = _parse_time_band_bound(to_v)
+        if _time_band_span_hours(from_min, to_excl_min) <= 0:
+            raise ValueError(f"time_zones[{i}]: empty band span")
+        t_from.append(from_min)
+        t_to.append(to_excl_min)
         tp_ids.append(zid)
         tp_names.append(name)
         tp_w.append(w)
@@ -1840,8 +1885,8 @@ def _load_zone_config(
         time_ids=tuple(tp_ids),
         time_names=tuple(tp_names),
         time_weights=tuple(tp_w),
-        time_hour_from=tuple(t_from),
-        time_hour_to=tuple(t_to),
+        time_min_from=tuple(t_from),
+        time_min_to_excl=tuple(t_to),
         slot_location_indices=slot_loc,
         schema_version=int(data.get("schema_version", 2)),
         shift_hours=sh_eff,
@@ -4971,7 +5016,10 @@ def write_html_report(
             f"<td>—</td></tr>"
         )
     for j in range(nt):
-        hr = f"{zone.time_hour_from[j]}–{zone.time_hour_to[j]} h"
+        f_h = zone.time_min_from[j] // 60
+        t_h = zone.time_min_to_excl[j] // 60
+        t_lbl = "24:00" if t_h == 24 else f"{t_h:02d}:00"
+        hr = f"{f_h:02d}:00–{t_lbl}"
         zcfg_rows.append(
             f"<tr><td>time category</td><td>{esc(zone.time_ids[j])}</td>"
             f"<td>{esc(zone.time_names[j])} ({esc(hr)})</td><td>{zone.time_weights[j]:.4f}</td></tr>"

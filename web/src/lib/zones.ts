@@ -207,8 +207,10 @@ export type TimeBand = {
   id: string;
   name: string;
   weight: number;
-  from_hour: number;
-  to_hour: number;
+  /** Wall-clock start (inclusive): hour int shorthand or "HH:MM". */
+  from_hour: number | string;
+  /** Wall-clock end (exclusive): hour int, "HH:MM", or "24:00". */
+  to_hour: number | string;
 };
 
 export type ZonesDoc = {
@@ -274,6 +276,49 @@ export function parseWallClockHour(s: string, opts?: { allow24?: boolean }): Par
 
 export const PATTERN_WALL_CLOCK_HINT =
   "Whole hours only (HH:00). Minutes must be :00; use 24:00 for window end.";
+
+/** Parse YAML time_zones bound to minutes [0, 1440]. */
+export function parseTimeBandBound(v: number | string): number {
+  if (typeof v === "number") {
+    if (!Number.isFinite(v) || !Number.isInteger(v)) {
+      throw new Error(`time band bound ${v} must be a whole hour`);
+    }
+    return v * 60;
+  }
+  const p = parseWallClockHour(String(v), { allow24: true });
+  if (!p.ok) throw new Error(p.error);
+  return p.hour * 60;
+}
+
+export function timeBandContainsStartMin(fromMin: number, toExclMin: number, startMin: number): boolean {
+  const t = ((startMin % 1440) + 1440) % 1440;
+  if (fromMin < toExclMin) return t >= fromMin && t < toExclMin;
+  if (fromMin === toExclMin) return false;
+  return t >= fromMin || t < toExclMin;
+}
+
+/** Sort/display label for a time_zones bound (int hour or HH:MM). */
+export function formatTimeBandBound(v: number | string): string {
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (s === "24" || s === "24:00" || s === "24:0") return "24:00";
+    return s.includes(":") ? s : `${s}:00`;
+  }
+  if (v === 24) return "24:00";
+  return `${v}:00`;
+}
+
+export function timeBandBoundSortKey(v: number | string): number {
+  return parseTimeBandBound(v);
+}
+
+export function timeBandSpanHours(fromMin: number, toExclMin: number): number {
+  let span: number;
+  if (fromMin < toExclMin) span = toExclMin - fromMin;
+  else if (fromMin === toExclMin) return 0;
+  else span = 1440 - fromMin + toExclMin;
+  return span / 60;
+}
 
 /** Validate full_day / windowed_slots wall-clock times (whole hours; matches simulator). */
 export function validateSlotTypePattern(st: SlotType): string | null {
@@ -345,8 +390,8 @@ export const DEFAULT_ZONES: ZonesDoc = {
   zone_loc: [],
   slots: [],
   time_zones: [
-    { id: "zt_night", name: "Night", weight: 1.5, from_hour: 0, to_hour: 5 },
-    { id: "zt_day", name: "Day", weight: 1.0, from_hour: 6, to_hour: 23 },
+    { id: "zt_night", name: "Night", weight: 1.5, from_hour: 0, to_hour: "06:00" },
+    { id: "zt_day", name: "Day", weight: 1.0, from_hour: "06:00", to_hour: "24:00" },
   ],
 };
 
@@ -466,8 +511,13 @@ export function parseZonesYaml(text: string): ZonesDoc {
         id: asStr(m.id),
         name: asStr(m.name) || asStr(m.id),
         weight: asNum(m.weight, 1),
-        from_hour: asNum(m.from_hour, 0),
-        to_hour: asNum(m.to_hour, 23),
+        from_hour: m.from_hour != null ? (typeof m.from_hour === "string" ? m.from_hour : asNum(m.from_hour, 0)) : 0,
+        to_hour:
+          m.to_hour != null
+            ? typeof m.to_hour === "string"
+              ? m.to_hour
+              : asNum(m.to_hour, 24)
+            : "24:00",
       }))
       .filter((t) => t.id !== ""),
   };
@@ -637,7 +687,7 @@ export function emptySlot(locationId: string, index: number): ZoneSlot {
 }
 
 export function emptyTimeBand(index: number): TimeBand {
-  return { id: `zt_${index}`, name: "New band", weight: 1, from_hour: 0, to_hour: 23 };
+  return { id: `zt_${index}`, name: "New band", weight: 1, from_hour: 0, to_hour: "24:00" };
 }
 
 export function slotDisplayLabel(s: ZoneSlot): string {

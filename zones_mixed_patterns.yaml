@@ -124,20 +124,20 @@ zone_loc:
     weight: 1.0
 
 # Used for piecewise fairness (active hours × time_zone weight × pattern multiplier).
-# Hours must cover 0..23; from_hour and to_hour are inclusive per existing sim convention.
+# Half-open [from_hour, to_hour); wrap when from >= to (e.g. 21:00 → 01:00).
 time_zones:
   - id: zt_night
     name: Night
     weight: 1.5
     from_hour: 0
-    to_hour: 5
+    to_hour: "06:00"
   - id: zt_morning
     name: Morning
     weight: 0.9
-    from_hour: 6
-    to_hour: 11
+    from_hour: "06:00"
+    to_hour: "12:00"
   - id: zt_day
     name: Day
     weight: 1.0
-    from_hour: 12
-    to_hour: 23
+    from_hour: "12:00"
+    to_hour: "24:00"

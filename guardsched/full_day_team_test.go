@@ -61,7 +61,7 @@ zone_loc:
 slots:
   - { location_id: loc, name: t1 }
 time_zones:
-  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: 23 }
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }
 `)
 	zc, err := LoadZoneConfigYAML(raw, 1, nil)
 	if err != nil {
@@ -90,7 +90,7 @@ zone_loc:
 slots:
   - { location_id: loc, name: t1 }
 time_zones:
-  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: 23 }
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }
 `)
 	zc, err := LoadZoneConfigYAML(raw, 1, nil)
 	if err != nil {

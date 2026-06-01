@@ -18,8 +18,8 @@ type Zone struct {
 	ShiftHours      float64
 	LocWeights      []float64
 	TimeWeights     []float64
-	TimeFrom        []int
-	TimeTo          []int
+	TimeFromMin     []int
+	TimeToExclMin   []int
 	SlotLocationIdx []int
 	SlotPatterns    []string
 }
@@ -149,9 +149,9 @@ func gapFreeBlocksSinceLastDutyBeforeAssign(busy [][][]bool, day, block, soldier
 }
 
 func timeCategoryForHour(h int, z *Zone) int {
-	h = h % 24
-	for j := range z.TimeFrom {
-		if z.TimeFrom[j] <= h && h <= z.TimeTo[j] {
+	startMin := (h % 24) * 60
+	for j := range z.TimeFromMin {
+		if timeBandContainsStartMin(z.TimeFromMin[j], z.TimeToExclMin[j], startMin) {
 			return j
 		}
 	}

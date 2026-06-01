@@ -37,14 +37,14 @@ time_zones:
     name: Night
     weight: 1.5
     from_hour: 0
-    to_hour: 5
+    to_hour: "06:00"
   - id: zt_morning
     name: Morning
     weight: 0.9
-    from_hour: 6
-    to_hour: 11
+    from_hour: "06:00"
+    to_hour: "12:00"
   - id: zt_day
     name: Day
     weight: 1.0
-    from_hour: 12
-    to_hour: 23
+    from_hour: "12:00"
+    to_hour: "24:00"

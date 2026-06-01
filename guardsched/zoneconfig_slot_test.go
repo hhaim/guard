@@ -25,7 +25,7 @@ time_zones:
     name: All
     weight: 1
     from_hour: 0
-    to_hour: 23
+    to_hour: "24:00"
 `)
 	zc, err := LoadZoneConfigYAML(raw, 2, nil)
 	if err != nil {
@@ -63,7 +63,7 @@ time_zones:
     name: All
     weight: 1
     from_hour: 0
-    to_hour: 23
+    to_hour: "24:00"
 `)
 	_, err := LoadZoneConfigYAML(raw, 1, nil)
 	if err == nil {

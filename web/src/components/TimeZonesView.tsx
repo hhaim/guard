@@ -3,7 +3,13 @@ import { useCallback, useMemo, useState } from "react";
 import { DecimalNumField } from "./DecimalNumField";
 import { useDevPanel } from "../context/AppStateContext";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
-import { emptyTimeBand, zonesDocToYamlObject, type TimeBand } from "../lib/zones";
+import {
+  emptyTimeBand,
+  formatTimeBandBound,
+  timeBandBoundSortKey,
+  zonesDocToYamlObject,
+  type TimeBand,
+} from "../lib/zones";
 import { ContactsRowEditButton } from "./ContactsRowEdit";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { ZoneEditSheet } from "./ZoneEditSheet";
@@ -62,7 +68,7 @@ export function TimeZonesView() {
     if (!doc) return [];
     return doc.time_zones
       .map((t, index) => ({ t, index }))
-      .sort((a, b) => a.t.from_hour - b.t.from_hour);
+      .sort((a, b) => timeBandBoundSortKey(a.t.from_hour) - timeBandBoundSortKey(b.t.from_hour));
   }, [doc]);
 
   if (!doc) {
@@ -188,7 +194,7 @@ export function TimeZonesView() {
                     <code>{t.id}</code>
                   </td>
                   <td>
-                    {t.from_hour}:00 – {t.to_hour}:00
+                    {formatTimeBandBound(t.from_hour)} – {formatTimeBandBound(t.to_hour)}
                   </td>
                   <td>{t.weight}</td>
                   <ContactsRowEditButton

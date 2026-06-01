@@ -28,4 +28,4 @@ slots:
   - { location_id: loc_post, name: post }
 
 time_zones:
-  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: 23 }
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }

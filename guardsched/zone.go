@@ -73,16 +73,35 @@ func LoadZoneAllRotating(path string, slotsPerBlock int, shiftHoursOverride *flo
 	tzs := data["time_zones"].([]any)
 	var tFrom, tTo []int
 	var tW []float64
-	defFrom := []int{0, 6, 12}
-	defTo := []int{5, 11, 23}
+	defFrom := []any{0, "06:00", "12:00"}
+	defTo := []any{"06:00", "12:00", "24:00"}
 	for i, row := range tzs {
 		m := row.(map[string]any)
 		di := i
 		if di >= len(defFrom) {
 			di = len(defFrom) - 1
 		}
-		tFrom = append(tFrom, int(intFromAny(m["from_hour"], defFrom[di])))
-		tTo = append(tTo, int(intFromAny(m["to_hour"], defTo[di])))
+		fromV := m["from_hour"]
+		if fromV == nil {
+			fromV = defFrom[di]
+		}
+		toV := m["to_hour"]
+		if toV == nil {
+			toV = defTo[di]
+		}
+		fromMin, err := parseTimeBandBound(fromV)
+		if err != nil {
+			return nil, fmt.Errorf("time_zones[%d] from_hour: %w", i, err)
+		}
+		toExclMin, err := parseTimeBandBound(toV)
+		if err != nil {
+			return nil, fmt.Errorf("time_zones[%d] to_hour: %w", i, err)
+		}
+		if timeBandSpanHours(fromMin, toExclMin) <= 0 {
+			return nil, fmt.Errorf("time_zones[%d]: empty band span", i)
+		}
+		tFrom = append(tFrom, fromMin)
+		tTo = append(tTo, toExclMin)
 		tW = append(tW, floatFromAny(m["weight"]))
 	}
 	sh := floatFromAny(data["shift_hours"])
@@ -96,8 +115,8 @@ func LoadZoneAllRotating(path string, slotsPerBlock int, shiftHoursOverride *flo
 		ShiftHours:      sh,
 		LocWeights:      locWeights,
 		TimeWeights:     tW,
-		TimeFrom:        tFrom,
-		TimeTo:          tTo,
+		TimeFromMin:     tFrom,
+		TimeToExclMin:   tTo,
 		SlotLocationIdx: slotLoc,
 		SlotPatterns:    slotPatterns,
 	}, nil

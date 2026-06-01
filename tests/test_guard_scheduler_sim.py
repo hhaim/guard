@@ -279,6 +279,102 @@ def test_time_category_and_spans_zones_yaml() -> None:
     assert float(spans.sum()) == 24.0
 
 
+def test_time_band_wrap_and_half_open() -> None:
+    zone = g.ZoneConfig(
+        loc_ids=(),
+        loc_names=(),
+        loc_full_names=(),
+        loc_weights=(),
+        time_ids=("night", "day"),
+        time_names=("Night", "Day"),
+        time_weights=(1.5, 1.0),
+        time_min_from=(21 * 60, 0),
+        time_min_to_excl=(60, 6 * 60),
+        slot_location_indices=(),
+        shift_hours=4.0,
+        slot_patterns=(),
+        slot_display_names=(),
+        location_type_ids=(),
+        full_day_specs={},
+        full_day_team_specs={},
+        windowed_specs={},
+        windowed_rest_hours={},
+        windowed_headcount={},
+        disabled_weekdays={},
+        slot_soldiers_required=(),
+    )
+    for h in (21, 22, 23, 0):
+        assert g.time_category_for_hour(h, zone) == 0
+    assert g.time_category_for_hour(1, zone) == 1
+    assert g.time_category_for_hour(5, zone) == 1
+    assert float(g._time_band_span_hours(21 * 60, 60)) == 4.0
+
+
+def test_time_band_wrap_overlap_duty_hours() -> None:
+    """Duty [00:00,04:00) with wrap night [21:00,01:00) → 1h night + 3h next band."""
+    zone = g.ZoneConfig(
+        loc_ids=(),
+        loc_names=(),
+        loc_full_names=(),
+        loc_weights=(),
+        time_ids=("night", "morning"),
+        time_names=("Night", "Morning"),
+        time_weights=(2.0, 1.0),
+        time_min_from=(21 * 60, 60),
+        time_min_to_excl=(60, 6 * 60),
+        slot_location_indices=(),
+        shift_hours=4.0,
+        slot_patterns=(),
+        slot_display_names=(),
+        location_type_ids=(),
+        full_day_specs={},
+        full_day_team_specs={},
+        windowed_specs={},
+        windowed_rest_hours={},
+        windowed_headcount={},
+        disabled_weekdays={},
+        slot_soldiers_required=(),
+    )
+    night_h = sum(1 for h in range(0, 4) if g.time_category_for_hour(h, zone) == 0)
+    morn_h = sum(1 for h in range(0, 4) if g.time_category_for_hour(h, zone) == 1)
+    assert night_h == 1 and morn_h == 3
+    w_night = sum(zone.time_weights[g.time_category_for_hour(h, zone)] for h in range(0, 4) if g.time_category_for_hour(h, zone) == 0)
+    w_morn = sum(zone.time_weights[g.time_category_for_hour(h, zone)] for h in range(0, 4) if g.time_category_for_hour(h, zone) == 1)
+    assert w_night == pytest.approx(2.0)
+    assert w_morn == pytest.approx(3.0)
+
+
+def test_full_day_0909_six_shift_aligned_bands() -> None:
+    z = g.ZoneConfig(
+        loc_ids=(),
+        loc_names=(),
+        loc_full_names=(),
+        loc_weights=(),
+        time_ids=tuple(f"z{i}" for i in range(6)),
+        time_names=tuple(f"Z{i}" for i in range(6)),
+        time_weights=tuple(1.0 for _ in range(6)),
+        time_min_from=(5 * 60, 9 * 60, 13 * 60, 17 * 60, 21 * 60, 60),
+        time_min_to_excl=(9 * 60, 13 * 60, 17 * 60, 21 * 60, 60, 5 * 60),
+        slot_location_indices=(),
+        shift_hours=4.0,
+        slot_patterns=(),
+        slot_display_names=(),
+        location_type_ids=(),
+        full_day_specs={},
+        full_day_team_specs={},
+        windowed_specs={},
+        windowed_rest_hours={},
+        windowed_headcount={},
+        disabled_weekdays={},
+        slot_soldiers_required=(),
+    )
+    hours = list(range(9, 24)) + list(range(0, 9))
+    counts = [0] * 6
+    for h in hours:
+        counts[g.time_category_for_hour(h, z)] += 1
+    assert counts == [4, 4, 4, 4, 4, 4]
+
+
 def test_heatmap_time_fraction_by_row() -> None:
     raw = np.array([[1.0, 3.0, 0.0], [0.0, 0.0, 0.0]], dtype=np.float64)
     z = g.heatmap_time_fraction_by_row(raw)
@@ -303,7 +399,7 @@ def test_load_legacy_yaml_migrated(tmp_path: Path) -> None:
     cfg = {
         "locations": [{"id": "l1", "name": "L1", "weight": 1.0}],
         "time_zones": [
-            {"id": "t1", "name": "T1", "weight": 1.0, "from_hour": 0, "to_hour": 23},
+            {"id": "t1", "name": "T1", "weight": 1.0, "from_hour": 0, "to_hour": "24:00"},
         ],
         "slots": [{"location_id": "l1"}],
     }
@@ -347,7 +443,7 @@ def test_load_zone_full_name_on_zone_loc_and_slots(tmp_path: Path) -> None:
         ],
         "slots": [{"location_id": "l1", "name": "g1", "full_name": "abssss"}],
         "time_zones": [
-            {"id": "t1", "name": "T1", "weight": 1.0, "from_hour": 0, "to_hour": 23},
+            {"id": "t1", "name": "T1", "weight": 1.0, "from_hour": 0, "to_hour": "24:00"},
         ],
     }
     p = tmp_path / "zones_full_names.yaml"
@@ -415,8 +511,8 @@ def test_minimal_v2_rotating_only_zone(tmp_path: Path) -> None:
         ],
         "slots": [{"location_id": "loc_a"}, {"location_id": "loc_b"}],
         "time_zones": [
-            {"id": "z0", "name": "First", "weight": 1.0, "from_hour": 0, "to_hour": 11},
-            {"id": "z1", "name": "Second", "weight": 1.0, "from_hour": 12, "to_hour": 23},
+            {"id": "z0", "name": "First", "weight": 1.0, "from_hour": 0, "to_hour": "12:00"},
+            {"id": "z1", "name": "Second", "weight": 1.0, "from_hour": "12:00", "to_hour": "24:00"},
         ],
     }
     p = tmp_path / "zones_v2_mini.yaml"
@@ -601,7 +697,7 @@ zone_loc:
 slots:
   - { location_id: loc_k, name: k1 }
 time_zones:
-  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: 23 }
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }
 """,
         encoding="utf-8",
     )
@@ -899,8 +995,8 @@ def test_run_simulation_mini_rotating(tmp_path: Path) -> None:
         ],
         "slots": [{"location_id": "loc_a"}, {"location_id": "loc_b"}],
         "time_zones": [
-            {"id": "z0", "name": "First", "weight": 1.0, "from_hour": 0, "to_hour": 11},
-            {"id": "z1", "name": "Second", "weight": 1.0, "from_hour": 12, "to_hour": 23},
+            {"id": "z0", "name": "First", "weight": 1.0, "from_hour": 0, "to_hour": "12:00"},
+            {"id": "z1", "name": "Second", "weight": 1.0, "from_hour": "12:00", "to_hour": "24:00"},
         ],
     }
     p = tmp_path / "zones_v2_mini_run.yaml"
@@ -952,8 +1048,8 @@ def test_run_simulation_full_day_only_one_slot(tmp_path: Path) -> None:
         "zone_loc": [{"id": "loc_x", "type": "t_fd", "name": "X", "full_name": "Full day post", "weight": 1.0}],
         "slots": [{"location_id": "loc_x", "name": "s1", "full_name": "Slot detail"}],
         "time_zones": [
-            {"id": "z0", "name": "N", "weight": 1.0, "from_hour": 0, "to_hour": 11},
-            {"id": "z1", "name": "D", "weight": 1.0, "from_hour": 12, "to_hour": 23},
+            {"id": "z0", "name": "N", "weight": 1.0, "from_hour": 0, "to_hour": "12:00"},
+            {"id": "z1", "name": "D", "weight": 1.0, "from_hour": "12:00", "to_hour": "24:00"},
         ],
     }
     p = tmp_path / "zones_v2_fd.yaml"
