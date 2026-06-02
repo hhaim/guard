@@ -1126,6 +1126,7 @@ export function buildScheduleStats(
   for (const a of assignments) {
     const s = a.soldier_idx;
     if (s < 0 || s >= soldierCount) continue;
+    if (a.day < 0 || a.day >= days) continue;
     const li = a.loc_i;
     const tj = a.time_j;
     if (li >= 0 && li < nl) {
