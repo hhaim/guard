@@ -22,6 +22,7 @@ import { platoonLabel } from "../lib/soldierPlatoons";
 import { typeLabel } from "../lib/soldierTypes";
 import { downloadText, pickTextFile } from "../lib/fileIo";
 import { ColumnFilterMenu } from "./ColumnFilterMenu";
+import { ColumnSortButton, type SortDirection } from "./ColumnSortButton";
 import { ContactsRowEditButton } from "./ContactsRowEdit";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { SoldierEditorSheet } from "./SoldierEditorSheet";
@@ -35,6 +36,7 @@ type CfgResp = { key: string; value: unknown; version: number; updated_at: strin
 const ROSTER_AUTOSAVE_MS = 600;
 
 type DevJsonSource = "soldiers" | "types" | "platoons";
+type RosterSortKey = "type" | "platoon" | "name" | "id";
 
 export function SoldiersView() {
   const qc = useQueryClient();
@@ -45,6 +47,8 @@ export function SoldiersView() {
   const [searchText, setSearchText] = useState("");
   const [selectedTypeCodes, setSelectedTypeCodes] = useState<Set<string> | null>(null);
   const [selectedPlatoonCodes, setSelectedPlatoonCodes] = useState<Set<string> | null>(null);
+  const [sortKey, setSortKey] = useState<RosterSortKey>("name");
+  const [sortDir, setSortDir] = useState<SortDirection>("asc");
 
   const soldiersQ = useQuery({
     queryKey: ["cfg", "soldiers"],
@@ -87,35 +91,6 @@ export function SoldiersView() {
     setSaveState("idle");
     setSaveError(null);
   }, [soldiersQ.data]);
-
-  // #region agent log
-  useEffect(() => {
-    const sample = doc.soldiers.find((s) => s.id.toLowerCase() === "s76");
-    if (!sample) return;
-    const pc = sample.platoon_code?.trim() ?? "";
-    const avatar = pc
-      ? platoonAvatarStyle(pc, platoonColors)
-      : platoonAvatarStyle("", platoonColors, 0);
-    fetch("http://127.0.0.1:7873/ingest/ffd4b145-0813-4a01-96e9-6b29cb6053ad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "35b199" },
-      body: JSON.stringify({
-        sessionId: "35b199",
-        runId: "avatar-fix",
-        hypothesisId: "H-F",
-        location: "SoldiersView.tsx:avatar",
-        message: "soldier avatar style s76",
-        data: {
-          id: sample.id,
-          platoon_code: pc,
-          platoonColorsCount: platoonColors.length,
-          avatarStyle: avatar,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  }, [doc.soldiers, platoonColors]);
-  // #endregion
 
   const liveJson = useMemo(() => {
     if (jsonOverride != null) {
@@ -202,14 +177,49 @@ export function SoldiersView() {
     return opts;
   }, [doc.soldiers, platoonsCfg.doc]);
 
+  const toggleSort = useCallback(
+    (key: RosterSortKey) => {
+      if (sortKey === key) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      } else {
+        setSortKey(key);
+        setSortDir("asc");
+      }
+    },
+    [sortKey]
+  );
+
   const sortedRows = useMemo(() => {
     const rows = [...columnFilteredRows];
-    return rows.sort((a, b) => {
-      const na = a.s.full_name.trim() || a.s.id;
-      const nb = b.s.full_name.trim() || b.s.id;
-      return na.localeCompare(nb, undefined, { sensitivity: "base" });
-    });
-  }, [columnFilteredRows]);
+    const sign = sortDir === "asc" ? 1 : -1;
+    const compare = (a: { s: Soldier }, b: { s: Soldier }) => {
+      switch (sortKey) {
+        case "id":
+          return (
+            a.s.id.localeCompare(b.s.id, undefined, { numeric: true, sensitivity: "base" }) * sign
+          );
+        case "type": {
+          const ta = a.s.type_code?.trim() ?? "";
+          const tb = b.s.type_code?.trim() ?? "";
+          return ta.localeCompare(tb, undefined, { sensitivity: "base" }) * sign;
+        }
+        case "platoon": {
+          const pa = a.s.platoon_code?.trim() ?? "";
+          const pb = b.s.platoon_code?.trim() ?? "";
+          return (
+            pa.localeCompare(pb, undefined, { numeric: true, sensitivity: "base" }) * sign
+          );
+        }
+        case "name":
+        default: {
+          const na = a.s.full_name.trim() || a.s.id;
+          const nb = b.s.full_name.trim() || b.s.id;
+          return na.localeCompare(nb, undefined, { sensitivity: "base" }) * sign;
+        }
+      }
+    };
+    return rows.sort(compare);
+  }, [columnFilteredRows, sortKey, sortDir]);
 
   const saveRosterM = useMutation({
     mutationFn: async (payload: SoldiersDoc) => {
@@ -523,6 +533,12 @@ export function SoldiersView() {
                   <th scope="col" className="soldiers-th-type">
                     <span className="soldiers-th-filter">
                       Type
+                      <ColumnSortButton
+                        label="type"
+                        active={sortKey === "type"}
+                        direction={sortDir}
+                        onToggle={() => toggleSort("type")}
+                      />
                       <ColumnFilterMenu
                         label="type"
                         options={typeFilterOptions}
@@ -534,6 +550,12 @@ export function SoldiersView() {
                   <th scope="col" className="soldiers-th-type">
                     <span className="soldiers-th-filter">
                       Platoon
+                      <ColumnSortButton
+                        label="platoon"
+                        active={sortKey === "platoon"}
+                        direction={sortDir}
+                        onToggle={() => toggleSort("platoon")}
+                      />
                       <ColumnFilterMenu
                         label="platoon"
                         options={platoonFilterOptions}
@@ -542,8 +564,28 @@ export function SoldiersView() {
                       />
                     </span>
                   </th>
-                  <th scope="col">Name</th>
-                  <th scope="col">ID</th>
+                  <th scope="col">
+                    <span className="soldiers-th-filter soldiers-th-filter-left">
+                      Name
+                      <ColumnSortButton
+                        label="name"
+                        active={sortKey === "name"}
+                        direction={sortDir}
+                        onToggle={() => toggleSort("name")}
+                      />
+                    </span>
+                  </th>
+                  <th scope="col">
+                    <span className="soldiers-th-filter soldiers-th-filter-left">
+                      ID
+                      <ColumnSortButton
+                        label="ID"
+                        active={sortKey === "id"}
+                        direction={sortDir}
+                        onToggle={() => toggleSort("id")}
+                      />
+                    </span>
+                  </th>
                   <th className="contacts-th-chevron" scope="col" />
                 </tr>
               </thead>

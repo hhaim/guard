@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { auditPlatoonColorResolution } from "../lib/soldierDisplay";
+import { useMemo, useState } from "react";
 import { countEnabledSlots, type ZonesDoc } from "../lib/zones";
 import type { PlatoonColorEntry } from "../lib/platoonColors";
 import { buildSoldierDisplay, type SoldierDisplay } from "../lib/soldierDisplay";
@@ -458,47 +457,6 @@ export function ScheduleResultsReport({
     () => buildSoldierDisplay(soldierIds, soldiers, report.soldierCount, platoonColors),
     [soldierIds, soldiers, report.soldierCount, platoonColors]
   );
-
-  // #region agent log
-  useEffect(() => {
-    const audit = auditPlatoonColorResolution(
-      soldierIds,
-      soldiers,
-      report.soldierCount,
-      platoonColors
-    );
-    const matrixSample = report.matrices.slice(0, 1).flatMap((m) =>
-      m.rows.slice(0, 4).flatMap((row) =>
-        row.cells
-          .filter((c) => !c.skip && !c.disabled && (c.soldierIndices?.length ?? 0) > 0)
-          .slice(0, 3)
-          .map((c) => {
-            const idx = c.soldierIndices?.[0] ?? c.soldierIdx ?? -1;
-            const st = idx >= 0 ? display.badgeStyle(idx) : null;
-            return {
-              day: m.day,
-              window: row.window,
-              soldierIdx: idx,
-              badgeBg: st?.backgroundColor ?? null,
-            };
-          })
-      )
-    );
-    fetch("http://127.0.0.1:7873/ingest/ffd4b145-0813-4a01-96e9-6b29cb6053ad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "35b199" },
-      body: JSON.stringify({
-        sessionId: "35b199",
-        runId: "post-fix",
-        hypothesisId: "H-A,H-B,H-C,H-D",
-        location: "ScheduleResultsReport.tsx:display",
-        message: "platoon color audit",
-        data: { ...audit, matrixSample },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  }, [soldierIds, soldiers, report.soldierCount, report.matrices, platoonColors, display]);
-  // #endregion
 
   const soldierRows = useMemo(() => {
     if (selectedSoldier == null) return null;

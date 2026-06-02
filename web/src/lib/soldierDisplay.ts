@@ -32,62 +32,6 @@ export type SoldierDisplay = {
   matrixBadgeStyle: (idx: number) => PlatoonStyle;
 };
 
-/** Debug audit for platoon badge/cell color hypotheses (session 35b199). */
-export function auditPlatoonColorResolution(
-  soldierIds: string[],
-  soldiers: Soldier[],
-  soldierCount: number,
-  platoonColors: PlatoonColorEntry[]
-) {
-  const byId = new Map(soldiers.map((s) => [s.id, s]));
-  const count = Math.max(soldierCount, soldierIds.length);
-  const samples: {
-    idx: number;
-    id: string | null;
-    platoon_code: string | null;
-    hasSoldierRecord: boolean;
-    platoonColorConfigured: boolean;
-    bg: string;
-    source: "configured" | "fallback" | "no_platoon";
-  }[] = [];
-  for (let idx = 0; idx < Math.min(count, 16); idx++) {
-    const id = soldierIds[idx] ?? null;
-    const s = id ? byId.get(id) : undefined;
-    const pc = s?.platoon_code?.trim() ?? "";
-    let source: "configured" | "fallback" | "no_platoon" = "no_platoon";
-    let platoonColorConfigured = false;
-    if (pc) {
-      platoonColorConfigured = platoonColors.some((x) => x.code === pc);
-      source = platoonColorConfigured ? "configured" : "fallback";
-    }
-    const style =
-      pc && source !== "no_platoon"
-        ? platoonBadgeStyle(pc, platoonColors)
-        : {
-            backgroundColor: SOLDIER_BADGE_COLORS[idx % SOLDIER_BADGE_COLORS.length].bg,
-            color: SOLDIER_BADGE_COLORS[idx % SOLDIER_BADGE_COLORS.length].fg,
-          };
-    const bg = style.backgroundColor;
-    samples.push({
-      idx,
-      id,
-      platoon_code: pc || null,
-      hasSoldierRecord: Boolean(s),
-      platoonColorConfigured,
-      bg: typeof bg === "string" ? bg : String(bg),
-      source,
-    });
-  }
-  return {
-    platoonColorsCount: platoonColors.length,
-    platoonColorCodes: platoonColors.map((c) => c.code),
-    soldierIdsLen: soldierIds.length,
-    soldiersWithPlatoon: soldiers.filter((s) => s.platoon_code?.trim()).length,
-    soldierCount: count,
-    samples,
-  };
-}
-
 export function buildSoldierDisplay(
   soldierIds: string[],
   soldiers: Soldier[],
