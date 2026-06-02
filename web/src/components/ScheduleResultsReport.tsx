@@ -423,7 +423,7 @@ export function ScheduleResultsReport({
   const [selectedSoldier, setSelectedSoldier] = useState<number | null>(null);
   const [showJson, setShowJson] = useState(false);
 
-  const report = useMemo(() => {
+  const zoneBundle = useMemo(() => {
     const slotsPerBlock = countEnabledSlots(zones);
     const zone = buildZoneReportView(zones, slotsPerBlock);
     if (shiftHours > 0) {
@@ -431,27 +431,58 @@ export function ScheduleResultsReport({
       zone.blocksPerDay = Math.round(24 / shiftHours);
     }
     const soldierCount = inferSoldierCount(assignments);
-    const busy = buildBusyTensor(assignments, days, soldierCount, zone.blocksPerDay, true);
+    return { zone, soldierCount };
+  }, [assignments, shiftHours, zones]);
+
+  const report = useMemo(() => {
+    const { zone, soldierCount } = zoneBundle;
+    const needMatrix = sections.matrixShort || sections.matrixFull;
+    const needTimeline = sections.timeline;
+    const needStats = sections.statsPanel;
+
+    const matrices = needMatrix
+      ? buildScheduleMatrices(assignments, days, zone, {
+          planDayStartHour,
+          anchorDate,
+          soldierIds,
+        })
+      : [];
+    const busy = needTimeline
+      ? buildBusyTensor(assignments, days, soldierCount, zone.blocksPerDay, true)
+      : null;
+    const lanes =
+      needTimeline && busy
+        ? buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
+            soldierIds,
+            anchorDate,
+            shiftHours: zone.shiftHours,
+            soldiersByDay: plan.soldiers,
+            assignments,
+          })
+        : [];
+    const stats = needStats ? buildScheduleStats(assignments, days, zone, soldierCount) : null;
     return {
       zone,
       soldierCount,
-      matrices: buildScheduleMatrices(assignments, days, zone, {
-        planDayStartHour,
-        anchorDate,
-        soldierIds,
-      }),
+      matrices,
       busy,
-      lanes: buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
-        soldierIds,
-        anchorDate,
-        shiftHours: zone.shiftHours,
-        soldiersByDay: plan.soldiers,
-        assignments,
-      }),
+      lanes,
       totalHours: days * 24 + reportFutureExtensionBlocks(zone.shiftHours) * zone.shiftHours,
-      stats: buildScheduleStats(assignments, days, zone, soldierCount),
+      stats,
     };
-  }, [assignments, days, shiftHours, zones, anchorDate, planDayStartHour, soldierIds, plan.soldiers]);
+  }, [
+    zoneBundle,
+    assignments,
+    days,
+    planDayStartHour,
+    anchorDate,
+    soldierIds,
+    plan.soldiers,
+    sections.matrixShort,
+    sections.matrixFull,
+    sections.timeline,
+    sections.statsPanel,
+  ]);
 
   const display = useMemo(
     () => buildSoldierDisplay(soldierIds, soldiers, report.soldierCount, platoonColors),
@@ -570,7 +601,7 @@ export function ScheduleResultsReport({
         />
       )}
 
-      {sections.statsPanel && (
+      {sections.statsPanel && report.stats && (
         <ScheduleStatsPanel
           stats={report.stats}
           days={days}

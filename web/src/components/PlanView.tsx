@@ -1,6 +1,6 @@
 import { Copy, Download } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { apiGet } from "../api";
 import {
   applyPlan,
@@ -24,9 +24,19 @@ import {
   fetchPreviewAvailabilityByDays,
   type PlanDaySoldiers,
 } from "./SoldiersStatusBoard";
-import { soldiersFromCfg } from "./ScheduleResultsReport";
+import { soldiersFromCfg, type ScheduleReportSections } from "./ScheduleResultsReport";
 
 const SLOT_KEY = "guard-plan-slot";
+
+/** Plan tab: matrix + stats; skip timeline/full roster (heavy with 80+ soldiers). */
+const PLAN_TAB_PREVIEW_SECTIONS: ScheduleReportSections = {
+  matrixShort: true,
+  matrixFull: false,
+  bySoldier: false,
+  timeline: false,
+  statsPanel: true,
+  availability: false,
+};
 
 function Field({
   label,
@@ -65,6 +75,11 @@ export function PlanView({
     queryFn: () => fetchPlanContext(debugDayOffset > 0 ? debugDayOffset : undefined),
   });
   const anchor = planCtxQ.data?.plan_anchor ?? "";
+  const offsetMatchesCtx =
+    planCtxQ.data != null &&
+    planCtxQ.data.request_day_offset === (debugDayOffset > 0 ? debugDayOffset : 0);
+  const planContextReady = Boolean(anchor) && offsetMatchesCtx;
+  const loadSeqRef = useRef(0);
 
   const [selectedSlot, setSelectedSlot] = useState(() => {
     try {
@@ -86,11 +101,15 @@ export function PlanView({
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [pdfExporting, setPdfExporting] = useState(false);
+  const [slotLoading, setSlotLoading] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+
+  const requestDebugOffset = debugDayOffset > 0 ? debugDayOffset : undefined;
 
   const proposalsQ = useQuery({
-    queryKey: ["plan", "proposals", anchor],
-    queryFn: () => listProposals(anchor),
-    enabled: Boolean(anchor),
+    queryKey: ["plan", "proposals", anchor, debugDayOffset],
+    queryFn: () => listProposals(anchor, requestDebugOffset),
+    enabled: planContextReady,
   });
 
   const soldiersQ = useQuery({
@@ -127,7 +146,7 @@ export function PlanView({
   const previewAvailQ = useQuery({
     queryKey: ["plan", "preview-availability", anchor, days],
     queryFn: () => fetchPreviewAvailabilityByDays(anchor, days),
-    enabled: Boolean(anchor) && days >= 1,
+    enabled: planContextReady && days >= 1,
   });
 
   const availabilityByDay = useMemo((): Record<string, PlanDaySoldiers> | undefined => {
@@ -143,22 +162,31 @@ export function PlanView({
     return Object.keys(out).length > 0 ? out : undefined;
   }, [previewAvailQ.data, proposal?.soldiers]);
 
+  const previewProposal =
+    proposal && anchor && proposal.anchor_date === anchor ? proposal : null;
+
   const loadSlot = useCallback(
     async (slot: string, opts?: { silent?: boolean }) => {
       if (!anchor) return;
+      const seq = ++loadSeqRef.current;
       if (!opts?.silent) setErrorMsg(null);
+      setSlotLoading(true);
       try {
-        const data = await getProposal(anchor, slot);
+        const data = await getProposal(anchor, slot, requestDebugOffset);
+        if (seq !== loadSeqRef.current) return;
         setProposal(data.proposal);
         setCfgVersion(data.version);
         setDirty(false);
       } catch {
+        if (seq !== loadSeqRef.current) return;
         setProposal(null);
         setCfgVersion(0);
         setDirty(false);
+      } finally {
+        if (seq === loadSeqRef.current) setSlotLoading(false);
       }
     },
-    [anchor]
+    [anchor, requestDebugOffset]
   );
 
   const selectSlot = (slot: string) => {
@@ -177,9 +205,34 @@ export function PlanView({
   }, [selectedSlot]);
 
   useEffect(() => {
-    if (!anchor) return;
+    if (!planContextReady) return;
     void loadSlot(selectedSlot, { silent: true });
-  }, [anchor, selectedSlot, loadSlot]);
+  }, [anchor, selectedSlot, loadSlot, planContextReady]);
+
+  useEffect(() => {
+    if (!previewProposal || slotLoading || !planContextReady) {
+      setShowPreview(false);
+      return;
+    }
+    let cancelled = false;
+    const reveal = () => {
+      if (!cancelled) setShowPreview(true);
+    };
+    let deferId: number;
+    if (typeof window.requestIdleCallback === "function") {
+      deferId = window.requestIdleCallback(reveal, { timeout: 150 });
+    } else {
+      deferId = window.setTimeout(reveal, 0);
+    }
+    return () => {
+      cancelled = true;
+      if (typeof window.requestIdleCallback === "function") {
+        window.cancelIdleCallback(deferId);
+      } else {
+        window.clearTimeout(deferId);
+      }
+    };
+  }, [previewProposal, slotLoading, planContextReady, anchor]);
 
   const buildParams = (): PlanGenerateParams => {
     const trials = Math.max(1, Math.floor(simTrials));
@@ -220,8 +273,7 @@ export function PlanView({
       setDirty(false);
       setErrorMsg(null);
       setStatusMsg(`Generated proposal ${selectedSlot} (${p.assignments.length} assignments).`);
-      void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor] });
-      void loadSlot(selectedSlot);
+      void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
     onError: (e) => {
       let msg = e instanceof Error ? e.message : "Generate failed";
@@ -238,31 +290,31 @@ export function PlanView({
   const saveM = useMutation({
     mutationFn: async () => {
       if (!proposal) throw new Error("Nothing to save");
-      return saveProposal(anchor, selectedSlot, proposal, cfgVersion);
+      return saveProposal(anchor, selectedSlot, proposal, cfgVersion, requestDebugOffset);
     },
     onSuccess: () => {
       setDirty(false);
       setStatusMsg(`Saved proposal ${selectedSlot}.`);
-      void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor] });
+      void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
       void loadSlot(selectedSlot);
     },
     onError: (e) => setErrorMsg(e instanceof Error ? e.message : "Save failed"),
   });
 
   const clearM = useMutation({
-    mutationFn: () => clearProposal(anchor, selectedSlot),
+    mutationFn: () => clearProposal(anchor, selectedSlot, requestDebugOffset),
     onSuccess: () => {
       setProposal(null);
       setCfgVersion(0);
       setDirty(false);
       setStatusMsg(`Cleared proposal ${selectedSlot}.`);
-      void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor] });
+      void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
     onError: (e) => setErrorMsg(e instanceof Error ? e.message : "Clear failed"),
   });
 
   const applyM = useMutation({
-    mutationFn: () => applyPlan(anchor, selectedSlot),
+    mutationFn: () => applyPlan(anchor, selectedSlot, requestDebugOffset),
     onSuccess: (data) => {
       setProposal(null);
       setCfgVersion(0);
@@ -270,7 +322,7 @@ export function PlanView({
       setStatusMsg(
         `Applied proposal ${selectedSlot} to verified schedule (${data.dates_written.length} day(s): ${data.dates_written.join(", ")}). All proposals cleared.`
       );
-      void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor] });
+      void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
     onError: (e) => {
       const raw = e instanceof Error ? e.message : "Apply failed";
@@ -360,8 +412,8 @@ export function PlanView({
   };
 
   const planCtx = planCtxQ.data;
-  const applySummary = proposal
-    ? `Proposal ${selectedSlot} · ${proposal.anchor_date} · ${proposal.days} day(s) · ${proposal.assignments.length} assignments`
+  const applySummary = previewProposal
+    ? `Proposal ${selectedSlot} · ${previewProposal.anchor_date} · ${previewProposal.days} day(s) · ${previewProposal.assignments.length} assignments`
     : slotFilled
       ? `Proposal ${selectedSlot} · empty or loading`
       : `Proposal ${selectedSlot} · empty — generate to create`;
@@ -444,7 +496,7 @@ export function PlanView({
                   <button
                     type="button"
                     className="btn btn-filled"
-                    disabled={generateM.isPending || !anchor || planCtxQ.isLoading}
+                    disabled={generateM.isPending || !planContextReady}
                     onClick={handleGenerate}
                   >
                     {generateM.isPending ? "Generating…" : slotFilled ? "Regenerate" : "Generate new"}
@@ -506,7 +558,9 @@ export function PlanView({
                   min={0}
                   max={366}
                   value={debugDayOffset}
-                  onChange={(e) => setDebugDayOffset(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+                  onChange={(e) =>
+                    setDebugDayOffset(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                  }
                 />
               </Field>
             )}
@@ -595,6 +649,11 @@ export function PlanView({
           </div>
         </details>
 
+        {planCtxQ.isError && (
+          <p className="msg-err plan-status-msg">
+            Failed to load planning context: {planCtxQ.error instanceof Error ? planCtxQ.error.message : "Unknown error"}
+          </p>
+        )}
         {statusMsg && (
           <p className="contacts-hint plan-status-msg">{statusMsg}</p>
         )}
@@ -602,14 +661,14 @@ export function PlanView({
       </section>
 
       <section
-        className={`run-results-panel${proposal ? " has-data" : ""}`}
+        className={`run-results-panel${previewProposal ? " has-data" : ""}`}
         aria-label="Plan results"
       >
         <header className="run-results-header">
           <h3>Preview · proposal {selectedSlot}</h3>
-          {proposal && (
+          {previewProposal && (
             <span className="run-results-meta">
-              {proposal.assignments.length} assignments
+              {previewProposal.assignments.length} assignments
             </span>
           )}
           <div className="run-results-header-actions">
@@ -636,28 +695,44 @@ export function PlanView({
           </div>
         </header>
         <div className="run-results-body">
-          {!proposal && (
+          {(planCtxQ.isFetching && !planContextReady) || slotLoading ? (
+            <p className="contacts-empty">
+              {planCtxQ.isFetching && !planContextReady
+                ? `Updating planning context${debugDayOffset > 0 ? ` (+${debugDayOffset}d)` : ""}…`
+                : "Loading proposal…"}
+            </p>
+          ) : null}
+          {planContextReady && !slotLoading && !previewProposal && (
             <p className="contacts-empty">
               Select a slot and click <strong>Generate new</strong> to preview the matrix and stats.
             </p>
           )}
-          {proposal && zonesLoading && (
+          {previewProposal && planContextReady && !slotLoading && !showPreview && (
+            <p className="contacts-empty">Loading preview…</p>
+          )}
+          {previewProposal && planContextReady && !slotLoading && zonesLoading && (
             <p className="contacts-empty">Loading zones configuration…</p>
           )}
-          {proposal && !zonesLoading && zonesLoadError && (
+          {previewProposal && planContextReady && !slotLoading && !zonesLoading && zonesLoadError && (
             <p className="msg-err">Cannot render schedule tables: {zonesLoadError}</p>
           )}
-          {proposal && !zonesLoading && zonesDoc && (
-            <PlanDocView
-              plan={proposal}
-              zones={zonesDoc}
-              soldierIds={soldierIds}
-              soldiers={soldiers}
-              platoonColors={platoonColors}
-              onPlanChange={readOnly ? undefined : onProposalChange}
-              readOnly={readOnly}
-            />
-          )}
+          {showPreview &&
+            previewProposal &&
+            planContextReady &&
+            !slotLoading &&
+            !zonesLoading &&
+            zonesDoc && (
+              <PlanDocView
+                plan={previewProposal}
+                zones={zonesDoc}
+                soldierIds={soldierIds}
+                soldiers={soldiers}
+                platoonColors={platoonColors}
+                sections={PLAN_TAB_PREVIEW_SECTIONS}
+                onPlanChange={readOnly ? undefined : onProposalChange}
+                readOnly={readOnly}
+              />
+            )}
         </div>
       </section>
     </div>

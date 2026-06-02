@@ -74,6 +74,12 @@ export function fetchPlanContext(debugDayOffset?: number): Promise<PlanContext> 
   return apiGet(`/api/plan/context${q}`);
 }
 
+function planDebugQuery(debugDayOffset?: number): string {
+  return debugDayOffset != null && debugDayOffset > 0
+    ? `&debug_day_offset=${encodeURIComponent(String(debugDayOffset))}`
+    : "";
+}
+
 /** @deprecated use fetchPlanContext().plan_anchor */
 export function tomorrowUTC(): string {
   const d = new Date();
@@ -81,17 +87,23 @@ export function tomorrowUTC(): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function listProposals(anchor: string): Promise<PlanListResponse> {
-  return apiGet(`/api/plan/proposals?anchor=${encodeURIComponent(anchor)}`);
+export function listProposals(anchor: string, debugDayOffset?: number): Promise<PlanListResponse> {
+  return apiGet(
+    `/api/plan/proposals?anchor=${encodeURIComponent(anchor)}${planDebugQuery(debugDayOffset)}`
+  );
 }
 
-export function getProposal(anchor: string, slot: string): Promise<PlanGetResponse> {
-  return apiGet<PlanGetResponse>(`/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}`).then(
-    (res) => ({
-      ...res,
-      proposal: normalizePlanDoc(res.proposal),
-    })
-  );
+export function getProposal(
+  anchor: string,
+  slot: string,
+  debugDayOffset?: number
+): Promise<PlanGetResponse> {
+  return apiGet<PlanGetResponse>(
+    `/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}${planDebugQuery(debugDayOffset)}`
+  ).then((res) => ({
+    ...res,
+    proposal: normalizePlanDoc(res.proposal),
+  }));
 }
 
 export function generatePlan(body: PlanGenerateParams): Promise<PlanGenerateResult> {
@@ -117,16 +129,23 @@ export function saveProposal(
   anchor: string,
   slot: string,
   plan: PlanDoc,
-  expectedVersion: number
+  expectedVersion: number,
+  debugDayOffset?: number
 ): Promise<{ ok: boolean; version: number }> {
-  return callApi(`/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}`, {
+  return callApi(`/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}${planDebugQuery(debugDayOffset)}`, {
     method: "PUT",
     body: JSON.stringify({ ...normalizePlanDoc(plan), expected_version: expectedVersion }),
   });
 }
 
-export function clearProposal(anchor: string, slot: string): Promise<{ ok: boolean; slot: string }> {
-  return apiDelete(`/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}`) as Promise<{
+export function clearProposal(
+  anchor: string,
+  slot: string,
+  debugDayOffset?: number
+): Promise<{ ok: boolean; slot: string }> {
+  return apiDelete(
+    `/api/plan/proposals/${slot}?anchor=${encodeURIComponent(anchor)}${planDebugQuery(debugDayOffset)}`
+  ) as Promise<{
     ok: boolean;
     slot: string;
   }>;
@@ -139,10 +158,21 @@ export type PlanApplyResult = {
   dates_written: string[];
 };
 
-export function applyPlan(anchor: string, slot: string): Promise<PlanApplyResult> {
+export function applyPlan(
+  anchor: string,
+  slot: string,
+  debugDayOffset?: number
+): Promise<PlanApplyResult> {
+  const body: { anchor_date: string; slot: string; debug_day_offset?: number } = {
+    anchor_date: anchor,
+    slot,
+  };
+  if (debugDayOffset != null && debugDayOffset > 0) {
+    body.debug_day_offset = debugDayOffset;
+  }
   return callApi("/api/plan/apply", {
     method: "POST",
-    body: JSON.stringify({ anchor_date: anchor, slot }),
+    body: JSON.stringify(body),
   });
 }
 
