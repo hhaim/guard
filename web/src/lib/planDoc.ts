@@ -126,6 +126,49 @@ function inferDaySpan(assignments: ScheduleAssignment[]): number {
   return maxDay + 1;
 }
 
+/** Calendar dates for verified schedule days (from merge meta or anchor + day span). */
+export function verifiedDatesFromPlan(plan: PlanDoc): string[] {
+  const raw = plan.meta?.verified_dates;
+  if (Array.isArray(raw)) {
+    const dates = raw.filter((d): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d));
+    if (dates.length > 0) return dates.map((d) => d.slice(0, 10));
+  }
+  if (!plan.anchor_date || plan.days <= 0) return [];
+  const out: string[] = [];
+  const start = new Date(`${plan.anchor_date}T00:00:00.000Z`);
+  if (Number.isNaN(start.getTime())) return [];
+  for (let i = 0; i < plan.days; i++) {
+    const d = new Date(start);
+    d.setUTCDate(d.getUTCDate() + i);
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+/** One-day PlanDoc for a verified calendar date (plan day index renumbered to 0). */
+export function slicePlanToVerifiedDate(plan: PlanDoc, calendarDate: string): PlanDoc | null {
+  const dates = verifiedDatesFromPlan(plan);
+  const dayIndex = dates.indexOf(calendarDate.slice(0, 10));
+  if (dayIndex < 0) return null;
+  const date = dates[dayIndex]!;
+  const assignments = plan.assignments
+    .filter((a) => a.day === dayIndex)
+    .map((a) => ({ ...a, day: 0 }));
+  const soldiers =
+    plan.soldiers?.[date] != null ? { [date]: plan.soldiers[date]! } : undefined;
+  return {
+    ...plan,
+    anchor_date: date,
+    days: 1,
+    assignments,
+    soldiers,
+    meta: {
+      ...plan.meta,
+      verified_dates: [date],
+    },
+  };
+}
+
 /** Verified schedule for a UTC date range (same JSON as proposals). */
 export function fetchVerifiedPlan(from: string, to: string): Promise<PlanDoc> {
   return apiGet<unknown>(

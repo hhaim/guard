@@ -1509,6 +1509,84 @@
   accent-color: var(--accent);
 }
 
+.stats-day-nav {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.stats-day-nav-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.stats-day-nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.stats-day-nav-btn {
+  padding: 0.35rem 0.5rem;
+  min-width: 2.25rem;
+}
+
+.stats-day-nav-center {
+  flex: 1;
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-align: center;
+}
+
+.stats-day-nav-date {
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.stats-day-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.stats-day-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-elevated);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  color: inherit;
+}
+
+.stats-day-chip:hover {
+  border-color: var(--accent);
+}
+
+.stats-day-chip-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-elevated));
+}
+
+.stats-day-chip-wd {
+  font-weight: 600;
+}
+
+.stats-day-chip-date {
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
 .stats-day-matrix {
   margin-bottom: 1.5rem;
 }

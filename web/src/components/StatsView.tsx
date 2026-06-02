@@ -1,4 +1,4 @@
-import { Download, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -13,7 +13,12 @@ import {
 import { apiGet } from "../api";
 import { deleteVerifiedScheduleDay } from "../api/plan";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
-import { fetchVerifiedPlan, type PlanDoc } from "../lib/planDoc";
+import { fetchVerifiedPlan, slicePlanToVerifiedDate, type PlanDoc } from "../lib/planDoc";
+import {
+  formatVerifiedDayLabel,
+  verifiedDatesInPlan,
+  verifiedDayChipParts,
+} from "../lib/verifiedPlanView";
 import { downloadTextFile, planDocToYaml } from "../lib/scheduleExport";
 import { parsePlatoonColorsFromGlobal } from "../lib/platoonColors";
 import { PlanDocView } from "./PlanDocView";
@@ -55,6 +60,7 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
   const [deleteDate, setDeleteDate] = useState("");
   const [deleteStatus, setDeleteStatus] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [viewDate, setViewDate] = useState("");
 
   const { from, to } = useMemo(() => rangeFromEndAndBack(endDate, daysBack), [endDate, daysBack]);
 
@@ -91,13 +97,7 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
 
   const soldierIds = useMemo(() => {
     const list = soldiersQ.data?.value?.soldiers ?? [];
-    return list
-      .map((s) => s.id || s.key || "")
-      .filter((id) => {
-        if (!id) return false;
-        const st = (list.find((x) => (x.id || x.key) === id)?.state ?? "").toLowerCase();
-        return !st || st === "base";
-      });
+    return list.map((s) => s.id || s.key || "").filter(Boolean);
   }, [soldiersQ.data]);
 
   const soldiers = useMemo(
@@ -117,12 +117,35 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
   }, [blocksQ.data]);
 
   const verifiedDates = useMemo(() => {
+    const fromPlan = plan ? verifiedDatesInPlan(plan) : [];
+    if (fromPlan.length > 0) return fromPlan;
     const dates = new Set<string>();
     for (const r of blocksQ.data ?? []) {
       dates.add(r.ts_date.slice(0, 10));
     }
     return [...dates].sort();
-  }, [blocksQ.data]);
+  }, [blocksQ.data, plan]);
+
+  useEffect(() => {
+    if (verifiedDates.length === 0) {
+      setViewDate("");
+      return;
+    }
+    setViewDate((prev) => {
+      if (prev && verifiedDates.includes(prev)) return prev;
+      return verifiedDates[verifiedDates.length - 1] ?? "";
+    });
+  }, [verifiedDates]);
+
+  const viewDateIndex = viewDate ? verifiedDates.indexOf(viewDate) : -1;
+
+  const planForReport = useMemo(() => {
+    if (!plan || !showDayMatrix || !viewDate) return plan;
+    return slicePlanToVerifiedDate(plan, viewDate) ?? plan;
+  }, [plan, showDayMatrix, viewDate]);
+
+  const viewDayLabel =
+    plan && viewDate ? formatVerifiedDayLabel(viewDate, plan, globalQ.data?.value) : "";
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -220,8 +243,15 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
         </div>
 
         <p className="stats-range-summary">
-          Showing <strong>{from}</strong> through <strong>{to}</strong>
-          {plan != null ? ` · ${plan.assignments.length} assignments · anchor ${plan.anchor_date}` : null}
+          Showing fetch range <strong>{from}</strong> through <strong>{to}</strong>
+          {verifiedDates.length > 0 ? (
+            <>
+              {" "}
+              · verified day{verifiedDates.length === 1 ? "" : "s"}:{" "}
+              <strong>{verifiedDates.join(", ")}</strong>
+            </>
+          ) : null}
+          {plan != null ? ` · ${plan.assignments.length} assignment(s) in range` : null}
         </p>
 
         <div className="stats-toolbar">
@@ -323,10 +353,73 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
           </div>
         )}
 
-        {hasSchedule && plan && zonesDoc && !slotsQ.isLoading && (
+        {showDayMatrix && hasSchedule && verifiedDates.length > 0 && (
+          <div className="stats-day-nav glass-card panel">
+            <span className="stats-day-nav-label">Verified plan day</span>
+            <div className="stats-day-nav-controls">
+              <button
+                type="button"
+                className="btn btn-tinted stats-day-nav-btn"
+                disabled={viewDateIndex <= 0}
+                aria-label="Previous verified day"
+                title="Previous verified day"
+                onClick={() => {
+                  if (viewDateIndex > 0) setViewDate(verifiedDates[viewDateIndex - 1]!);
+                }}
+              >
+                <ChevronLeft size={18} strokeWidth={2.5} />
+              </button>
+              <div className="stats-day-nav-center">
+                <strong className="stats-day-nav-date">{viewDayLabel || viewDate}</strong>
+                {verifiedDates.length > 1 ? (
+                  <span className="hint">
+                    {viewDateIndex + 1} of {verifiedDates.length}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="btn btn-tinted stats-day-nav-btn"
+                disabled={viewDateIndex < 0 || viewDateIndex >= verifiedDates.length - 1}
+                aria-label="Next verified day"
+                title="Next verified day"
+                onClick={() => {
+                  if (viewDateIndex >= 0 && viewDateIndex < verifiedDates.length - 1) {
+                    setViewDate(verifiedDates[viewDateIndex + 1]!);
+                  }
+                }}
+              >
+                <ChevronRight size={18} strokeWidth={2.5} />
+              </button>
+            </div>
+            {verifiedDates.length > 1 ? (
+              <div className="stats-day-chips">
+                {verifiedDates.map((d) => {
+                  const chip = plan
+                    ? verifiedDayChipParts(d, plan, globalQ.data?.value)
+                    : { weekday: "", date: d };
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      className={`stats-day-chip${d === viewDate ? " stats-day-chip-active" : ""}`}
+                      onClick={() => setViewDate(d)}
+                      title={plan ? formatVerifiedDayLabel(d, plan, globalQ.data?.value) : d}
+                    >
+                      <span className="stats-day-chip-wd">{chip.weekday}</span>
+                      <span className="stats-day-chip-date">{chip.date}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        {hasSchedule && planForReport && zonesDoc && !slotsQ.isLoading && (
           <div className="stats-plan-report">
             <PlanDocView
-              plan={plan}
+              plan={planForReport}
               zones={zonesDoc}
               soldierIds={soldierIds}
               soldiers={soldiers}

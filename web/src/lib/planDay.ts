@@ -79,15 +79,42 @@ export function weekdayLongName(dateIso: string): string {
   return d.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
 }
 
+/** Weekday name at plan-day start (anchor calendar date + dayIndex at planStartHour UTC). */
+export function weekdayNameAtPlanDayStart(
+  anchorDate: string,
+  dayIndex0: number,
+  planStartHour: number = DEFAULT_PLAN_DAY_START_HOUR,
+): string {
+  const wd = weekdayIndexForPlanDayStart(anchorDate, dayIndex0, planStartHour);
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const calendarDate = calendarDateForDay(anchorDate, dayIndex0);
+  return names[wd] ?? weekdayLongName(calendarDate);
+}
+
+/** Weekday at plan-day start for a single calendar date (plan day 0 = that date). */
+export function weekdayNameForCalendarPlanDay(
+  calendarDate: string,
+  planStartHour: number = DEFAULT_PLAN_DAY_START_HOUR,
+): string {
+  return weekdayNameAtPlanDayStart(calendarDate, 0, planStartHour);
+}
+
 export function planDayTitle(
   dayIndex0: number,
   anchorDate: string,
   planStartHour: number = DEFAULT_PLAN_DAY_START_HOUR,
 ): string {
   const calendarDate = calendarDateForDay(anchorDate, dayIndex0);
-  const wd = weekdayIndexForPlanDayStart(anchorDate, dayIndex0, planStartHour);
-  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const weekday = names[wd] ?? weekdayLongName(calendarDate);
+  const weekday = weekdayNameAtPlanDayStart(anchorDate, dayIndex0, planStartHour);
+  return `Day ${dayIndex0 + 1} — ${weekday}, ${calendarDate}`;
+}
+
+export function planDayTitleForCalendarDate(
+  dayIndex0: number,
+  calendarDate: string,
+  planStartHour: number = DEFAULT_PLAN_DAY_START_HOUR,
+): string {
+  const weekday = weekdayNameForCalendarPlanDay(calendarDate, planStartHour);
   return `Day ${dayIndex0 + 1} — ${weekday}, ${calendarDate}`;
 }
 

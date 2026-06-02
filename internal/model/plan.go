@@ -126,12 +126,13 @@ func SplitPlanByDate(doc PlanDoc) ([]ScheduleDay, error) {
 	return out, nil
 }
 
-// MergeScheduleDays builds one PlanDoc for a date range from per-day rows.
-func MergeScheduleDays(from time.Time, days []ScheduleDay) (PlanDoc, error) {
+// MergeScheduleDays builds one PlanDoc from verified per-day rows (sorted by ts_date).
+// anchorDateWhenEmpty is used only when days is empty (e.g. query range start).
+func MergeScheduleDays(anchorDateWhenEmpty time.Time, days []ScheduleDay) (PlanDoc, error) {
 	if len(days) == 0 {
 		return PlanDoc{
 			FormatVersion: PlanFormatVersion,
-			AnchorDate:    from.Format("2006-01-02"),
+			AnchorDate:    anchorDateWhenEmpty.Format("2006-01-02"),
 			Days:          0,
 			Assignments:   nil,
 		}, nil
@@ -140,11 +141,31 @@ func MergeScheduleDays(from time.Time, days []ScheduleDay) (PlanDoc, error) {
 		return days[i].TsDate.Before(days[j].TsDate)
 	})
 
+	firstDate := days[0].TsDate
 	shiftHours := days[0].Plan.ShiftHours
 	var merged []map[string]any
+	soldiers := make(map[string]PlanDaySoldiers)
+	verifiedDates := make([]string, 0, len(days))
+	var meta map[string]any
+
 	for i, d := range days {
+		date := d.TsDate.Format("2006-01-02")
+		verifiedDates = append(verifiedDates, date)
 		if d.Plan.ShiftHours != shiftHours {
-			return PlanDoc{}, fmt.Errorf("shift_hours mismatch on %s", d.TsDate.Format("2006-01-02"))
+			return PlanDoc{}, fmt.Errorf("shift_hours mismatch on %s", date)
+		}
+		if meta == nil && len(d.Plan.Meta) > 0 {
+			meta = cloneJSONMap(d.Plan.Meta)
+		}
+		if d.Plan.Soldiers != nil {
+			if s, ok := d.Plan.Soldiers[date]; ok {
+				soldiers[date] = s
+			} else {
+				for _, s := range d.Plan.Soldiers {
+					soldiers[date] = s
+					break
+				}
+			}
 		}
 		for _, a := range d.Plan.Assignments {
 			cp := make(map[string]any, len(a)+1)
@@ -155,17 +176,49 @@ func MergeScheduleDays(from time.Time, days []ScheduleDay) (PlanDoc, error) {
 			merged = append(merged, cp)
 		}
 	}
+	if meta == nil {
+		meta = make(map[string]any)
+	}
+	meta["verified_dates"] = verifiedDates
+
 	fv := days[0].Plan.FormatVersion
 	if fv == 0 {
 		fv = PlanFormatVersion
 	}
-	return PlanDoc{
+	out := PlanDoc{
 		FormatVersion: fv,
-		AnchorDate:    from.Format("2006-01-02"),
+		AnchorDate:    firstDate.Format("2006-01-02"),
 		Days:          len(days),
 		ShiftHours:    shiftHours,
 		Assignments:   merged,
-	}, nil
+		Meta:          meta,
+	}
+	if len(soldiers) > 0 {
+		out.Soldiers = soldiers
+	}
+	return out, nil
+}
+
+func cloneJSONMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		out := make(map[string]any, len(m))
+		for k, v := range m {
+			out[k] = v
+		}
+		return out
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		out = make(map[string]any, len(m))
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // BlocksBySoldierDate counts one block per assignment in stored day plans.

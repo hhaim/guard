@@ -28,10 +28,10 @@ import { soldiersFromCfg, type ScheduleReportSections } from "./ScheduleResultsR
 
 const SLOT_KEY = "guard-plan-slot";
 
-/** Plan tab: matrix + stats; skip timeline/full roster (heavy with 80+ soldiers). */
+/** Plan tab: matrix (ids + full names) + stats; skip timeline/full roster (heavy with 80+ soldiers). */
 const PLAN_TAB_PREVIEW_SECTIONS: ScheduleReportSections = {
   matrixShort: true,
-  matrixFull: false,
+  matrixFull: true,
   bySoldier: false,
   timeline: false,
   statsPanel: true,

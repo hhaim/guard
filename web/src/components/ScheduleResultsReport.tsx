@@ -418,6 +418,13 @@ export function ScheduleResultsReport({
   const plan = useMemo(() => normalizePlanDoc(planProp), [planProp]);
   const { assignments, days, shift_hours: shiftHours, meta, anchor_date: anchorDate } = plan;
   const planDayStartHour = resolvePlanDayStartHour(meta);
+  const verifiedDates = useMemo(() => {
+    const raw = meta?.verified_dates;
+    if (Array.isArray(raw)) {
+      return raw.filter((d): d is string => typeof d === "string" && d.length >= 10);
+    }
+    return undefined;
+  }, [meta]);
 
   const sections = { ...DEFAULT_SECTIONS, ...sectionsProp };
   const [selectedSoldier, setSelectedSoldier] = useState<number | null>(null);
@@ -444,6 +451,7 @@ export function ScheduleResultsReport({
       ? buildScheduleMatrices(assignments, days, zone, {
           planDayStartHour,
           anchorDate,
+          verifiedDates,
           soldierIds,
         })
       : [];
@@ -455,6 +463,7 @@ export function ScheduleResultsReport({
         ? buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
             soldierIds,
             anchorDate,
+            verifiedDates,
             shiftHours: zone.shiftHours,
             soldiersByDay: plan.soldiers,
             assignments,
@@ -476,6 +485,7 @@ export function ScheduleResultsReport({
     days,
     planDayStartHour,
     anchorDate,
+    verifiedDates,
     soldierIds,
     plan.soldiers,
     sections.matrixShort,

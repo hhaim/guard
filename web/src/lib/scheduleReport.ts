@@ -10,7 +10,9 @@ import {
   weekdayIndexForPlanDayStart,
   formatWallClockHour,
   planDayTitle,
+  planDayTitleForCalendarDate,
   weekdayLongName,
+  weekdayNameForCalendarPlanDay,
 } from "./planDay";
 import {
   enabledSlots,
@@ -85,6 +87,8 @@ export type MatrixDay = {
 export type ScheduleMatrixOpts = {
   planDayStartHour?: number;
   anchorDate?: string;
+  /** Real calendar date per plan day index (from verified schedule merge). */
+  verifiedDates?: string[];
   /** Roster order (cfg soldiers); used for cell labels when soldier_id is missing. */
   soldierIds?: string[];
 };
@@ -146,6 +150,7 @@ export type BuildTimelineOpts = {
   planDayStartHour?: number;
   shiftHours?: number;
   anchorDate?: string;
+  verifiedDates?: string[];
   soldierIds?: string[];
   soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
   assignments?: ScheduleAssignment[];
@@ -413,15 +418,14 @@ export function timeCategoryForHour(h: number, zone: ZoneReportView): number {
 function isSlotDisabledOnPlanDay(
   zone: ZoneReportView,
   slotIndex: number,
-  anchorDate: string,
-  planDayIndex: number,
+  calendarDate: string,
   planStartHour: number,
 ): boolean {
   const typeId = zone.slotTypeIds[slotIndex];
   if (!typeId) return false;
   const wds = zone.disabledWeekdays[typeId];
   if (!wds?.length) return false;
-  const wd = weekdayIndexForPlanDayStart(anchorDate, planDayIndex, planStartHour);
+  const wd = weekdayIndexForPlanDayStart(calendarDate, 0, planStartHour);
   return wds.includes(wd);
 }
 
@@ -473,6 +477,7 @@ export function buildScheduleMatrices(
 ): MatrixDay[] {
   const planStart = opts?.planDayStartHour ?? 0;
   const anchor = opts?.anchorDate?.trim() ?? "";
+  const verifiedDates = opts?.verifiedDates;
   const lookupRot = new Map<string, { soldierIndices: number[]; labels: string[] }>();
   const merged = new Map<
     string,
@@ -527,7 +532,8 @@ export function buildScheduleMatrices(
   const extBlocks = reportFutureExtensionBlocks(zone.shiftHours);
   const matrices: MatrixDay[] = [];
   for (let d = 0; d < days; d++) {
-    const dayCalendarDate = anchor ? calendarDateForPlanDay(anchor, d) : "";
+    const dayCalendarDate =
+      verifiedDates?.[d] ?? (anchor ? calendarDateForPlanDay(anchor, d) : "");
     const headers = Array.from({ length: zone.slotsPerBlock }, (_, j) => {
       const li = zone.slotLocIndices[j] ?? 0;
       return {
@@ -562,8 +568,8 @@ export function buildScheduleMatrices(
         }
         if (
           inDay &&
-          anchor &&
-          isSlotDisabledOnPlanDay(zone, j, anchor, d, planStart)
+          dayCalendarDate &&
+          isSlotDisabledOnPlanDay(zone, j, dayCalendarDate, planStart)
         ) {
           if (labelB === 0) {
             cells.push({
@@ -633,10 +639,16 @@ export function buildScheduleMatrices(
       }
       rows.push({ window: win, cells });
     }
-    const weekday = dayCalendarDate ? weekdayLongName(dayCalendarDate) : undefined;
+    const weekday = dayCalendarDate
+      ? weekdayNameForCalendarPlanDay(dayCalendarDate, planStart)
+      : undefined;
     matrices.push({
       day: d + 1,
-      title: anchor ? planDayTitle(d, anchor) : `Day ${d + 1}`,
+      title: dayCalendarDate
+        ? planDayTitleForCalendarDate(d, dayCalendarDate, planStart)
+        : anchor
+          ? planDayTitle(d, anchor, planStart)
+          : `Day ${d + 1}`,
       calendarDate: dayCalendarDate,
       weekday,
       headers,
@@ -763,6 +775,7 @@ export function buildTimelineLanes(
   const soldierIds = opts?.soldierIds;
   const soldiersByDay = opts?.soldiersByDay;
   const anchorDate = opts?.anchorDate?.trim() ?? "";
+  const verifiedDates = opts?.verifiedDates;
   const assignmentList = opts?.assignments;
   const days = busy.length;
   const blocksPd = busy[0]?.[0]?.length ?? 0;
@@ -777,9 +790,8 @@ export function buildTimelineLanes(
     const soldierId = soldierIds?.[s];
     for (let d = 0; d < days; d++) {
       const cal =
-        anchorDate && soldierId
-          ? calendarDateForPlanDay(anchorDate, d)
-          : "";
+        verifiedDates?.[d] ??
+        (anchorDate && soldierId ? calendarDateForPlanDay(anchorDate, d) : "");
       const dayDoc = cal && soldiersByDay ? soldiersByDay[cal] : undefined;
       for (let b = 0; b < (busy[d]?.[s]?.length ?? 0); b++) {
         const onDuty = !!busy[d]?.[s]?.[b];
