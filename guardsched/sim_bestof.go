@@ -50,7 +50,7 @@ func RunSimulationBestOfZoneConfig(
 	planDayStartHour int,
 	avail AvailabilityChecker,
 	anchor *time.Time,
-	typeCodes []string,
+	typeCodes, platoonCodes []string,
 ) (recs []*AssignmentRecord, stats *SimulationStats, meta map[string]any, err error) {
 	if trials < 1 {
 		return nil, nil, nil, fmt.Errorf("sim_trials must be >= 1")
@@ -64,7 +64,7 @@ func RunSimulationBestOfZoneConfig(
 			zone, numSoldiers, days, rng,
 			minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 			maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-			planDayStartHour, avail, anchor, typeCodes, nil,
+			planDayStartHour, avail, anchor, typeCodes, platoonCodes, nil,
 		)
 	}
 	if trials == 1 {
@@ -133,7 +133,7 @@ func RunSimulationBestOfZoneConfigExtend(
 	planDayStartHour int,
 	avail AvailabilityChecker,
 	anchor *time.Time,
-	typeCodes []string,
+	typeCodes, platoonCodes []string,
 ) (recs []*AssignmentRecord, stats *SimulationStats, meta map[string]any, err error) {
 	if trials < 1 {
 		return nil, nil, nil, fmt.Errorf("sim_trials must be >= 1")
@@ -147,7 +147,7 @@ func RunSimulationBestOfZoneConfigExtend(
 			zone, numSoldiers, prefixDays, extendDays, prefixAssignments, rng,
 			minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 			maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-			planDayStartHour, avail, anchor, typeCodes, nil,
+			planDayStartHour, avail, anchor, typeCodes, platoonCodes, nil,
 		)
 	}
 	if trials == 1 {

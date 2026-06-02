@@ -1,13 +1,20 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, LocateFixed, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, LocateFixed, Plus, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 import { apiGet } from "../api";
 import { fetchPlanContext } from "../api/plan";
 import { formatPartialWindows } from "../lib/planDayBounds";
 import { calendarDateForDay, parsePlanDayStart } from "../lib/planDay";
+import {
+  detectPlatoonAwayGroups,
+  formatPlatoonAwaySummary,
+  soldierIdsInPlatoonAwayGroups,
+} from "../lib/platoonVacation";
+import { platoonLabel, type SoldierPlatoonsDoc } from "../lib/soldierPlatoons";
 import { classifySoldierDay } from "../lib/soldierAvailability";
 import { sortSoldiers, type Soldier } from "../lib/soldiers";
 import { AddAbsenceSheet } from "./AddAbsenceSheet";
+import { PlatoonStatusSheet } from "./PlatoonStatusSheet";
 import { StatusCellSheet } from "./StatusCellSheet";
 
 export type PlanDaySoldiersSummary = {
@@ -24,7 +31,11 @@ export type PlanDaySoldiers = {
 };
 
 type Props = {
+  /** Soldiers visible on the board (after roster search/filters). */
   soldiers: Soldier[];
+  /** Full roster for platoon vacation and platoon-away grouping. */
+  rosterSoldiers?: Soldier[];
+  platoonsDoc?: SoldierPlatoonsDoc;
   planDayStart?: string;
 };
 
@@ -134,7 +145,13 @@ function StatusBoardTable({
   );
 }
 
-export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props) {
+export function SoldiersStatusBoard({
+  soldiers,
+  rosterSoldiers: rosterSoldiersProp,
+  platoonsDoc = { platoons: [] },
+  planDayStart = "05:00",
+}: Props) {
+  const rosterSoldiers = rosterSoldiersProp ?? soldiers;
   const qc = useQueryClient();
   const planCtxQ = useQuery({
     queryKey: ["plan", "context"],
@@ -176,6 +193,7 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
   });
 
   const [fabOpen, setFabOpen] = useState(false);
+  const [platoonStatusOpen, setPlatoonStatusOpen] = useState(false);
   const [cellSheet, setCellSheet] = useState<{
     soldierId: string;
     soldierName: string;
@@ -188,19 +206,32 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
     void qc.invalidateQueries({ queryKey: ["soldiers", "status"] });
   };
 
-  const { problematic, allFull } = useMemo(() => {
+  const dayDates = useMemo(() => dayColumns.map((c) => c.date), [dayColumns]);
+
+  const platoonAwayGroups = useMemo(
+    () => detectPlatoonAwayGroups(rosterSoldiers, dayDates, previewsQ.data),
+    [rosterSoldiers, dayDates, previewsQ.data],
+  );
+
+  const platoonAwayIds = useMemo(
+    () => soldierIdsInPlatoonAwayGroups(platoonAwayGroups),
+    [platoonAwayGroups],
+  );
+
+  const { needsAttention, allFull } = useMemo(() => {
     const byDay = previewsQ.data;
-    const prob: Soldier[] = [];
+    const need: Soldier[] = [];
     const full: Soldier[] = [];
     for (const s of sorted) {
+      if (platoonAwayIds.has(s.id)) continue;
       if (isFullyAvailableAllDays(s.id, dayColumns, byDay)) {
         full.push(s);
       } else {
-        prob.push(s);
+        need.push(s);
       }
     }
-    return { problematic: prob, allFull: full };
-  }, [sorted, dayColumns, previewsQ.data]);
+    return { needsAttention: need, allFull: full };
+  }, [sorted, dayColumns, previewsQ.data, platoonAwayIds]);
 
   return (
     <>
@@ -213,7 +244,10 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
               {!previewsQ.isLoading && sorted.length > 0 ? (
                 <>
                   {" "}
-                  · {problematic.length} need attention
+                  · {needsAttention.length} need attention
+                  {platoonAwayGroups.length > 0
+                    ? ` · ${platoonAwayGroups.length} platoon away block${platoonAwayGroups.length === 1 ? "" : "s"}`
+                    : ""}
                   {allFull.length > 0 ? ` · ${allFull.length} fully available` : ""}
                 </>
               ) : null}
@@ -252,18 +286,32 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
                 <ChevronRight size={18} strokeWidth={2.5} />
               </button>
             </div>
-            <button
-              type="button"
-              className="contacts-add-btn status-board-fab"
-              aria-label="Add absence"
-              title="Add absence"
-              onPointerDown={(e) => {
-                e.preventDefault();
-                setFabOpen(true);
-              }}
-            >
-              <Plus size={22} strokeWidth={2.5} />
-            </button>
+            <div className="status-board-fabs">
+              <button
+                type="button"
+                className="contacts-add-btn status-board-fab"
+                aria-label="Platoon status"
+                title="Platoon status (bulk set on base / away / sick…)"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  setPlatoonStatusOpen(true);
+                }}
+              >
+                <Users size={20} strokeWidth={2.5} />
+              </button>
+              <button
+                type="button"
+                className="contacts-add-btn status-board-fab"
+                aria-label="Add absence"
+                title="Add absence"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  setFabOpen(true);
+                }}
+              >
+                <Plus size={22} strokeWidth={2.5} />
+              </button>
+            </div>
           </div>
         </header>
 
@@ -279,19 +327,44 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
         )}
         {!previewsQ.isLoading && sorted.length > 0 && (
           <>
-            {problematic.length === 0 ? (
+            {platoonAwayGroups.map((g) => (
+              <details
+                key={`${g.platoonCode}-${g.fromDate}-${g.throughDate}`}
+                className="status-board-full-details status-board-platoon-away"
+                open
+              >
+                <summary>
+                  {formatPlatoonAwaySummary(
+                    g.platoonCode,
+                    platoonLabel(platoonsDoc, g.platoonCode),
+                    g.soldiers.length,
+                    g.fromDate,
+                    g.throughDate,
+                  )}
+                </summary>
+                <StatusBoardTable
+                  soldiers={g.soldiers}
+                  dayColumns={dayColumns}
+                  startLabel={startLabel}
+                  byDay={previewsQ.data}
+                  onCell={(args) => setCellSheet(args)}
+                />
+              </details>
+            ))}
+
+            {needsAttention.length === 0 && platoonAwayGroups.length === 0 ? (
               <p className="contacts-empty status-board-all-clear">
                 Everyone is fully available for the next 7 plan days.
               </p>
-            ) : (
+            ) : needsAttention.length > 0 ? (
               <StatusBoardTable
-                soldiers={problematic}
+                soldiers={needsAttention}
                 dayColumns={dayColumns}
                 startLabel={startLabel}
                 byDay={previewsQ.data}
                 onCell={(args) => setCellSheet(args)}
               />
-            )}
+            ) : null}
 
             {allFull.length > 0 && (
               <details className="status-board-full-details">
@@ -321,6 +394,17 @@ export function SoldiersStatusBoard({ soldiers, planDayStart = "05:00" }: Props)
         anchorDate={viewAnchor}
         planDayStartHour={planDayStartHour}
         onClose={() => setFabOpen(false)}
+        onSaved={invalidate}
+      />
+
+      <PlatoonStatusSheet
+        open={platoonStatusOpen}
+        rosterSoldiers={rosterSoldiers}
+        platoonsDoc={platoonsDoc}
+        anchorDate={viewAnchor}
+        planDayStartHour={planDayStartHour}
+        planDayStartLabel={startLabel}
+        onClose={() => setPlatoonStatusOpen(false)}
         onSaved={invalidate}
       />
 

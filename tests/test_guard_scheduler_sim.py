@@ -149,6 +149,20 @@ def test_resolve_slots_rejects_wrong_y() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_load_roster_platoon_codes_yaml(tmp_path: Path) -> None:
+    p = tmp_path / "roster.yaml"
+    p.write_text(
+        """
+soldiers:
+  - { id: s0, platoon_code: "1" }
+  - { id: s1, platoon: "2" }
+""",
+        encoding="utf-8",
+    )
+    got = g.load_roster_platoon_codes_yaml(p, g.roster_keys(3))
+    assert got == ["1", "2", ""]
+
+
 def test_load_roster_type_codes_yaml_ui_export_shape(tmp_path: Path) -> None:
     roster = {
         "schema_version": 2,

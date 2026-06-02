@@ -19,9 +19,14 @@ import {
   verifiedDatesInPlan,
   verifiedDayChipParts,
 } from "../lib/verifiedPlanView";
+import {
+  downloadPlanMatrixXls,
+  planMatrixXlsFilenameForScheduleDay,
+} from "../lib/planMatrixExport";
 import { downloadTextFile, planDocToYaml } from "../lib/scheduleExport";
 import { parsePlatoonColorsFromGlobal } from "../lib/platoonColors";
 import { PlanDocView } from "./PlanDocView";
+import { fetchPreviewAvailabilityByDays } from "./SoldiersStatusBoard";
 import { soldiersFromCfg } from "./ScheduleResultsReport";
 
 function todayUTC(): string {
@@ -139,6 +144,13 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
 
   const viewDateIndex = viewDate ? verifiedDates.indexOf(viewDate) : -1;
 
+  const viewDayAvailQ = useQuery({
+    queryKey: ["plan", "preview-availability", viewDate, 1],
+    queryFn: () => fetchPreviewAvailabilityByDays(viewDate, 1),
+    enabled: showDayMatrix && Boolean(viewDate),
+    staleTime: 0,
+  });
+
   const planForReport = useMemo(() => {
     if (!plan || !showDayMatrix || !viewDate) return plan;
     return slicePlanToVerifiedDate(plan, viewDate) ?? plan;
@@ -201,6 +213,24 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
     const yaml = planDocToYaml(plan, from, to);
     downloadTextFile(`schedule-${from}_to_${to}.yaml`, yaml);
   };
+
+  const handleDownloadExcel = () => {
+    if (!planForReport || !zonesDoc) return;
+    const date = showDayMatrix && viewDate ? viewDate : to;
+    downloadPlanMatrixXls(
+      {
+        plan: planForReport,
+        zones: zonesDoc,
+        soldierIds,
+        soldiers,
+        platoonColors,
+      },
+      planMatrixXlsFilenameForScheduleDay(date),
+    );
+  };
+
+  const canDownloadMatrixExcel =
+    hasSchedule && !!planForReport && !!zonesDoc && !slotsQ.isLoading && showDayMatrix;
 
   const reportSections = showDayMatrix
     ? STATS_REPORT_SECTIONS
@@ -272,6 +302,16 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
           >
             <Download size={16} />
             Download YAML
+          </button>
+          <button
+            type="button"
+            className="btn btn-tinted"
+            disabled={!canDownloadMatrixExcel}
+            onClick={handleDownloadExcel}
+            title="Download schedule matrix (full names, platoon colors) as Excel"
+          >
+            <Download size={16} />
+            Download Excel
           </button>
         </div>
 
@@ -425,6 +465,7 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
               soldiers={soldiers}
               platoonColors={platoonColors}
               sections={reportSections}
+              soldiersByDay={showDayMatrix ? viewDayAvailQ.data : undefined}
             />
           </div>
         )}

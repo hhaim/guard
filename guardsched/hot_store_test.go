@@ -25,7 +25,7 @@ func TestHotZonesS2ExtendOneDay(t *testing.T) {
 	seed := int64(42)
 	cold, err := RunSimulationZoneConfigWithContinuation(
 		z, 18, 1, 1, NewPyRandom(seed),
-		6, true, 0, 2, 2, 0.2, 5, nil, &anchor, typeCodes, &seed,
+		6, true, 0, 2, 2, 0.2, 5, nil, &anchor, typeCodes, nil, &seed,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestHotZonesS2ExtendOneDay(t *testing.T) {
 	}
 	_, _, err = RunSimulationZoneConfigExtend(
 		z, 18, 1, 1, cold.Records, NewPyRandom(seed),
-		6, true, 0, 2, 2, 0.2, 5, nil, &anchor, typeCodes, w,
+		6, true, 0, 2, 2, 0.2, 5, nil, &anchor, typeCodes, nil, w,
 	)
 	if err != nil {
 		t.Fatalf("extend: %v", err)
@@ -77,7 +77,7 @@ func TestHotZonesS2ThreeDays(t *testing.T) {
 		}
 		_, _, _, err := RunSimulationHot(
 			storePath, z, 18, days, 1, 1, &seed,
-			6, 2, 2, 0.2, 5, nil, anchor, typeCodes,
+			6, 2, 2, 0.2, 5, nil, anchor, typeCodes, nil,
 		)
 		if err != nil {
 			t.Fatalf("days=%d: %v", days, err)

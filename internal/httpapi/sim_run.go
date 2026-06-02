@@ -248,11 +248,12 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 
 	var soldiersDoc struct {
 		Soldiers []struct {
-			ID       string `json:"id"`
-			Key      string `json:"key"`
-			FullName string `json:"full_name"`
-			State    string `json:"state"`
-			TypeCode string `json:"type_code"`
+			ID          string `json:"id"`
+			Key         string `json:"key"`
+			FullName    string `json:"full_name"`
+			State       string `json:"state"`
+			TypeCode    string `json:"type_code"`
+			PlatoonCode string `json:"platoon_code"`
 		} `json:"soldiers"`
 	}
 	if err := json.Unmarshal(soldiersRow.Value, &soldiersDoc); err != nil {
@@ -260,6 +261,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	}
 	var keys []string
 	idToType := map[string]string{}
+	idToPlatoon := map[string]string{}
 	for _, sol := range soldiersDoc.Soldiers {
 		id := sol.ID
 		if id == "" {
@@ -272,9 +274,13 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		if tc := strings.TrimSpace(sol.TypeCode); tc != "" {
 			idToType[id] = tc
 		}
+		if pc := strings.TrimSpace(sol.PlatoonCode); pc != "" {
+			idToPlatoon[id] = pc
+		}
 	}
 	keys = availability.RosterFromIDs(keys)
 	typeCodes := guardsched.TypeCodesForRoster(keys, idToType)
+	platoonCodes := guardsched.PlatoonCodesForRoster(keys, idToPlatoon)
 	if len(keys) < 1 {
 		return nil, 400, `{"error":"need at least one soldier"}`, fmt.Errorf("no soldiers")
 	}
@@ -333,7 +339,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			cold, err := guardsched.RunSimulationZoneConfigWithContinuation(
 				zc, len(keys), prefixDays+planDays, prefixDays, rng,
 				minFreeH, true, 0, 2, minCool, bandRel,
-				planDayStartHour, availChecker, &anchor, typeCodes, seedPtr,
+				planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, seedPtr,
 			)
 			if err != nil {
 				return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
@@ -354,7 +360,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			recs, stats, contSnap, trialMeta, err = guardsched.RunSimulationBestOfZoneConfigExtendWitness(
 				zc, len(keys), prefixDays, planDays, trials, prefix.Records, seedPtr,
 				minFreeH, true, 0, 2, minCool, bandRel,
-				planDayStartHour, availChecker, &anchor, typeCodes, witness,
+				planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, witness,
 			)
 			if err != nil {
 				return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
@@ -373,7 +379,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		cold, err := guardsched.RunSimulationZoneConfigWithContinuation(
 			zc, len(keys), planDays, planDays, rng,
 			minFreeH, true, 0, 2, minCool, bandRel,
-			planDayStartHour, availChecker, &anchor, typeCodes, seedPtr,
+			planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, seedPtr,
 		)
 		if err != nil {
 			return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
@@ -431,7 +437,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 }
 
 // loadPlanInputs reads cfg needed to convert proposals or apply to schedule rows.
-// soldiers cfg may include platoon_code (UI/roster); scheduler ignores it until wired.
+// soldiers cfg may include platoon_code (UI/roster); used for full_day_team pin_platoon slots.
 func (s *Server) loadPlanInputs(ctx context.Context) (yamlBytes []byte, soldierKeys []string, slotLabels []string, shiftHours float64, err error) {
 	slotsRow, err := repo.GetCfg(ctx, s.Pool, "slots")
 	if err != nil {

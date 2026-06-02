@@ -104,7 +104,7 @@ func TestRunSimulation_statusYAML(t *testing.T) {
 			_, chk, _ := prepareScenario(t, filepath.Join("..", "status.yaml"), n, anchor)
 			recs, _, _, err := RunSimulationBestOfZoneConfig(
 				zc, n, 1, 1, &seed,
-				6, true, 0, 2, 0, 0.2, planStart, chk, &anchor, nil,
+				6, true, 0, 2, 0, 0.2, planStart, chk, &anchor, nil, nil,
 			)
 			if err != nil {
 				t.Fatalf("n=%d: %v", n, err)
@@ -132,7 +132,7 @@ func TestRunSimulation_partialReturn_noS2Morning(t *testing.T) {
 	seed := sc.Sim.Seed
 	recs, _, _, err := RunSimulationBestOfZoneConfig(
 		zc, len(roster), sc.Sim.Days, 1, &seed,
-		6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil,
+		6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestRunSimulation_sickAndOuting(t *testing.T) {
 		seed := sc.Sim.Seed
 		recs, _, _, err := RunSimulationBestOfZoneConfig(
 			zc, len(roster), 1, 1, &seed,
-			6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil,
+			6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil, nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -183,7 +183,7 @@ func TestRunSimulation_sickAndOuting(t *testing.T) {
 		seed := sc.Sim.Seed
 		recs, _, _, err := RunSimulationBestOfZoneConfig(
 			zc, len(roster), 1, 1, &seed,
-			6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil,
+			6, true, 0, 2, 0, 0.2, planStart, chk, &sc.AnchorDate, nil, nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -262,7 +262,7 @@ func TestMultiSoldier_compileAndSim(t *testing.T) {
 	seed := int64(123)
 	recs, _, _, err := RunSimulationBestOfZoneConfig(
 		zc, 14, 1, 1, &seed,
-		6, true, 0, 2, 0, 0.2, planStart, chk, &anchor, nil,
+		6, true, 0, 2, 0, 0.2, planStart, chk, &anchor, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

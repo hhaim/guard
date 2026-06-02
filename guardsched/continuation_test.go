@@ -21,7 +21,7 @@ func TestContinuationMatchesCheckpointWitness(t *testing.T) {
 	end, split := 14, 8
 	rng := NewPyRandom(seed)
 	witness := &SimWitness{SplitDay: split}
-	recs, _, err := RunSimulationZoneConfig(z, soldiers, end, rng, 6, true, 0, 2, 2, 0.2, 5, nil, nil, nil, witness)
+	recs, _, err := RunSimulationZoneConfig(z, soldiers, end, rng, 6, true, 0, 2, 2, 0.2, 5, nil, nil, nil, nil, witness)
 	if err != nil {
 		t.Fatal(err)
 	}

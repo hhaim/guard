@@ -21,7 +21,7 @@ func TestRunSimulationZoneConfig_allRotatingZonesS1(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPyRandom(1)
-	_, _, err = RunSimulationZoneConfig(z, 12, 5, r, 8, true, 0, 2, 2, 0.2, planStart, nil, nil, nil, nil)
+	_, _, err = RunSimulationZoneConfig(z, 12, 5, r, 8, true, 0, 2, 2, 0.2, planStart, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestRunSimulationZoneConfig_twelveSoldiersFourRotatingSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPyRandom(1)
-	_, _, err = RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, planStart, nil, nil, nil, nil)
+	_, _, err = RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, planStart, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestRunSimulationZoneConfig_mixedPatternsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPyRandom(7)
-	_, _, err = RunSimulationZoneConfig(z, 50, 2, r, 8, true, 0, 2, 2, 0.2, planStart, nil, nil, nil, nil)
+	_, _, err = RunSimulationZoneConfig(z, 50, 2, r, 8, true, 0, 2, 2, 0.2, planStart, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestRunSimulationZoneConfig_planDayStartRotatingHour(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPyRandom(7)
-	recs, _, err := RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, 5, nil, nil, nil, nil)
+	recs, _, err := RunSimulationZoneConfig(z, 12, 1, r, 6, true, 0, 2, 2, 0.2, 5, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

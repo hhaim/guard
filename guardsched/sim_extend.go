@@ -251,7 +251,7 @@ func RunSimulationZoneConfigExtend(
 	planDayStartHour int,
 	avail AvailabilityChecker,
 	anchor *time.Time,
-	typeCodes []string,
+	typeCodes, platoonCodes []string,
 	witness *ExtendWitness,
 ) ([]*AssignmentRecord, *SimulationStats, error) {
 	if extendDays < 1 {
@@ -363,7 +363,7 @@ func RunSimulationZoneConfigExtend(
 			tid := zone.Locations[locI].TypeID
 			cfg := zone.FullDayTeamSpecs[tid]
 			if err := fillFullDayTeamPost(
-				zone, day, planDay, sidx, locI, cfg, soldiers, typeCodes, busy,
+				zone, day, planDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes, busy,
 				dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
 				B, sh, totalDays, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, extendAvail, &newAssignments,
 			); err != nil {

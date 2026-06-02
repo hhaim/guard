@@ -66,6 +66,8 @@ export type FullDayTeamConfig = FullDayConfig & {
   type_quotas: Record<string, number>;
   /** Credited duty fraction for fairness (default 1); busy span unchanged. */
   hours_factor: number;
+  /** When true, all soldiers on this post share one platoon_code (scheduler tries platoons by fitness). */
+  pin_platoon?: boolean;
 };
 
 export const DEFAULT_FULL_DAY_TEAM_CONFIG: FullDayTeamConfig = {
@@ -138,11 +140,15 @@ export function parseFullDayTeamConfig(config: Record<string, unknown> | undefin
       if (q >= 1) type_quotas[code] = Math.round(q);
     }
   }
+  const pin_platoon =
+    c.pin_platoon === true ||
+    (Array.isArray(c.features) && (c.features as unknown[]).some((f) => String(f).trim() === "pin_platoon"));
   return {
     ...base,
     headcount: Math.max(1, Math.round(asConfigNum(c.headcount, DEFAULT_FULL_DAY_TEAM_CONFIG.headcount))),
     type_quotas,
     hours_factor: asConfigNum(c.hours_factor, DEFAULT_FULL_DAY_TEAM_CONFIG.hours_factor),
+    ...(pin_platoon ? { pin_platoon: true } : {}),
   };
 }
 
@@ -154,6 +160,9 @@ export function fullDayTeamConfigToRecord(cfg: FullDayTeamConfig): Record<string
   }
   if (Object.keys(cfg.type_quotas).length > 0) {
     row.type_quotas = cfg.type_quotas;
+  }
+  if (cfg.pin_platoon) {
+    row.pin_platoon = true;
   }
   return row;
 }

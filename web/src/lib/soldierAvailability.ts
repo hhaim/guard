@@ -10,7 +10,9 @@ export function classifySoldierDay(soldierId: string, day?: PlanDaySoldiersDoc):
   if (day.avail_full?.includes(soldierId)) return "full";
   if (day.avail_partial && soldierId in day.avail_partial) return "partial";
   if (day.avail_absent?.includes(soldierId)) return "absent";
-  // Roster member not in snapshot (e.g. newly added) — default assignable.
+  if (day.summary || day.avail_full?.length || day.avail_partial || day.avail_absent?.length) {
+    return "absent";
+  }
   return "full";
 }
 
@@ -78,4 +80,79 @@ export function isSoldierUnavailableForBlock(
 
 export function calendarDateForPlanDay(anchorDate: string, dayOffset: number): string {
   return calendarDateForDay(anchorDate, dayOffset);
+}
+
+const PLAN_DAY_HOURS = 24;
+
+function partialAssignableHours(
+  partial: string[][],
+  calendarDate: string,
+  planDayStartHour: number,
+): number {
+  const { start, end } = planDayBoundsIso(calendarDate, planDayStartHour);
+  const winStartMs = new Date(start).getTime();
+  const winEndMs = new Date(end).getTime();
+  let total = 0;
+  for (const pair of partial) {
+    if (pair.length < 2) continue;
+    const ivStart = parseWallOnPlanDay(winStartMs, calendarDate, pair[0]!);
+    const ivEnd = parseWallOnPlanDay(winStartMs, calendarDate, pair[1]!);
+    const clipStart = Math.max(ivStart, winStartMs);
+    const clipEnd = Math.min(ivEnd, winEndMs);
+    if (clipEnd > clipStart) {
+      total += (clipEnd - clipStart) / 3600000;
+    }
+  }
+  return Math.min(PLAN_DAY_HOURS, total);
+}
+
+/** Assignable hours within one plan-day window (matches Go FairnessHoursForDay base hours). */
+export function soldierAssignableHoursForPlanDay(
+  soldierId: string,
+  calendarDate: string,
+  planDayStartHour: number,
+  day?: PlanDaySoldiersDoc,
+): number {
+  const kind = classifySoldierDay(soldierId, day);
+  if (kind === "absent") return 0;
+  if (kind === "full") return PLAN_DAY_HOURS;
+  const partial = day?.avail_partial?.[soldierId];
+  if (!partial?.length) return 0;
+  return partialAssignableHours(partial, calendarDate, planDayStartHour);
+}
+
+function daySnapshotPresent(day?: PlanDaySoldiersDoc): boolean {
+  if (!day) return false;
+  return Boolean(
+    day.summary ||
+      (day.avail_full?.length ?? 0) > 0 ||
+      day.avail_partial ||
+      (day.avail_absent?.length ?? 0) > 0,
+  );
+}
+
+/** Total assignable hours for one plan day from a compiled availability snapshot. */
+export function planDayAssignableCapacityHours(
+  day: PlanDaySoldiersDoc | undefined,
+  calendarDate: string,
+  planDayStartHour: number,
+  rosterSizeForFallback: number,
+  hasGlobalSnapshot = false,
+): number {
+  if (!daySnapshotPresent(day)) {
+    if (hasGlobalSnapshot) return 0;
+    return Math.max(0, rosterSizeForFallback) * PLAN_DAY_HOURS;
+  }
+  let total = 0;
+  if (day!.summary) {
+    total += day!.summary.full * PLAN_DAY_HOURS;
+  } else {
+    for (const _sid of day!.avail_full ?? []) {
+      total += PLAN_DAY_HOURS;
+    }
+  }
+  for (const windows of Object.values(day!.avail_partial ?? {})) {
+    total += partialAssignableHours(windows, calendarDate, planDayStartHour);
+  }
+  return total;
 }

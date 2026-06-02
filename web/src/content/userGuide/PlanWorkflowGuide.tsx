@@ -63,7 +63,9 @@ export function PlanWorkflowGuide() {
       </table>
 
       <p className="contacts-hint">
-        Read-only users can view proposals, reports, PDF, and Stats but cannot generate, save, clear, or apply.
+        <strong>Download Excel</strong> exports only the schedule matrix (full names, platoon colors) for the current
+        proposal. Read-only users can view proposals, reports, PDF, Excel, and Stats but cannot generate, save, clear, or
+        apply.
       </p>
     </>
   );

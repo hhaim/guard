@@ -38,10 +38,62 @@ func TypeCodesForRoster(keys []string, idToType map[string]string) []string {
 	return out
 }
 
-// TODO: load platoon by soldier id for zone constraints (platoon_code on soldiers[]).
+// PlatoonCodesForRoster returns platoon_code per roster index (empty string if unknown).
+func PlatoonCodesForRoster(keys []string, idToPlatoon map[string]string) []string {
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		out[i] = strings.TrimSpace(idToPlatoon[k])
+	}
+	return out
+}
+
+// LoadRosterPlatoonCodesYAML reads soldiers[].platoon_code (or platoon) in roster key order.
+func LoadRosterPlatoonCodesYAML(raw []byte, keys []string) ([]string, error) {
+	var root any
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return nil, err
+	}
+	data, ok := root.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("roster YAML must be a mapping at top level")
+	}
+	rawSoldiers, ok := data["soldiers"]
+	if !ok {
+		return nil, fmt.Errorf("roster YAML must include soldiers list")
+	}
+	var list []any
+	if uiRows, ok := rawSoldiers.([]any); ok {
+		list = uiRows
+	} else if nested, ok := rawSoldiers.(map[string]any); ok {
+		if legacyRows, ok := nested["soldiers"].([]any); ok {
+			list = legacyRows
+		}
+	}
+	if list == nil {
+		return nil, fmt.Errorf("roster YAML must include soldiers list")
+	}
+	idToPlatoon := map[string]string{}
+	for _, row := range list {
+		m, ok := row.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := rosterString(m, "id")
+		if id == "" {
+			id = rosterString(m, "key")
+		}
+		pc := rosterString(m, "platoon_code")
+		if pc == "" {
+			pc = rosterString(m, "platoon")
+		}
+		if id != "" && pc != "" {
+			idToPlatoon[id] = pc
+		}
+	}
+	return PlatoonCodesForRoster(keys, idToPlatoon), nil
+}
 
 // LoadRosterTypeCodesYAML reads soldiers[].type_code from roster YAML in roster key order.
-// platoon_code on soldiers is ignored until scheduler support is added.
 func LoadRosterTypeCodesYAML(raw []byte, keys []string) ([]string, error) {
 	var root any
 	if err := yaml.Unmarshal(raw, &root); err != nil {

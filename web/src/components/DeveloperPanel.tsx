@@ -1,6 +1,7 @@
 import { Braces, Copy, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppState, type DevPanelTab } from "../context/AppStateContext";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 type DeveloperPanelProps = {
   jsonText: string;
@@ -8,19 +9,6 @@ type DeveloperPanelProps = {
   jsonError: string | null;
   onResetDefaults: () => void;
 };
-
-function useIsMobile(breakpoint = 768) {
-  const [mobile, setMobile] = useState(
-    () => typeof window !== "undefined" && window.matchMedia(`(max-width: ${breakpoint - 1}px)`).matches
-  );
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
-    const fn = () => setMobile(mq.matches);
-    mq.addEventListener("change", fn);
-    return () => mq.removeEventListener("change", fn);
-  }, [breakpoint]);
-  return mobile;
-}
 
 function statusBadge(status: number | "pending" | "error") {
   if (status === "pending") return { cls: "pending", label: "…" };

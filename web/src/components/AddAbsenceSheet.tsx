@@ -1,7 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { createSoldierStatus, type SoldierStatusKind } from "../api/soldierStatus";
-import { addCalendarDays, planDayBoundsIso } from "../lib/planDayBounds";
+import { planDayBoundsIso } from "../lib/planDayBounds";
+import { enumeratePlanDays } from "../lib/planDayRange";
 import type { Soldier } from "../lib/soldiers";
 
 type Props = {
@@ -12,21 +13,6 @@ type Props = {
   onClose: () => void;
   onSaved: () => void;
 };
-
-function enumeratePlanDays(
-  fromDate: string,
-  toDate: string,
-): string[] {
-  const out: string[] = [];
-  let cur = fromDate;
-  while (cur <= toDate) {
-    out.push(cur);
-    if (cur === toDate) break;
-    cur = addCalendarDays(cur, 1);
-    if (out.length > 366) break;
-  }
-  return out;
-}
 
 export function AddAbsenceSheet({
   open,

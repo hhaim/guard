@@ -27,7 +27,7 @@ func RunSimulationZoneConfigWithContinuation(
 	planDayStartHour int,
 	avail AvailabilityChecker,
 	anchor *time.Time,
-	typeCodes []string,
+	typeCodes, platoonCodes []string,
 	seed *int64,
 ) (*ColdSimResult, error) {
 	var witness *SimWitness
@@ -38,7 +38,7 @@ func RunSimulationZoneConfigWithContinuation(
 		zone, numSoldiers, horizonDays, r,
 		minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 		maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-		planDayStartHour, avail, anchor, typeCodes, witness,
+		planDayStartHour, avail, anchor, typeCodes, platoonCodes, witness,
 	)
 	if err != nil {
 		return nil, err

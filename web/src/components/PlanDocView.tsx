@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { ZonesDoc } from "../lib/zones";
-import type { PlanDoc } from "../lib/planDoc";
+import type { PlanDaySoldiersDoc, PlanDoc } from "../lib/planDoc";
 import { normalizePlanDoc } from "../lib/planDoc";
 import type { PlatoonColorEntry } from "../lib/platoonColors";
 import type { Soldier } from "../lib/soldiers";
@@ -19,6 +19,7 @@ export type PlanDocViewProps = {
   /** When set, show the editable change table above the report. */
   onPlanChange?: (next: PlanDoc) => void;
   readOnly?: boolean;
+  soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
 };
 
 /**
@@ -34,6 +35,7 @@ export function PlanDocView({
   sections,
   onPlanChange,
   readOnly = false,
+  soldiersByDay,
 }: PlanDocViewProps) {
   const doc = useMemo(() => normalizePlanDoc(plan), [plan]);
   const rosterSize = Math.max(soldierIds.length, inferSoldierCount(doc.assignments));
@@ -41,7 +43,12 @@ export function PlanDocView({
   return (
     <>
       {doc.assignments.length > 0 && (
-        <PlanTopMetrics plan={doc} soldierCount={rosterSize} />
+        <PlanTopMetrics
+          plan={doc}
+          soldierCount={rosterSize}
+          soldierIds={soldierIds}
+          soldiersByDay={soldiersByDay}
+        />
       )}
       {onPlanChange && (
         <PlanChangeTable

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPut } from "../api";
 import { useDevPanel } from "../context/AppStateContext";
 import { formatApiError } from "../lib/apiError";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { useSoldierPlatoonsDocument } from "../hooks/useSoldierPlatoonsDocument";
 import { useSoldierTypesDocument } from "../hooks/useSoldierTypesDocument";
 import {
@@ -40,6 +41,7 @@ type RosterSortKey = "type" | "platoon" | "name" | "id";
 
 export function SoldiersView() {
   const qc = useQueryClient();
+  const isMobile = useIsMobile();
   const { openPanel } = useDevPanel();
   const typesCfg = useSoldierTypesDocument();
   const platoonsCfg = useSoldierPlatoonsDocument();
@@ -363,56 +365,58 @@ export function SoldiersView() {
             {rosterStatusLabel ? ` · ${rosterStatusLabel}` : ""}
           </p>
         </div>
-        <div className="contacts-toolbar-actions">
-          <button
-            type="button"
-            className="btn btn-tinted contacts-json-btn"
-            aria-label="Show JSON debug panel"
-            onClick={() => {
-              setDevJsonSource("soldiers");
-              openPanel("json");
-            }}
-          >
-            <Braces size={18} strokeWidth={2} />
-            <span className="contacts-json-btn-label">JSON</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-tinted contacts-json-btn"
-            aria-label="Export soldiers JSON"
-            onClick={() =>
-              downloadText(
-                `soldiers-${new Date().toISOString().slice(0, 10)}.json`,
-                JSON.stringify(liveJson, null, 2),
-                "application/json"
-              )
-            }
-          >
-            <Download size={18} strokeWidth={2} />
-            <span className="contacts-json-btn-label">Export</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-tinted contacts-json-btn"
-            aria-label="Import soldiers JSON"
-            onClick={async () => {
-              try {
-                const text = await pickTextFile(".json,application/json");
-                if (!confirm("Import soldiers JSON? This replaces the current list.")) return;
-                const parsed = parseDocFromJson(JSON.parse(text));
-                setDoc(parsed);
-                setJsonOverride(null);
-                setDirty(true);
-                setSaveState("idle");
-              } catch (err) {
-                alert(err instanceof Error ? err.message : "Import failed");
+        {!isMobile && (
+          <div className="contacts-toolbar-actions">
+            <button
+              type="button"
+              className="btn btn-tinted contacts-json-btn"
+              aria-label="Show JSON debug panel"
+              onClick={() => {
+                setDevJsonSource("soldiers");
+                openPanel("json");
+              }}
+            >
+              <Braces size={18} strokeWidth={2} />
+              <span className="contacts-json-btn-label">JSON</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-tinted contacts-json-btn"
+              aria-label="Export soldiers JSON"
+              onClick={() =>
+                downloadText(
+                  `soldiers-${new Date().toISOString().slice(0, 10)}.json`,
+                  JSON.stringify(liveJson, null, 2),
+                  "application/json"
+                )
               }
-            }}
-          >
-            <Upload size={18} strokeWidth={2} />
-            <span className="contacts-json-btn-label">Import</span>
-          </button>
-        </div>
+            >
+              <Download size={18} strokeWidth={2} />
+              <span className="contacts-json-btn-label">Export</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-tinted contacts-json-btn"
+              aria-label="Import soldiers JSON"
+              onClick={async () => {
+                try {
+                  const text = await pickTextFile(".json,application/json");
+                  if (!confirm("Import soldiers JSON? This replaces the current list.")) return;
+                  const parsed = parseDocFromJson(JSON.parse(text));
+                  setDoc(parsed);
+                  setJsonOverride(null);
+                  setDirty(true);
+                  setSaveState("idle");
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "Import failed");
+                }
+              }}
+            >
+              <Upload size={18} strokeWidth={2} />
+              <span className="contacts-json-btn-label">Import</span>
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="soldiers-search-row">
@@ -472,10 +476,14 @@ export function SoldiersView() {
           types={typesCfg}
           soldiers={doc.soldiers}
           searchTerm={normalizedSearch}
-          onOpenTypesJson={() => {
-            setDevJsonSource("types");
-            openPanel("json");
-          }}
+          onOpenTypesJson={
+            isMobile
+              ? undefined
+              : () => {
+                  setDevJsonSource("types");
+                  openPanel("json");
+                }
+          }
         />
       </details>
 
@@ -485,16 +493,24 @@ export function SoldiersView() {
           platoons={platoonsCfg}
           soldiers={doc.soldiers}
           searchTerm={normalizedSearch}
-          onOpenPlatoonsJson={() => {
-            setDevJsonSource("platoons");
-            openPanel("json");
-          }}
+          onOpenPlatoonsJson={
+            isMobile
+              ? undefined
+              : () => {
+                  setDevJsonSource("platoons");
+                  openPanel("json");
+                }
+          }
         />
       </details>
 
       <details className="soldiers-section-accordion" open>
         <summary>Status board</summary>
-        <SoldiersStatusBoard soldiers={sortedRows.map(({ s }) => s)} />
+        <SoldiersStatusBoard
+          soldiers={sortedRows.map(({ s }) => s)}
+          rosterSoldiers={doc.soldiers}
+          platoonsDoc={platoonsCfg.doc}
+        />
       </details>
 
       <details className="soldiers-section-accordion" open>
@@ -680,12 +696,14 @@ export function SoldiersView() {
         onDelete={editorMode === "edit" ? deleteFromEditor : undefined}
       />
 
-      <DevPanelTrigger
-        onOpen={() => {
-          setDevJsonSource("soldiers");
-          openPanel("json");
-        }}
-      />
+      {!isMobile && (
+        <DevPanelTrigger
+          onOpen={() => {
+            setDevJsonSource("soldiers");
+            openPanel("json");
+          }}
+        />
+      )}
       <DeveloperPanel
         jsonText={
           devJsonSource === "types"

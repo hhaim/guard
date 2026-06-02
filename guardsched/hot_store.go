@@ -265,7 +265,7 @@ func RunSimulationHot(
 	planStartHour int,
 	avail AvailabilityChecker,
 	anchor time.Time,
-	typeCodes []string,
+	typeCodes, platoonCodes []string,
 ) ([]*AssignmentRecord, *SimulationStats, map[string]any, error) {
 	if totalDays < 1 {
 		return nil, nil, nil, fmt.Errorf("total_days must be >= 1")
@@ -302,7 +302,7 @@ func RunSimulationHot(
 			cold, err := RunSimulationZoneConfigWithContinuation(
 				zc, numSoldiers, chunk, chunk, rng,
 				minFreeHours, true, 0, maxDutyBlocks, minFreeShifts, bandRel,
-				planStartHour, avail, &anchor, typeCodes, baseSeed,
+				planStartHour, avail, &anchor, typeCodes, platoonCodes, baseSeed,
 			)
 			if err != nil {
 				return nil, nil, nil, err
@@ -339,7 +339,7 @@ func RunSimulationHot(
 			recs, stats, cont, _, err := RunSimulationBestOfZoneConfigExtendWitness(
 				zc, numSoldiers, prefixDays, chunk, 1, hist.Prefix, &seedUsed,
 				minFreeHours, true, 0, maxDutyBlocks, minFreeShifts, bandRel,
-				planStartHour, avail, &anchor, typeCodes, witness,
+				planStartHour, avail, &anchor, typeCodes, platoonCodes, witness,
 			)
 			if err != nil {
 				return nil, nil, nil, err

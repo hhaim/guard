@@ -1400,6 +1400,231 @@ def _soldier_type_code(type_codes: Optional[Sequence[str]], idx: int) -> str:
     return str(type_codes[idx]).strip()
 
 
+def _soldier_platoon_code(platoon_codes: Optional[Sequence[str]], idx: int) -> str:
+    if not platoon_codes or idx < 0 or idx >= len(platoon_codes):
+        return ""
+    return str(platoon_codes[idx]).strip()
+
+
+def _config_flag_enabled(cfg: Optional[Dict[str, Any]], key: str) -> bool:
+    if not cfg or not key:
+        return False
+    if key in cfg and _truthy_config(cfg[key]):
+        return True
+    feats = cfg.get("features")
+    if isinstance(feats, list):
+        return any(str(f).strip() == key for f in feats)
+    return False
+
+
+def _truthy_config(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        s = v.strip().lower()
+        return s in ("1", "true", "yes", "on")
+    return False
+
+
+def _soldier_eligible_full_day_team(
+    s: Soldier,
+    assigned: Sequence[Soldier],
+    platoon_codes: Optional[Sequence[str]],
+    platoon_filter: str,
+    type_filter: str,
+    type_codes: Optional[Sequence[str]],
+    excl: frozenset[str],
+    busy: np.ndarray,
+    L0: int,
+    span: int,
+    B: int,
+    days: int,
+    day: int,
+    sh0: int,
+    sh1: int,
+    availability: Any,
+) -> bool:
+    if s in assigned:
+        return False
+    if platoon_filter and _soldier_platoon_code(platoon_codes, s.idx) != platoon_filter:
+        return False
+    if type_filter and _soldier_type_code(type_codes, s.idx) != type_filter:
+        return False
+    if _soldier_excluded_by_type(type_codes, s.idx, excl):
+        return False
+    if _any_busy_span(busy, s.idx, L0, span, B, days):
+        return False
+    return _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
+
+
+def _platoon_can_fill_full_day_team(
+    platoon: str,
+    cfg: Dict[str, Any],
+    soldiers: Sequence[Soldier],
+    type_codes: Optional[Sequence[str]],
+    platoon_codes: Optional[Sequence[str]],
+    excl: frozenset[str],
+    busy: np.ndarray,
+    L0: int,
+    span: int,
+    B: int,
+    days: int,
+    day: int,
+    sh0: int,
+    sh1: int,
+    availability: Any,
+) -> bool:
+    type_avail: Dict[str, int] = {}
+    generic = 0
+    for s in soldiers:
+        if not _soldier_eligible_full_day_team(
+            s,
+            (),
+            platoon_codes,
+            platoon,
+            "",
+            type_codes,
+            excl,
+            busy,
+            L0,
+            span,
+            B,
+            days,
+            day,
+            sh0,
+            sh1,
+            availability,
+        ):
+            continue
+        tc = _soldier_type_code(type_codes, s.idx)
+        if tc:
+            type_avail[tc] = type_avail.get(tc, 0) + 1
+        else:
+            generic += 1
+    quotas: Dict[str, int] = dict(cfg.get("type_quotas") or {})
+    for code, q in quotas.items():
+        if type_avail.get(code, 0) < q:
+            return False
+    total = generic + sum(type_avail.values())
+    return total >= int(cfg["headcount"])
+
+
+def _platoon_full_day_team_score(
+    platoon: str,
+    cfg: Dict[str, Any],
+    soldiers: Sequence[Soldier],
+    type_codes: Optional[Sequence[str]],
+    platoon_codes: Optional[Sequence[str]],
+    excl: frozenset[str],
+    busy: np.ndarray,
+    L0: int,
+    span: int,
+    B: int,
+    days: int,
+    day: int,
+    sh0: int,
+    sh1: int,
+    availability: Any,
+    deltas_g: np.ndarray,
+) -> Tuple[bool, float]:
+    if not _platoon_can_fill_full_day_team(
+        platoon,
+        cfg,
+        soldiers,
+        type_codes,
+        platoon_codes,
+        excl,
+        busy,
+        L0,
+        span,
+        B,
+        days,
+        day,
+        sh0,
+        sh1,
+        availability,
+    ):
+        return False, 0.0
+    eligible = 0
+    load_sum = 0.0
+    for s in soldiers:
+        if not _soldier_eligible_full_day_team(
+            s,
+            (),
+            platoon_codes,
+            platoon,
+            "",
+            type_codes,
+            excl,
+            busy,
+            L0,
+            span,
+            B,
+            days,
+            day,
+            sh0,
+            sh1,
+            availability,
+        ):
+            continue
+        eligible += 1
+        load_sum += s.effective_global(float(deltas_g[s.idx]))
+    avg_load = load_sum / eligible if eligible > 0 else 0.0
+    return True, float(eligible) * 1e6 - avg_load
+
+
+def _ordered_platoons_for_full_day_team(
+    cfg: Dict[str, Any],
+    soldiers: Sequence[Soldier],
+    type_codes: Optional[Sequence[str]],
+    platoon_codes: Optional[Sequence[str]],
+    excl: frozenset[str],
+    busy: np.ndarray,
+    L0: int,
+    span: int,
+    B: int,
+    days: int,
+    day: int,
+    sh0: int,
+    sh1: int,
+    availability: Any,
+    deltas_g: np.ndarray,
+) -> List[str]:
+    seen: set[str] = set()
+    codes: List[str] = []
+    for pc in platoon_codes or ():
+        pc = str(pc).strip()
+        if not pc or pc in seen:
+            continue
+        seen.add(pc)
+        codes.append(pc)
+    ranked: List[Tuple[str, bool, float]] = []
+    for pc in codes:
+        ok, sc = _platoon_full_day_team_score(
+            pc,
+            cfg,
+            soldiers,
+            type_codes,
+            platoon_codes,
+            excl,
+            busy,
+            L0,
+            span,
+            B,
+            days,
+            day,
+            sh0,
+            sh1,
+            availability,
+            deltas_g,
+        )
+        ranked.append((pc, ok, sc))
+    ranked.sort(key=lambda r: (not r[1], -r[2], r[0]))
+    return [r[0] for r in ranked]
+
+
 def _parse_type_exclude_list(raw: Any, tid: str) -> Optional[frozenset[str]]:
     if raw is None:
         return None
@@ -1503,6 +1728,198 @@ def _fill_full_day_team_post(
     cfg: Dict[str, Any],
     soldiers: List[Soldier],
     type_codes: Optional[Sequence[str]],
+    platoon_codes: Optional[Sequence[str]],
+    busy: np.ndarray,
+    daily_raw_loc: np.ndarray,
+    daily_raw_time: np.ndarray,
+    deltas_loc: np.ndarray,
+    deltas_time: np.ndarray,
+    deltas_g: np.ndarray,
+    B: int,
+    sh: float,
+    days: int,
+    rng: random.Random,
+    *,
+    plan_start_hour: int,
+    band_relative: float,
+    balance_total_hours: bool,
+    total_hours_slack: float,
+    availability: Any,
+    assignments: List[AssignmentRecord],
+) -> None:
+    if cfg.get("pin_platoon"):
+        _fill_full_day_team_post_pin_platoon(
+            zone,
+            day,
+            sidx,
+            loc_i,
+            cfg,
+            soldiers,
+            type_codes,
+            platoon_codes,
+            busy,
+            daily_raw_loc,
+            daily_raw_time,
+            deltas_loc,
+            deltas_time,
+            deltas_g,
+            B,
+            sh,
+            days,
+            rng,
+            plan_start_hour=plan_start_hour,
+            band_relative=band_relative,
+            balance_total_hours=balance_total_hours,
+            total_hours_slack=total_hours_slack,
+            availability=availability,
+            assignments=assignments,
+        )
+        return
+    _fill_full_day_team_post_for_platoon(
+        zone,
+        day,
+        sidx,
+        loc_i,
+        cfg,
+        soldiers,
+        type_codes,
+        platoon_codes,
+        "",
+        busy,
+        daily_raw_loc,
+        daily_raw_time,
+        deltas_loc,
+        deltas_time,
+        deltas_g,
+        B,
+        sh,
+        days,
+        rng,
+        plan_start_hour=plan_start_hour,
+        band_relative=band_relative,
+        balance_total_hours=balance_total_hours,
+        total_hours_slack=total_hours_slack,
+        availability=availability,
+        assignments=assignments,
+    )
+
+
+def _fill_full_day_team_post_pin_platoon(
+    zone: ZoneConfig,
+    day: int,
+    sidx: int,
+    loc_i: int,
+    cfg: Dict[str, Any],
+    soldiers: List[Soldier],
+    type_codes: Optional[Sequence[str]],
+    platoon_codes: Optional[Sequence[str]],
+    busy: np.ndarray,
+    daily_raw_loc: np.ndarray,
+    daily_raw_time: np.ndarray,
+    deltas_loc: np.ndarray,
+    deltas_time: np.ndarray,
+    deltas_g: np.ndarray,
+    B: int,
+    sh: float,
+    days: int,
+    rng: random.Random,
+    *,
+    plan_start_hour: int,
+    band_relative: float,
+    balance_total_hours: bool,
+    total_hours_slack: float,
+    availability: Any,
+    assignments: List[AssignmentRecord],
+) -> None:
+    sh0, sh1 = int(cfg["start_h"]), int(cfg["end_h"])
+    rest_after = float(cfg["rest_after"])
+    L0, span = _linear_busy_span_duty_hours_plus_rest(
+        day,
+        B,
+        sh,
+        sh0,
+        sh1,
+        half_open=False,
+        rest_after_h=rest_after,
+        plan_start_hour=plan_start_hour,
+    )
+    excl = _slot_type_exclude(zone, loc_i)
+    deltas_loc[:] = 0.0
+    deltas_time[:] = 0.0
+    deltas_g[:] = 0.0
+    order = _ordered_platoons_for_full_day_team(
+        cfg,
+        soldiers,
+        type_codes,
+        platoon_codes,
+        excl,
+        busy,
+        L0,
+        span,
+        B,
+        days,
+        day,
+        sh0,
+        sh1,
+        availability,
+        deltas_g,
+    )
+    if not order:
+        raise ValueError(
+            f"pin_platoon: no soldiers with platoon_code on day {day + 1} slot {sidx + 1}"
+        )
+    last_err: Optional[BaseException] = None
+    for pc in order:
+        try:
+            _fill_full_day_team_post_for_platoon(
+                zone,
+                day,
+                sidx,
+                loc_i,
+                cfg,
+                soldiers,
+                type_codes,
+                platoon_codes,
+                pc,
+                busy,
+                daily_raw_loc,
+                daily_raw_time,
+                deltas_loc,
+                deltas_time,
+                deltas_g,
+                B,
+                sh,
+                days,
+                rng,
+                plan_start_hour=plan_start_hour,
+                band_relative=band_relative,
+                balance_total_hours=balance_total_hours,
+                total_hours_slack=total_hours_slack,
+                availability=availability,
+                assignments=assignments,
+            )
+            return
+        except ValueError as e:
+            last_err = e
+    if last_err is not None:
+        raise ValueError(
+            f"pin_platoon: no platoon can fill team on day {day + 1} slot {sidx + 1}: {last_err}"
+        ) from last_err
+    raise ValueError(
+        f"pin_platoon: no platoon can fill team on day {day + 1} slot {sidx + 1}"
+    )
+
+
+def _fill_full_day_team_post_for_platoon(
+    zone: ZoneConfig,
+    day: int,
+    sidx: int,
+    loc_i: int,
+    cfg: Dict[str, Any],
+    soldiers: List[Soldier],
+    type_codes: Optional[Sequence[str]],
+    platoon_codes: Optional[Sequence[str]],
+    platoon_filter: str,
     busy: np.ndarray,
     daily_raw_loc: np.ndarray,
     daily_raw_time: np.ndarray,
@@ -1546,6 +1963,7 @@ def _fill_full_day_team_post(
     quotas: Dict[str, int] = dict(cfg.get("type_quotas") or {})
 
     assigned: List[Soldier] = []
+    excl = _slot_type_exclude(zone, loc_i)
     deltas_loc[:] = 0.0
     deltas_time[:] = 0.0
     deltas_g[:] = 0.0
@@ -1553,15 +1971,27 @@ def _fill_full_day_team_post(
     def pick_n(n: int, type_filter: str) -> None:
         nonlocal assigned
         for pick in range(n):
-            excl = _slot_type_exclude(zone, loc_i)
             pool = [
                 s
                 for s in soldiers
-                if s not in assigned
-                and (not type_filter or _soldier_type_code(type_codes, s.idx) == type_filter)
-                and not _soldier_excluded_by_type(type_codes, s.idx, excl)
-                and not _any_busy_span(busy, s.idx, L0, span, B, days)
-                and _soldier_avail_wall(availability, s.idx, day, sh0, sh1 + 1)
+                if _soldier_eligible_full_day_team(
+                    s,
+                    assigned,
+                    platoon_codes,
+                    platoon_filter,
+                    type_filter,
+                    type_codes,
+                    excl,
+                    busy,
+                    L0,
+                    span,
+                    B,
+                    days,
+                    day,
+                    sh0,
+                    sh1,
+                    availability,
+                )
             ]
             if not pool:
                 if type_filter:
@@ -1887,6 +2317,7 @@ def _load_zone_config(
                 "hours_factor": hf,
                 "headcount": hc,
                 "type_quotas": quotas,
+                "pin_platoon": _config_flag_enabled(cfg, "pin_platoon"),
             }
         elif pat == "windowed_slots":
             cfg = row.get("config") or {}
@@ -2074,13 +2505,24 @@ def type_codes_for_roster(keys: Sequence[str], id_to_type: Dict[str, str]) -> Li
     return [str(id_to_type.get(k, "")).strip() for k in keys]
 
 
-# TODO: load platoon by soldier id for zone constraints (platoon_code on soldiers[]).
+def platoon_codes_for_roster(keys: Sequence[str], id_to_platoon: Dict[str, str]) -> List[str]:
+    return [str(id_to_platoon.get(k, "")).strip() for k in keys]
+
+
+def _roster_soldier_rows_from_yaml(data: Dict[str, Any]) -> List[Any]:
+    raw_soldiers = data.get("soldiers")
+    if isinstance(raw_soldiers, list):
+        return raw_soldiers
+    if isinstance(raw_soldiers, dict):
+        nested = raw_soldiers.get("soldiers")
+        if isinstance(nested, list):
+            return nested
+    raise ValueError("roster YAML must include soldiers list")
 
 
 def load_roster_type_codes_yaml(path: Path, keys: Sequence[str]) -> List[str]:
     """
     Read ``type_code`` by soldier id from roster YAML and return values in ``keys`` order.
-    ``platoon_code`` on soldiers is ignored until scheduler support is added.
 
     Supports both UI export shape (``soldiers: [ ... ]``) and legacy nested
     shape (``soldiers: { soldiers: [ ... ] }``).
@@ -2088,16 +2530,7 @@ def load_roster_type_codes_yaml(path: Path, keys: Sequence[str]) -> List[str]:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("roster YAML must be a mapping at top level")
-    raw_soldiers = data.get("soldiers")
-    rows: Optional[List[Any]] = None
-    if isinstance(raw_soldiers, list):
-        rows = raw_soldiers
-    elif isinstance(raw_soldiers, dict):
-        nested = raw_soldiers.get("soldiers")
-        if isinstance(nested, list):
-            rows = nested
-    if rows is None:
-        raise ValueError("roster YAML must include soldiers list")
+    rows = _roster_soldier_rows_from_yaml(data)
     id_to_type: Dict[str, str] = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -2109,6 +2542,27 @@ def load_roster_type_codes_yaml(path: Path, keys: Sequence[str]) -> List[str]:
         if sid and tc and tc != "<nil>":
             id_to_type[sid] = tc
     return type_codes_for_roster(keys, id_to_type)
+
+
+def load_roster_platoon_codes_yaml(path: Path, keys: Sequence[str]) -> List[str]:
+    """Read ``platoon_code`` (or ``platoon``) per soldier id in roster key order."""
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("roster YAML must be a mapping at top level")
+    rows = _roster_soldier_rows_from_yaml(data)
+    id_to_platoon: Dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sid = str(row.get("id", "")).strip()
+        if not sid:
+            sid = str(row.get("key", "")).strip()
+        pc = str(row.get("platoon_code", "")).strip()
+        if not pc:
+            pc = str(row.get("platoon", "")).strip()
+        if sid and pc and pc != "<nil>":
+            id_to_platoon[sid] = pc
+    return platoon_codes_for_roster(keys, id_to_platoon)
 
 
 @dataclass
@@ -2662,6 +3116,7 @@ def advance_rng_to_split_boundary(
     availability: Any = None,
     anchor: Optional[datetime] = None,
     type_codes: Optional[Sequence[str]] = None,
+    platoon_codes: Optional[Sequence[str]] = None,
     band_relative: float = BAND_RELATIVE_DEFAULT,
     balance_total_hours: bool = True,
     total_hours_slack: float = 0.0,
@@ -2710,6 +3165,7 @@ def advance_rng_to_split_boundary(
         availability=availability,
         anchor=anchor,
         type_codes=type_codes,
+        platoon_codes=platoon_codes,
         band_relative=band_relative,
         balance_total_hours=balance_total_hours,
         total_hours_slack=total_hours_slack,
@@ -2761,6 +3217,7 @@ def _scratch_simulate_nonrot_passes(
     availability: Any = None,
     anchor: Optional[datetime] = None,
     type_codes: Optional[Sequence[str]] = None,
+    platoon_codes: Optional[Sequence[str]] = None,
     band_relative: float = BAND_RELATIVE_DEFAULT,
     balance_total_hours: bool = True,
     total_hours_slack: float = 0.0,
@@ -2815,6 +3272,7 @@ def _scratch_simulate_nonrot_passes(
                     cfg,
                     soldiers,
                     type_codes,
+                    platoon_codes,
                     busy,
                     daily_raw_loc,
                     daily_raw_time,
@@ -2998,6 +3456,7 @@ def consume_rng_for_nonrot_days(
     availability: Any = None,
     anchor: Optional[datetime] = None,
     type_codes: Optional[Sequence[str]] = None,
+    platoon_codes: Optional[Sequence[str]] = None,
     band_relative: float = BAND_RELATIVE_DEFAULT,
     balance_total_hours: bool = True,
     total_hours_slack: float = 0.0,
@@ -3017,6 +3476,7 @@ def consume_rng_for_nonrot_days(
         availability=availability,
         anchor=anchor,
         type_codes=type_codes,
+        platoon_codes=platoon_codes,
         band_relative=band_relative,
         balance_total_hours=balance_total_hours,
         total_hours_slack=total_hours_slack,
@@ -3245,6 +3705,7 @@ def run_simulation(
     availability: Any = None,
     anchor: Optional[datetime] = None,
     type_codes: Optional[Sequence[str]] = None,
+    platoon_codes: Optional[Sequence[str]] = None,
     checkpoint_prefix: Optional[Sequence[AssignmentRecord]] = None,
     checkpoint_prefix_days: int = 0,
     checkpoint_suffix_nonrot: Optional[Sequence[AssignmentRecord]] = None,
@@ -3319,6 +3780,7 @@ def run_simulation(
                 availability=availability,
                 anchor=anchor,
                 type_codes=type_codes,
+                platoon_codes=platoon_codes,
                 band_relative=band_relative,
                 balance_total_hours=balance_total_hours,
                 total_hours_slack=total_hours_slack,
@@ -3381,6 +3843,7 @@ def run_simulation(
                 cfg,
                 soldiers,
                 type_codes,
+                platoon_codes,
                 busy,
                 daily_raw_loc,
                 daily_raw_time,
@@ -4021,6 +4484,7 @@ def run_simulation_checkpoint_extend(
     availability: Any = None,
     anchor: Optional[datetime] = None,
     type_codes: Optional[Sequence[str]] = None,
+    platoon_codes: Optional[Sequence[str]] = None,
     *,
     witness_rng_state: Optional[Tuple[Any, ...]] = None,
     witness_suffix_nonrot: Optional[Sequence[AssignmentRecord]] = None,
@@ -4079,6 +4543,7 @@ def run_simulation_checkpoint_extend(
             availability=availability,
             anchor=anchor,
             type_codes=type_codes,
+            platoon_codes=platoon_codes,
             band_relative=band_relative,
             balance_total_hours=balance_total_hours,
             total_hours_slack=total_hours_slack,
@@ -4104,6 +4569,7 @@ def run_simulation_checkpoint_extend(
         availability=availability,
         anchor=anchor,
         type_codes=type_codes,
+        platoon_codes=platoon_codes,
         checkpoint_prefix=prefix_list,
         checkpoint_prefix_days=int(prefix_days),
         checkpoint_suffix_nonrot=suffix_nonrot,
@@ -4199,6 +4665,7 @@ def run_simulation_best_of(
     availability: Any = None,
     anchor: Optional[datetime] = None,
     type_codes: Optional[Sequence[str]] = None,
+    platoon_codes: Optional[Sequence[str]] = None,
 ) -> Tuple[
     Tuple[
         List[Soldier],
@@ -4242,6 +4709,7 @@ def run_simulation_best_of(
         availability=availability,
         anchor=anchor,
         type_codes=type_codes,
+        platoon_codes=platoon_codes,
     )
 
     if trials == 1:
@@ -4309,6 +4777,7 @@ def run_simulation_hot(
     availability: Any,
     anchor: datetime,
     type_codes: Optional[Sequence[str]],
+    platoon_codes: Optional[Sequence[str]] = None,
 ) -> Tuple[
     Tuple[
         List[Soldier],
@@ -4359,6 +4828,7 @@ def run_simulation_hot(
         availability=availability,
         anchor=anchor,
         type_codes=type_codes,
+        platoon_codes=platoon_codes,
     )
 
     saved_days = 0
@@ -4456,6 +4926,7 @@ def run_simulation_hot(
                 block_hours,
                 rng_t,
                 type_codes=type_codes,
+                platoon_codes=platoon_codes,
                 witness_rng_state=witness_rng,
                 witness_suffix_nonrot=witness_suffix,
                 min_consecutive_free_hours=min_consecutive_free_hours,
@@ -5914,11 +6385,12 @@ def main() -> None:
     plan_day_start_hour = parse_plan_day_start(args.plan_day_start)
     blocks_pd = calendar_blocks_per_day(block_hours_eff)
     type_codes: Optional[List[str]] = None
+    platoon_codes: Optional[List[str]] = None
     if args.roster:
         try:
-            type_codes = load_roster_type_codes_yaml(
-                Path(args.roster), roster_keys(int(args.soldiers))
-            )
+            keys = roster_keys(int(args.soldiers))
+            type_codes = load_roster_type_codes_yaml(Path(args.roster), keys)
+            platoon_codes = load_roster_platoon_codes_yaml(Path(args.roster), keys)
         except Exception as e:
             raise SystemExit(f"Roster types: {e}") from e
 
@@ -5961,6 +6433,7 @@ def main() -> None:
                     plan_day_start_hour=plan_day_start_hour,
                     anchor=sim_anchor,
                     type_codes=type_codes,
+                    platoon_codes=platoon_codes,
                 )
             except RestConstraintError as e:
                 print(f"ERROR at band_relative={br}: {e}", file=sys.stderr)
@@ -6015,6 +6488,7 @@ def main() -> None:
                 availability=scenario_avail,
                 anchor=hot_anchor,
                 type_codes=type_codes,
+                platoon_codes=platoon_codes,
             )
             print(f"Wrote hot store: {DEFAULT_HOT_STATE}", file=sys.stderr)
         else:
@@ -6036,6 +6510,7 @@ def main() -> None:
                 availability=scenario_avail,
                 anchor=sim_anchor,
                 type_codes=type_codes,
+                platoon_codes=platoon_codes,
             )
         (
             soldiers,

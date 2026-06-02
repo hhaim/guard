@@ -21,6 +21,10 @@ export function StatsGuide() {
           <strong>Export YAML</strong> downloads the applied schedule for the selected range.
         </li>
         <li>
+          With <strong>Show schedule matrix</strong> on, <strong>Download Excel</strong> exports only that matrix (full
+          names, platoon cell colors) for the selected verified day.
+        </li>
+        <li>
           <strong>Remove verified day (admin):</strong> deletes one calendar day from history (with a confirmation
           dialog) so you can re-apply a plan for that date.
         </li>

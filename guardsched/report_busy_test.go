@@ -38,7 +38,7 @@ func TestReportBusy_zonesNextDayFull_S1Day1Block2(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	r := NewPyRandom(42)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, n, 2, r, 6, true, 0, 2, 2, 0.2, planStart, nil, &anchor, typeCodes, nil,
+		zc, n, 2, r, 6, true, 0, 2, 2, 0.2, planStart, nil, &anchor, typeCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

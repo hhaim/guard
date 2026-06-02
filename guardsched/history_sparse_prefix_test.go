@@ -39,7 +39,7 @@ func TestDV2SparseHistoryPrefixMissingFullDaySlots(t *testing.T) {
 	cold, err := RunSimulationZoneConfigWithContinuation(
 		zc, nSoldiers, 1, 1, rng,
 		6, true, 0, 2, 2, 0.2,
-		5, nil, &wedAnchor, typeCodes, &seed,
+		5, nil, &wedAnchor, typeCodes, nil, &seed,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestDV2SparseHistoryPrefixMissingFullDaySlots(t *testing.T) {
 	extSparse, _, err := RunSimulationZoneConfigExtend(
 		zc, nSoldiers, historyDays, 1, sparsePrefix, NewPyRandom(seed),
 		6, true, 0, 2, 2, 0.2,
-		5, nil, &anchor, typeCodes, witness,
+		5, nil, &anchor, typeCodes, nil, witness,
 	)
 	if err != nil {
 		t.Fatalf("sparse extend: %v", err)
@@ -91,7 +91,7 @@ func TestDV2SparseHistoryPrefixMissingFullDaySlots(t *testing.T) {
 	extHot, _, err := RunSimulationZoneConfigExtend(
 		zc, nSoldiers, 1, 1, hotPrefix, NewPyRandom(seed),
 		6, true, 0, 2, 2, 0.2,
-		5, nil, &anchor, typeCodes, witnessHot,
+		5, nil, &anchor, typeCodes, nil, witnessHot,
 	)
 	if err != nil {
 		t.Fatalf("hot extend: %v", err)
@@ -101,7 +101,7 @@ func TestDV2SparseHistoryPrefixMissingFullDaySlots(t *testing.T) {
 	coldOnly, _, err := RunSimulationZoneConfig(
 		zc, nSoldiers, 1, NewPyRandom(seed),
 		6, true, 0, 2, 2, 0.2,
-		5, nil, &anchor, typeCodes, nil,
+		5, nil, &anchor, typeCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

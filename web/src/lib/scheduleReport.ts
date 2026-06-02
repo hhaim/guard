@@ -2,6 +2,7 @@ import type { PlanDaySoldiersDoc, ScheduleAssignment } from "./planDoc";
 import {
   calendarDateForPlanDay,
   isSoldierUnavailableForBlock,
+  planDayAssignableCapacityHours,
 } from "./soldierAvailability";
 import type { ZonesDoc } from "./zones";
 import {
@@ -907,7 +908,7 @@ export function stddevSample(values: number[]): number {
   return Math.sqrt(sumSq / (n - 1));
 }
 
-/** Aggregate duty hours vs roster capacity (soldier-days × 24 h). */
+/** Aggregate duty hours vs assignable roster capacity. */
 export type PlanWorkloadMetrics = {
   totalWorkHours: number;
   totalCapacityHours: number;
@@ -915,22 +916,104 @@ export type PlanWorkloadMetrics = {
   fairnessStdDevHours: number;
 };
 
+export type PlanWorkloadOpts = {
+  soldierIds: string[];
+  anchorDate: string;
+  planDayStartHour: number;
+  shiftHours: number;
+  soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
+  /** Only count this 0-based plan day (Stats single-day slice). */
+  dayFilter?: number;
+};
+
+function assignmentInFutureExtension(
+  a: ScheduleAssignment,
+  simDays: number,
+  blocksPd: number,
+  extBlocks: number,
+): boolean {
+  if (extBlocks <= 0 || a.day < simDays) return false;
+  const minIndex = simDays * blocksPd;
+  const maxIndex = minIndex + extBlocks;
+  for (let li = minIndex; li < maxIndex; li++) {
+    if (assignmentCoversLinearIndex(a, li, blocksPd)) return true;
+  }
+  return false;
+}
+
+function assignmentInWorkScope(
+  a: ScheduleAssignment,
+  simDays: number,
+  blocksPd: number,
+  extBlocks: number,
+  dayFilter: number | undefined,
+  includeFutureExtension: boolean,
+): boolean {
+  if (dayFilter != null) {
+    return a.day === dayFilter;
+  }
+  if (a.day >= 0 && a.day < simDays) return true;
+  return includeFutureExtension && assignmentInFutureExtension(a, simDays, blocksPd, extBlocks);
+}
+
+function hasAvailabilitySnapshot(soldiersByDay?: Record<string, PlanDaySoldiersDoc>): boolean {
+  return soldiersByDay != null && Object.keys(soldiersByDay).length > 0;
+}
+
 export function computePlanWorkloadMetrics(
   assignments: ScheduleAssignment[],
   days: number,
   soldierCount: number,
+  opts?: PlanWorkloadOpts,
 ): PlanWorkloadMetrics {
   const n = Math.max(1, soldierCount);
-  const perSoldier = Array<number>(n).fill(0);
+  const simDays = Math.max(1, days);
+  const shiftHours = opts?.shiftHours && opts.shiftHours > 0 ? opts.shiftHours : 4;
+  const blocksPd = Math.max(1, Math.round(24 / shiftHours));
+  const dayFilter = opts?.dayFilter;
+  const rosterIds =
+    opts?.soldierIds?.filter((id) => id.trim().length > 0) ??
+    Array.from({ length: n }, (_, i) => `S${i}`);
+  const rosterSize = Math.max(n, rosterIds.length);
+  const perSoldier = Array<number>(rosterSize).fill(0);
   let totalWork = 0;
+
   for (const a of assignments) {
+    if (!assignmentInWorkScope(a, simDays, blocksPd, 0, dayFilter, false)) {
+      continue;
+    }
     const s = a.soldier_idx;
-    if (s < 0 || s >= n) continue;
+    if (s < 0 || s >= rosterSize) continue;
     const h = a.raw_hours;
     perSoldier[s] += h;
     totalWork += h;
   }
-  const capacity = n * Math.max(1, days) * 24;
+
+  const dayStart = dayFilter != null ? dayFilter : 0;
+  const dayEnd = dayFilter != null ? dayFilter + 1 : simDays;
+  const dayCount = Math.max(1, dayEnd - dayStart);
+  const anchorDate = opts?.anchorDate?.trim() ?? "";
+  const planDayStartHour = opts?.planDayStartHour ?? 5;
+  const soldiersByDay = opts?.soldiersByDay;
+  const useAvailability = hasAvailabilitySnapshot(soldiersByDay);
+
+  let capacity = 0;
+  if (useAvailability && anchorDate) {
+    for (let d = dayStart; d < dayEnd; d++) {
+      const cal = calendarDateForPlanDay(anchorDate, d);
+      const dayDoc = soldiersByDay?.[cal];
+      capacity += planDayAssignableCapacityHours(
+        dayDoc,
+        cal,
+        planDayStartHour,
+        rosterIds.length,
+        true,
+      );
+    }
+  } else {
+    capacity = rosterIds.length * dayCount * 24;
+  }
+
   return {
     totalWorkHours: totalWork,
     totalCapacityHours: capacity,

@@ -199,6 +199,7 @@ func run() int {
 	roster := guardsched.Roster(nSoldiers)
 	var anchorPtr *time.Time
 	var typeCodes []string
+	var platoonCodes []string
 
 	if sc != nil {
 		anchor, err := resolveAnchor(sc, *anchorDate)
@@ -270,6 +271,11 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "error: roster types: %v\n", err)
 			return 2
 		}
+		platoonCodes, err = guardsched.LoadRosterPlatoonCodesYAML(raw, roster)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: roster platoons: %v\n", err)
+			return 2
+		}
 	}
 
 	if !*quiet {
@@ -296,7 +302,7 @@ func run() int {
 			guardsched.DefaultHotStatePath(),
 			zc, nSoldiers, nDays, *burstDays, *simTrials, seedPtr,
 			*minFreeHours, *maxDutyBlocks, *minFreeShifts, *bandRelative,
-			planStartHour, avail, *anchorPtr, typeCodes,
+			planStartHour, avail, *anchorPtr, typeCodes, platoonCodes,
 		)
 		if !*quiet {
 			fmt.Fprintf(os.Stderr, "Wrote hot store: %s\n", guardsched.DefaultHotStatePath())
@@ -306,7 +312,7 @@ func run() int {
 			zc, nSoldiers, nDays, *simTrials, seedPtr,
 			*minFreeHours, true, 0,
 			*maxDutyBlocks, *minFreeShifts, *bandRelative,
-			planStartHour, avail, anchorPtr, typeCodes,
+			planStartHour, avail, anchorPtr, typeCodes, platoonCodes,
 		)
 	}
 	if err != nil {

@@ -42,6 +42,22 @@ soldiers:
 	}
 }
 
+func TestLoadRosterPlatoonCodesYAML_UIExportShape(t *testing.T) {
+	raw := []byte(`
+soldiers:
+  - { id: s0, platoon_code: "1" }
+  - { id: s1, platoon_code: "2" }
+`)
+	got, err := LoadRosterPlatoonCodesYAML(raw, []string{"s0", "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1", "2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
 func TestLoadRosterTypeCodesYAML_PlatoonCodeIgnored(t *testing.T) {
 	raw := []byte(`
 soldiers:

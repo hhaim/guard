@@ -100,7 +100,7 @@ time_zones:
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	r := NewPyRandom(42)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, 4, 1, r, 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, nil,
+		zc, 4, 1, r, 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestRunSimulation_fullDayTeam_counts(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	r := NewPyRandom(42)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, n, 2, r, 6, true, 0, 2, 0, 0.2, 0, nil, &anchor, typeCodes, nil,
+		zc, n, 2, r, 6, true, 0, 2, 0, 0.2, 0, nil, &anchor, typeCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestRunSimulation_fullDayTeam_quotas(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	r := NewPyRandom(42)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, n, 2, r, 6, true, 0, 2, 0, 0.2, 0, nil, &anchor, typeCodes, nil,
+		zc, n, 2, r, 6, true, 0, 2, 0, 0.2, 0, nil, &anchor, typeCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestRunSimulation_fullDayTeam_busy(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	r := NewPyRandom(42)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, n, 1, r, 6, true, 0, 2, 0, 0.2, 0, nil, &anchor, typeCodes, nil,
+		zc, n, 1, r, 6, true, 0, 2, 0, 0.2, 0, nil, &anchor, typeCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

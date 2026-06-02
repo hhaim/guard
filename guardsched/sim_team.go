@@ -46,6 +46,13 @@ func soldierTypeCode(typeCodes []string, idx int) string {
 	return strings.TrimSpace(typeCodes[idx])
 }
 
+func soldierPlatoonCode(platoonCodes []string, idx int) string {
+	if idx < 0 || idx >= len(platoonCodes) {
+		return ""
+	}
+	return strings.TrimSpace(platoonCodes[idx])
+}
+
 func (z *ZoneConfig) slotTypeExclude(locI int) map[string]struct{} {
 	if locI < 0 || locI >= len(z.Locations) {
 		return nil
@@ -95,7 +102,246 @@ func fillFullDayTeamPost(
 	day, assignmentDay, sidx, locI int,
 	cfg FullDayTeamSpec,
 	soldiers []*Soldier,
+	typeCodes, platoonCodes []string,
+	busy [][][]bool,
+	dailyRawLoc [][][]float64,
+	dailyRawTime [][][]float64,
+	deltasLoc, deltasTime [][]float64,
+	deltasG []float64,
+	simZ *Zone,
+	B int,
+	sh float64,
+	days int,
+	planDayStartHour int,
+	r *PyRandom,
+	bandRelative float64,
+	balanceTotalHours bool,
+	totalHoursSlack float64,
+	avail AvailabilityChecker,
+	assignments *[]*AssignmentRecord,
+) error {
+	if cfg.PinPlatoon {
+		return fillFullDayTeamPostPinPlatoon(
+			zone, day, assignmentDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes,
+			busy, dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
+			B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments,
+		)
+	}
+	return fillFullDayTeamPostForPlatoon(
+		zone, day, assignmentDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes, "",
+		busy, dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
+		B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments,
+	)
+}
+
+func soldierEligibleFullDayTeam(
+	s *Soldier,
+	assigned []*Soldier,
+	platoonCodes []string,
+	platoonFilter, typeFilter string,
 	typeCodes []string,
+	excl map[string]struct{},
+	busy [][][]bool,
+	L0, span, B, days int,
+	day, sh0, sh1 int,
+	avail AvailabilityChecker,
+) bool {
+	if containsSoldier(assigned, s) {
+		return false
+	}
+	if platoonFilter != "" && soldierPlatoonCode(platoonCodes, s.Idx) != platoonFilter {
+		return false
+	}
+	if typeFilter != "" && soldierTypeCode(typeCodes, s.Idx) != typeFilter {
+		return false
+	}
+	if soldierExcludedByType(typeCodes, s.Idx, excl) {
+		return false
+	}
+	if anyBusySpan(busy, s.Idx, L0, span, B, days) {
+		return false
+	}
+	return soldierAvail(avail, s.Idx, day, func() bool {
+		return avail.AvailDutyWallHours(s.Idx, day, sh0, sh1+1)
+	})
+}
+
+func platoonCanFillFullDayTeam(
+	platoon string,
+	cfg FullDayTeamSpec,
+	soldiers []*Soldier,
+	typeCodes, platoonCodes []string,
+	excl map[string]struct{},
+	busy [][][]bool,
+	L0, span, B, days int,
+	day, sh0, sh1 int,
+	avail AvailabilityChecker,
+) bool {
+	typeAvail := map[string]int{}
+	generic := 0
+	for _, s := range soldiers {
+		if !soldierEligibleFullDayTeam(s, nil, platoonCodes, platoon, "", typeCodes, excl, busy, L0, span, B, days, day, sh0, sh1, avail) {
+			continue
+		}
+		tc := soldierTypeCode(typeCodes, s.Idx)
+		if tc != "" {
+			typeAvail[tc]++
+		} else {
+			generic++
+		}
+	}
+	for code, q := range cfg.TypeQuotas {
+		if typeAvail[code] < q {
+			return false
+		}
+	}
+	total := 0
+	for _, n := range typeAvail {
+		total += n
+	}
+	total += generic
+	return total >= cfg.Headcount
+}
+
+func platoonFullDayTeamScore(
+	platoon string,
+	cfg FullDayTeamSpec,
+	soldiers []*Soldier,
+	typeCodes, platoonCodes []string,
+	excl map[string]struct{},
+	busy [][][]bool,
+	L0, span, B, days int,
+	day, sh0, sh1 int,
+	avail AvailabilityChecker,
+	deltasG []float64,
+) (ok bool, score float64) {
+	if !platoonCanFillFullDayTeam(platoon, cfg, soldiers, typeCodes, platoonCodes, excl, busy, L0, span, B, days, day, sh0, sh1, avail) {
+		return false, 0
+	}
+	var eligible int
+	var loadSum float64
+	for _, s := range soldiers {
+		if !soldierEligibleFullDayTeam(s, nil, platoonCodes, platoon, "", typeCodes, excl, busy, L0, span, B, days, day, sh0, sh1, avail) {
+			continue
+		}
+		eligible++
+		loadSum += deltasG[s.Idx]
+	}
+	avgLoad := 0.0
+	if eligible > 0 {
+		avgLoad = loadSum / float64(eligible)
+	}
+	// Prefer more eligible soldiers, then lower average load (fairness-friendly).
+	return true, float64(eligible)*1e6 - avgLoad
+}
+
+func orderedPlatoonsForFullDayTeam(
+	cfg FullDayTeamSpec,
+	soldiers []*Soldier,
+	typeCodes, platoonCodes []string,
+	excl map[string]struct{},
+	busy [][][]bool,
+	L0, span, B, days int,
+	day, sh0, sh1 int,
+	avail AvailabilityChecker,
+	deltasG []float64,
+) []string {
+	seen := map[string]struct{}{}
+	var codes []string
+	for _, pc := range platoonCodes {
+		if pc == "" {
+			continue
+		}
+		if _, ok := seen[pc]; ok {
+			continue
+		}
+		seen[pc] = struct{}{}
+		codes = append(codes, pc)
+	}
+	type ranked struct {
+		code  string
+		ok    bool
+		score float64
+	}
+	ranks := make([]ranked, 0, len(codes))
+	for _, pc := range codes {
+		ok, sc := platoonFullDayTeamScore(pc, cfg, soldiers, typeCodes, platoonCodes, excl, busy, L0, span, B, days, day, sh0, sh1, avail, deltasG)
+		ranks = append(ranks, ranked{code: pc, ok: ok, score: sc})
+	}
+	sort.SliceStable(ranks, func(i, j int) bool {
+		if ranks[i].ok != ranks[j].ok {
+			return ranks[i].ok && !ranks[j].ok
+		}
+		if ranks[i].score != ranks[j].score {
+			return ranks[i].score > ranks[j].score
+		}
+		return ranks[i].code < ranks[j].code
+	})
+	out := make([]string, 0, len(ranks))
+	for _, r := range ranks {
+		out = append(out, r.code)
+	}
+	return out
+}
+
+func fillFullDayTeamPostPinPlatoon(
+	zone *ZoneConfig,
+	day, assignmentDay, sidx, locI int,
+	cfg FullDayTeamSpec,
+	soldiers []*Soldier,
+	typeCodes, platoonCodes []string,
+	busy [][][]bool,
+	dailyRawLoc [][][]float64,
+	dailyRawTime [][][]float64,
+	deltasLoc, deltasTime [][]float64,
+	deltasG []float64,
+	simZ *Zone,
+	B int,
+	sh float64,
+	days int,
+	planDayStartHour int,
+	r *PyRandom,
+	bandRelative float64,
+	balanceTotalHours bool,
+	totalHoursSlack float64,
+	avail AvailabilityChecker,
+	assignments *[]*AssignmentRecord,
+) error {
+	sh0, sh1 := cfg.StartH, cfg.EndH
+	L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, sh0, sh1, false, cfg.RestAfterH, planDayStartHour)
+	excl := zone.slotTypeExclude(locI)
+	clear2D(deltasLoc)
+	clear2D(deltasTime)
+	clear1D(deltasG)
+	order := orderedPlatoonsForFullDayTeam(cfg, soldiers, typeCodes, platoonCodes, excl, busy, L0, span, B, days, day, sh0, sh1, avail, deltasG)
+	if len(order) == 0 {
+		return fmt.Errorf("pin_platoon: no soldiers with platoon_code on day %d slot %d", day+1, sidx+1)
+	}
+	var lastErr error
+	for _, pc := range order {
+		err := fillFullDayTeamPostForPlatoon(
+			zone, day, assignmentDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes, pc,
+			busy, dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
+			B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments,
+		)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return fmt.Errorf("pin_platoon: no platoon can fill team on day %d slot %d: %w", day+1, sidx+1, lastErr)
+	}
+	return fmt.Errorf("pin_platoon: no platoon can fill team on day %d slot %d", day+1, sidx+1)
+}
+
+func fillFullDayTeamPostForPlatoon(
+	zone *ZoneConfig,
+	day, assignmentDay, sidx, locI int,
+	cfg FullDayTeamSpec,
+	soldiers []*Soldier,
+	typeCodes, platoonCodes []string,
+	platoonFilter string,
 	busy [][][]bool,
 	dailyRawLoc [][][]float64,
 	dailyRawTime [][][]float64,
@@ -127,25 +373,12 @@ func fillFullDayTeamPost(
 	timeMid := timeCategoryForHour((sh0+sh1)/2, simZ)
 
 	var assigned []*Soldier
-
 	excl := zone.slotTypeExclude(locI)
 	pickN := func(n int, typeFilter string) error {
 		for pick := 0; pick < n; pick++ {
 			var pool []*Soldier
 			for _, s := range soldiers {
-				if containsSoldier(assigned, s) {
-					continue
-				}
-				if typeFilter != "" && soldierTypeCode(typeCodes, s.Idx) != typeFilter {
-					continue
-				}
-				if soldierExcludedByType(typeCodes, s.Idx, excl) {
-					continue
-				}
-				if !anyBusySpan(busy, s.Idx, L0, span, B, days) &&
-					soldierAvail(avail, s.Idx, day, func() bool {
-						return avail.AvailDutyWallHours(s.Idx, day, sh0, sh1+1)
-					}) {
+				if soldierEligibleFullDayTeam(s, assigned, platoonCodes, platoonFilter, typeFilter, typeCodes, excl, busy, L0, span, B, days, day, sh0, sh1, avail) {
 					pool = append(pool, s)
 				}
 			}

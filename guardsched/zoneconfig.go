@@ -24,6 +24,8 @@ type FullDayTeamSpec struct {
 	HoursFactor  float64 // credited duty fraction (default 1); busy span unchanged
 	Headcount    int
 	TypeQuotas   map[string]int
+	// PinPlatoon: all soldiers on this post share one platoon_code (class); try platoons in score order.
+	PinPlatoon bool
 }
 
 // WindowSpec is one window in windowed_slots.
@@ -110,6 +112,48 @@ func (z *ZoneConfig) ToZone() *Zone {
 
 // SlotsPerBlock returns concurrent slot count.
 func (z *ZoneConfig) SlotsPerBlock() int { return len(z.Slots) }
+
+// configFlagEnabled is true when cfg[key] is truthy or cfg.features lists key.
+func configFlagEnabled(cfg map[string]any, key string) bool {
+	if cfg == nil || key == "" {
+		return false
+	}
+	if v, ok := cfg[key]; ok && truthyConfig(v) {
+		return true
+	}
+	raw, ok := cfg["features"]
+	if !ok {
+		return false
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range list {
+		if strings.TrimSpace(fmt.Sprint(item)) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func truthyConfig(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case int:
+		return x != 0
+	case int64:
+		return x != 0
+	case float64:
+		return x != 0
+	case string:
+		s := strings.TrimSpace(strings.ToLower(x))
+		return s == "1" || s == "true" || s == "yes" || s == "on"
+	default:
+		return false
+	}
+}
 
 // LoadZoneConfigYAML parses schema v2 zones document from bytes (DB or file).
 func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float64) (*ZoneConfig, error) {
@@ -205,6 +249,7 @@ func LoadZoneConfigYAML(raw []byte, slotsPerBlock int, shiftHoursOverride *float
 			fullDayTeam[tid] = FullDayTeamSpec{
 				StartH: fd.StartH, EndH: fd.EndH, RestAfterH: fd.RestAfterH, WeightMult: fd.WeightMult,
 				HoursFactor: hf, Headcount: hc, TypeQuotas: quotas,
+				PinPlatoon: configFlagEnabled(cfg, "pin_platoon"),
 			}
 		case "windowed_slots":
 			typePattern[tid] = pat

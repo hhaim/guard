@@ -27,7 +27,7 @@ func RunSimulationZoneConfigExtendWithContinuation(
 	planDayStartHour int,
 	avail AvailabilityChecker,
 	anchor *time.Time,
-	typeCodes []string,
+	typeCodes, platoonCodes []string,
 	witness *ExtendWitness,
 	seed *int64,
 ) (*ExtendSimResult, error) {
@@ -35,7 +35,7 @@ func RunSimulationZoneConfigExtendWithContinuation(
 		zone, numSoldiers, prefixDays, extendDays, prefixAssignments, r,
 		minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 		maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-		planDayStartHour, avail, anchor, typeCodes, witness,
+		planDayStartHour, avail, anchor, typeCodes, platoonCodes, witness,
 	)
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func RunSimulationBestOfZoneConfigExtendWitness(
 	planDayStartHour int,
 	avail AvailabilityChecker,
 	anchor *time.Time,
-	typeCodes []string,
+	typeCodes, platoonCodes []string,
 	witness *ExtendWitness,
 ) (recs []*AssignmentRecord, stats *SimulationStats, cont *ContinuationSnapshot, meta map[string]any, err error) {
 	if trials < 1 {
@@ -81,7 +81,7 @@ func RunSimulationBestOfZoneConfigExtendWitness(
 			zone, numSoldiers, prefixDays, extendDays, prefixAssignments, rng,
 			minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 			maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-			planDayStartHour, avail, anchor, typeCodes, witness, &seed,
+			planDayStartHour, avail, anchor, typeCodes, platoonCodes, witness, &seed,
 		)
 	}
 	var seedUsed int64

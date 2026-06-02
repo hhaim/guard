@@ -20,7 +20,7 @@ func RunSimulationZoneConfig(
 	planDayStartHour int,
 	avail AvailabilityChecker,
 	anchor *time.Time,
-	typeCodes []string,
+	typeCodes, platoonCodes []string,
 	witness *SimWitness,
 ) ([]*AssignmentRecord, *SimulationStats, error) {
 	slotsPerBlock := zone.SlotsPerBlock()
@@ -93,7 +93,7 @@ func RunSimulationZoneConfig(
 			tid := zone.Locations[locI].TypeID
 			cfg := zone.FullDayTeamSpecs[tid]
 			if err := fillFullDayTeamPost(
-				zone, day, day, sidx, locI, cfg, soldiers, typeCodes, busy,
+				zone, day, day, sidx, locI, cfg, soldiers, typeCodes, platoonCodes, busy,
 				dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
 				B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, &assignments,
 			); err != nil {

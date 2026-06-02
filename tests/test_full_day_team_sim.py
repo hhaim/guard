@@ -131,6 +131,62 @@ def test_run_simulation_full_day_team_type_quotas() -> None:
         assert counts.get("C", 0) >= 1
 
 
+def _pin_platoon_zone_yaml(tmp_path: Path) -> g.ZoneConfig:
+    p = tmp_path / "zones.yaml"
+    p.write_text(
+        """
+schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: team
+    pattern: full_day_team
+    config:
+      start: "09:00"
+      end: "17:00"
+      headcount: 2
+      pin_platoon: true
+zone_loc:
+  - { id: loc, type: team, name: T, weight: 1.0 }
+slots:
+  - { location_id: loc, name: t1 }
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }
+""",
+        encoding="utf-8",
+    )
+    return g.load_zone_config(p, slots_per_block=1)
+
+
+def test_load_zone_config_pin_platoon(tmp_path: Path) -> None:
+    zone = _pin_platoon_zone_yaml(tmp_path)
+    assert zone.full_day_team_specs["team"]["pin_platoon"] is True
+
+
+def test_run_simulation_full_day_team_pin_platoon_same_platoon(tmp_path: Path) -> None:
+    zone = _pin_platoon_zone_yaml(tmp_path)
+    type_codes = ["A", "A", "A", "A"]
+    platoon_codes = ["1", "1", "2", "2"]
+    anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=7,
+        num_soldiers=4,
+        slots_per_block=1,
+        days=1,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        anchor=anchor,
+        type_codes=type_codes,
+        platoon_codes=platoon_codes,
+        **_SIM_KW,
+    )
+    recs = pack[3]
+    assert len(recs) == 2
+    p0 = platoon_codes[recs[0].soldier_idx]
+    p1 = platoon_codes[recs[1].soldier_idx]
+    assert p0 and p0 == p1
+
+
 def test_run_simulation_full_day_team_busy_tensor() -> None:
     zone, type_codes = _load_fixture()
     anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)

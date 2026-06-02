@@ -5,6 +5,7 @@ import { apiGet } from "../api";
 import { DecimalNumField } from "./DecimalNumField";
 import { useDevPanel } from "../context/AppStateContext";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { docFromServer, type SoldierType } from "../lib/soldierTypes";
 import {
   ALLOWED_SHIFT_HOURS,
@@ -56,6 +57,7 @@ function patternLabel(p: string): string {
 type CfgResp = { key: string; value: unknown; version: number; updated_at: string };
 
 export function SlotsView() {
+  const isMobile = useIsMobile();
   const { openPanel } = useDevPanel();
   const { slotsQ, doc, dirty, loadError, markDirty, replaceDoc, resetToServer, validationError, saveState, saveError } =
     useZonesDocument();
@@ -161,16 +163,18 @@ export function SlotsView() {
             {slotsStatusLabel ? ` · ${slotsStatusLabel}` : ""}
           </p>
         </div>
-        <div className="contacts-toolbar-actions">
-          <button
-            type="button"
-            className="btn btn-tinted contacts-json-btn"
-            onClick={() => openPanel("json")}
-          >
-            <Braces size={18} strokeWidth={2} />
-            <span className="contacts-json-btn-label">JSON</span>
-          </button>
-        </div>
+        {!isMobile && (
+          <div className="contacts-toolbar-actions">
+            <button
+              type="button"
+              className="btn btn-tinted contacts-json-btn"
+              onClick={() => openPanel("json")}
+            >
+              <Braces size={18} strokeWidth={2} />
+              <span className="contacts-json-btn-label">JSON</span>
+            </button>
+          </div>
+        )}
       </header>
 
       <ZonesYamlToolbar disabled={slotsQ.isLoading} doc={doc} onImport={(d) => replaceDoc(d)} />
@@ -380,7 +384,7 @@ export function SlotsView() {
         }
       />
 
-      <DevPanelTrigger onOpen={() => openPanel("json")} />
+      {!isMobile && <DevPanelTrigger onOpen={() => openPanel("json")} />}
       <DeveloperPanel
         jsonText={editorText}
         onJsonTextChange={syncJson}
@@ -1058,6 +1062,21 @@ function FullDayTeamConfigFields({
         soldierTypes={soldierTypes}
         onChange={(type_quotas) => onChange({ ...config, type_quotas })}
       />
+      <label className="settings-row settings-checkbox-row">
+        <input
+          type="checkbox"
+          checked={Boolean(config.pin_platoon)}
+          onChange={(e) => {
+            const pin_platoon = e.target.checked;
+            onChange(pin_platoon ? { ...config, pin_platoon: true } : { ...config, pin_platoon: undefined });
+          }}
+        />
+        <span className="settings-row-label">Pin platoon (one platoon per team shift)</span>
+      </label>
+      <p className="contacts-hint">
+        When enabled, every soldier on this post for a day comes from the same platoon. The scheduler picks the
+        fittest platoon first, then tries others if needed.
+      </p>
     </>
   );
 }

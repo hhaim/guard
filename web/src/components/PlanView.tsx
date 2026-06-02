@@ -17,6 +17,7 @@ import { useZonesDocument } from "../context/ZonesDocumentContext";
 import { parsePlatoonColorsFromGlobal } from "../lib/platoonColors";
 import { planDocFromGenerate } from "../lib/planDoc";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
+import { downloadPlanMatrixXls, planMatrixXlsFilenameForProposal } from "../lib/planMatrixExport";
 import { downloadPlanReportPdf } from "../lib/planPdfExport";
 import { PlanDocView } from "./PlanDocView";
 import {
@@ -147,6 +148,7 @@ export function PlanView({
     queryKey: ["plan", "preview-availability", anchor, days],
     queryFn: () => fetchPreviewAvailabilityByDays(anchor, days),
     enabled: planContextReady && days >= 1,
+    staleTime: 0,
   });
 
   const availabilityByDay = useMemo((): Record<string, PlanDaySoldiers> | undefined => {
@@ -408,6 +410,24 @@ export function PlanView({
       setErrorMsg(e instanceof Error ? e.message : "PDF export failed");
     } finally {
       setPdfExporting(false);
+    }
+  };
+
+  const handleDownloadExcel = () => {
+    if (!proposal || !zonesDoc) return;
+    try {
+      downloadPlanMatrixXls(
+        {
+          plan: proposal,
+          zones: zonesDoc,
+          soldierIds,
+          soldiers,
+          platoonColors,
+        },
+        planMatrixXlsFilenameForProposal(proposal.anchor_date, selectedSlot),
+      );
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : "Excel export failed");
     }
   };
 
@@ -685,6 +705,16 @@ export function PlanView({
             <button
               type="button"
               className="btn btn-tinted"
+              disabled={!proposal || !zonesDoc}
+              onClick={handleDownloadExcel}
+              title="Download schedule matrix (full names, platoon colors) as Excel"
+            >
+              <Download size={16} />
+              Download Excel
+            </button>
+            <button
+              type="button"
+              className="btn btn-tinted"
               disabled={!proposal}
               onClick={() => void copyResult()}
               aria-label="Copy JSON"
@@ -731,6 +761,7 @@ export function PlanView({
                 sections={PLAN_TAB_PREVIEW_SECTIONS}
                 onPlanChange={readOnly ? undefined : onProposalChange}
                 readOnly={readOnly}
+                soldiersByDay={previewAvailQ.data}
               />
             )}
         </div>

@@ -58,7 +58,7 @@ export function Tutorial12x4() {
           proposal</strong> before Apply.
         </li>
         <li>
-          <strong>PDF / Copy JSON:</strong> export for review; does not publish the schedule.
+          <strong>PDF / Excel / Copy JSON:</strong> export for review (Excel is matrix only); does not publish the schedule.
         </li>
       </ul>
 

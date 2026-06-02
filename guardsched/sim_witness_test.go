@@ -50,7 +50,7 @@ func runWitnessSplitLoadParity(t *testing.T, c witnessSplitLoadCase) {
 	recs, _, err := RunSimulationZoneConfig(
 		z, c.soldiers, c.end, rng,
 		6, true, 0, 2, 2, 0.2,
-		5, nil, nil, typeCodes, witness,
+		5, nil, nil, typeCodes, nil, witness,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func runWitnessSplitLoadParity(t *testing.T, c witnessSplitLoadCase) {
 	ext, _, err := RunSimulationZoneConfigExtend(
 		z, c.soldiers, c.split, c.end-c.split, prefix, rng2,
 		6, true, 0, 2, 2, 0.2,
-		5, nil, nil, typeCodes, extWitness,
+		5, nil, nil, typeCodes, nil, extWitness,
 	)
 	if err != nil {
 		t.Fatal(err)
