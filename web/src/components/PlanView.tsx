@@ -34,12 +34,12 @@ import { soldiersFromCfg, type ScheduleReportSections } from "./ScheduleResultsR
 
 const SLOT_KEY = "guard-plan-slot";
 
-/** Plan tab: matrix (ids + full names) + stats; skip timeline/full roster (heavy with 80+ soldiers). */
+/** Plan tab: matrix (ids + full names) + stats + duty-only timelines. */
 const PLAN_TAB_PREVIEW_SECTIONS: ScheduleReportSections = {
   matrixShort: true,
   matrixFull: true,
   bySoldier: false,
-  timeline: false,
+  timeline: true,
   statsPanel: true,
   availability: false,
 };
@@ -805,7 +805,7 @@ export function PlanView({
                   sections={PLAN_TAB_PREVIEW_SECTIONS}
                   onPlanChange={readOnly ? undefined : onProposalChange}
                   readOnly={readOnly}
-                  soldiersByDay={previewAvailQ.data}
+                  soldiersByDay={availabilityByDay}
                 />
               </PlanTabErrorBoundary>
             )}

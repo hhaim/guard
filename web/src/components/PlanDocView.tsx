@@ -67,6 +67,7 @@ export function PlanDocView({
           soldiers={soldiers}
           platoonColors={platoonColors}
           sections={sections}
+          soldiersByDay={soldiersByDay}
         />
       ) : (
         <p className="contacts-empty">No assignments in plan.</p>

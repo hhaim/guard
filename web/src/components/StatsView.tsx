@@ -48,7 +48,7 @@ const STATS_REPORT_SECTIONS = {
   matrixShort: true,
   matrixFull: true,
   bySoldier: false,
-  timeline: false,
+  timeline: true,
   statsPanel: true,
 } as const;
 
@@ -234,7 +234,7 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
 
   const reportSections = showDayMatrix
     ? STATS_REPORT_SECTIONS
-    : { ...STATS_REPORT_SECTIONS, matrixShort: false, matrixFull: false };
+    : { ...STATS_REPORT_SECTIONS, matrixShort: false, matrixFull: false, timeline: false };
 
   return (
     <div className="stats-layout">

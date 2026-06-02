@@ -1993,6 +1993,18 @@
 
 .sched-timeline-grid {
   position: relative;
+  max-height: calc(1.35rem * 24 + 2px * 23);
+  overflow-y: auto;
+}
+
+.sched-timeline-extension {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dotted rgba(60, 60, 67, 0.55);
+  pointer-events: none;
+  z-index: 2;
 }
 
 .sched-timeline-midnight {

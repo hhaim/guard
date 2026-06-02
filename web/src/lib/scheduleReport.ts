@@ -104,6 +104,17 @@ export type TimelineSegment = {
   fullDayDuty?: boolean;
 };
 
+export type TimelineLane = {
+  soldierIdx: number;
+  label: string;
+  segments: TimelineSegment[];
+};
+
+/** Keep lanes with at least one on-duty segment (red or orange). */
+export function filterOnDutyTimelineLanes(lanes: TimelineLane[]): TimelineLane[] {
+  return lanes.filter((lane) => lane.segments.some((seg) => seg.onDuty));
+}
+
 export type TimelineSegmentKind = "off" | "unavailable" | "duty" | "full_day_duty";
 
 export function isFullDayTimelineKind(kind: string | undefined | null): boolean {
@@ -772,7 +783,7 @@ export function buildTimelineLanes(
   soldierCount: number,
   planDayStartHour = 0,
   opts?: BuildTimelineOpts,
-): { soldierIdx: number; label: string; segments: TimelineSegment[] }[] {
+): TimelineLane[] {
   const soldierIds = opts?.soldierIds;
   const soldiersByDay = opts?.soldiersByDay;
   const anchorDate = opts?.anchorDate?.trim() ?? "";
@@ -785,7 +796,7 @@ export function buildTimelineLanes(
     assignmentList?.length && blocksPd > 0
       ? buildFullDayDutyTensor(assignmentList, days, soldierCount, blocksPd, true)
       : undefined;
-  const lanes: { soldierIdx: number; label: string; segments: TimelineSegment[] }[] = [];
+  const lanes: TimelineLane[] = [];
   for (let s = soldierCount - 1; s >= 0; s--) {
     const segments: TimelineSegment[] = [];
     const soldierId = soldierIds?.[s];

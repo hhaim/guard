@@ -11,6 +11,7 @@ import {
   buildTimelineLanes,
   buildZoneReportView,
   formatTimelineSegmentRange,
+  filterOnDutyTimelineLanes,
   inferSoldierCount,
   MATRIX_CELL_MAX_SOLDIERS,
   formatMatrixCellLabels,
@@ -18,8 +19,8 @@ import {
   timelineSegmentClassName,
   timelineSegmentTitle,
 } from "../lib/scheduleReport";
-import { normalizePlanDoc, type PlanDoc } from "../lib/planDoc";
-import { formatWallClockHour, resolvePlanDayStartHour, timelineChartLayout } from "../lib/planDay";
+import { normalizePlanDoc, type PlanDaySoldiersDoc, type PlanDoc } from "../lib/planDoc";
+import { formatWallClockHour, resolvePlanDayStartHour, resolvePlanDayStartString, timelineChartLayout } from "../lib/planDay";
 import { ScheduleStatsPanel } from "./ScheduleStatsPanel";
 import { PlanSoldierAvailabilitySection } from "./PlanSoldierAvailabilitySection";
 
@@ -48,6 +49,8 @@ type Props = {
   soldiers?: Soldier[];
   platoonColors?: PlatoonColorEntry[];
   sections?: ScheduleReportSections;
+  /** Per-day soldier availability; merged over plan.soldiers for timeline yellow segments. */
+  soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
 };
 
 function SoldierLink({
@@ -308,7 +311,9 @@ function SoldierTimelineChart({
   blockHours,
   slotsPerBlock,
   planDayStartHour,
+  planDayStartLabel,
   totalHours,
+  rosterCount,
   display,
 }: {
   lanes: ReturnType<typeof buildTimelineLanes>;
@@ -316,13 +321,16 @@ function SoldierTimelineChart({
   blockHours: number;
   slotsPerBlock: number;
   planDayStartHour: number;
+  planDayStartLabel: string;
   totalHours: number;
+  rosterCount: number;
   display: SoldierDisplay;
 }) {
   const layout = useMemo(
     () => timelineChartLayout(days, planDayStartHour, totalHours),
     [days, planDayStartHour, totalHours],
   );
+  const extBlocks = reportFutureExtensionBlocks(blockHours);
 
   const ticks = useMemo(() => {
     const out: { label: string; left: number }[] = [];
@@ -333,75 +341,95 @@ function SoldierTimelineChart({
     return out;
   }, [layout]);
 
+  const onDutyCount = lanes.length;
+  const caption =
+    onDutyCount < rosterCount
+      ? `Showing ${onDutyCount} soldiers on duty (${rosterCount} roster)`
+      : `${onDutyCount} soldiers, ${slotsPerBlock} slots/block, shift_hours=${blockHours}h`;
+
   return (
     <div className="sched-timeline-wrap">
       <h4 className="sched-subtitle">Soldier timelines (full simulation)</h4>
       <p className="sched-hint">
         Green = off post and assignable, yellow = away/sick/training, red = rotating/windowed duty
-        + rest, orange = full day / team duty + rest (matches soldier tables). X-axis is wall-clock
+        + rest, orange = full day / team duty + rest (matches soldier tables). X-axis is plan-day
         time from plan day start ({formatWallClockHour(planDayStartHour)}); dashed lines mark the
         next plan day.
       </p>
-      <p className="sched-hint sched-timeline-caption">
-        {days}d — {lanes.length} soldiers, {slotsPerBlock} slots/block, shift_hours={blockHours}h
-      </p>
-      <div className="sched-timeline-chart">
-        <div className="sched-timeline-legend" aria-hidden>
-          <span>
-            <i className="sched-swatch sched-swatch-off" /> Off post
-          </span>
-          <span>
-            <i className="sched-swatch sched-swatch-unavail" /> Away / sick
-          </span>
-          <span>
-            <i className="sched-swatch sched-swatch-on" /> Rotating / windowed
-          </span>
-          <span>
-            <i className="sched-swatch sched-swatch-full-day" /> Full day / team
-          </span>
-        </div>
-        <div className="sched-timeline-axis">
-          {ticks.map((t) => (
-            <span key={t.label} className="sched-timeline-tick" style={{ left: `${t.left}%` }}>
-              {t.label}
-            </span>
-          ))}
-        </div>
-        <div className="sched-timeline-grid">
-          {days > 1 &&
-            Array.from({ length: days - 1 }, (_, i) => (
-              <div
-                key={i}
-                className="sched-timeline-midnight"
-                style={{ left: `${layout.dayBoundaryLeftPct(i)}%` }}
-              />
-            ))}
-          {lanes.map((lane) => (
-            <div key={lane.soldierIdx} className="sched-timeline-lane">
-              <span
-                className="sched-timeline-label sched-soldier-badge"
-                style={display.badgeStyle(lane.soldierIdx)}
-              >
-                {lane.label}
+      {onDutyCount === 0 ? (
+        <p className="contacts-empty">No soldiers on duty in this span.</p>
+      ) : (
+        <>
+          <p className="sched-hint sched-timeline-caption">
+            {days}d — {caption}
+          </p>
+          <div className="sched-timeline-chart">
+            <div className="sched-timeline-legend" aria-hidden>
+              <span>
+                <i className="sched-swatch sched-swatch-off" /> Off post
               </span>
-              <div className="sched-timeline-bar">
-                {lane.segments.map((seg, i) => (
-                  <span
+              <span>
+                <i className="sched-swatch sched-swatch-unavail" /> Away / sick
+              </span>
+              <span>
+                <i className="sched-swatch sched-swatch-on" /> Rotating / windowed
+              </span>
+              <span>
+                <i className="sched-swatch sched-swatch-full-day" /> Full day / team
+              </span>
+            </div>
+            <div className="sched-timeline-axis">
+              {ticks.map((t) => (
+                <span key={t.label} className="sched-timeline-tick" style={{ left: `${t.left}%` }}>
+                  {t.label}
+                </span>
+              ))}
+            </div>
+            <div className="sched-timeline-grid">
+              {days > 1 &&
+                Array.from({ length: days - 1 }, (_, i) => (
+                  <div
                     key={i}
-                    className={timelineSegmentClassName(seg)}
-                    style={{
-                      left: `${layout.segmentLeftPct(seg.startHour)}%`,
-                      width: `${layout.segmentWidthPct(seg.duration)}%`,
-                    }}
-                    title={`${lane.label}: ${timelineSegmentTitle(seg)} ${formatTimelineSegmentRange(seg, planDayStartHour)}`}
+                    className="sched-timeline-midnight"
+                    style={{ left: `${layout.dayBoundaryLeftPct(i)}%` }}
                   />
                 ))}
-              </div>
+              {extBlocks > 0 && days >= 1 ? (
+                <div
+                  className="sched-timeline-extension"
+                  style={{ left: `${layout.dayBoundaryLeftPct(days - 1)}%` }}
+                />
+              ) : null}
+              {lanes.map((lane) => (
+                <div key={lane.soldierIdx} className="sched-timeline-lane">
+                  <span
+                    className="sched-timeline-label sched-soldier-badge"
+                    style={display.badgeStyle(lane.soldierIdx)}
+                  >
+                    {lane.label}
+                  </span>
+                  <div className="sched-timeline-bar">
+                    {lane.segments.map((seg, i) => (
+                      <span
+                        key={i}
+                        className={timelineSegmentClassName(seg)}
+                        style={{
+                          left: `${layout.segmentLeftPct(seg.startHour)}%`,
+                          width: `${layout.segmentWidthPct(seg.duration)}%`,
+                        }}
+                        title={`${lane.label}: ${timelineSegmentTitle(seg)} ${formatTimelineSegmentRange(seg, planDayStartHour)}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <div className="sched-timeline-xlabel">Wall-clock time (UTC)</div>
-      </div>
+            <div className="sched-timeline-xlabel">
+              Plan-day timeline (h=0 at {planDayStartLabel})
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -414,10 +442,12 @@ export function ScheduleResultsReport({
   soldiers = [],
   platoonColors = [],
   sections: sectionsProp,
+  soldiersByDay: soldiersByDayProp,
 }: Props) {
   const plan = useMemo(() => normalizePlanDoc(planProp), [planProp]);
   const { assignments, days, shift_hours: shiftHours, meta, anchor_date: anchorDate } = plan;
   const planDayStartHour = resolvePlanDayStartHour(meta);
+  const planDayStartLabel = resolvePlanDayStartString(meta);
   const verifiedDates = useMemo(() => {
     const raw = meta?.verified_dates;
     if (Array.isArray(raw)) {
@@ -429,6 +459,11 @@ export function ScheduleResultsReport({
   const sections = { ...DEFAULT_SECTIONS, ...sectionsProp };
   const [selectedSoldier, setSelectedSoldier] = useState<number | null>(null);
   const [showJson, setShowJson] = useState(false);
+
+  const timelineSoldiersByDay = useMemo(() => {
+    if (!soldiersByDayProp && !plan.soldiers) return undefined;
+    return { ...plan.soldiers, ...soldiersByDayProp };
+  }, [plan.soldiers, soldiersByDayProp]);
 
   const zoneBundle = useMemo(() => {
     const slotsPerBlock = countEnabledSlots(zones);
@@ -460,14 +495,16 @@ export function ScheduleResultsReport({
       : null;
     const lanes =
       needTimeline && busy
-        ? buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
-            soldierIds,
-            anchorDate,
-            verifiedDates,
-            shiftHours: zone.shiftHours,
-            soldiersByDay: plan.soldiers,
-            assignments,
-          })
+        ? filterOnDutyTimelineLanes(
+            buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
+              soldierIds,
+              anchorDate,
+              verifiedDates,
+              shiftHours: zone.shiftHours,
+              soldiersByDay: timelineSoldiersByDay,
+              assignments,
+            }),
+          )
         : [];
     const stats = needStats ? buildScheduleStats(assignments, days, zone, soldierCount) : null;
     return {
@@ -487,7 +524,7 @@ export function ScheduleResultsReport({
     anchorDate,
     verifiedDates,
     soldierIds,
-    plan.soldiers,
+    timelineSoldiersByDay,
     sections.matrixShort,
     sections.matrixFull,
     sections.timeline,
@@ -606,7 +643,9 @@ export function ScheduleResultsReport({
           blockHours={report.zone.shiftHours}
           slotsPerBlock={report.zone.slotsPerBlock}
           planDayStartHour={planDayStartHour}
+          planDayStartLabel={planDayStartLabel}
           totalHours={report.totalHours}
+          rosterCount={report.soldierCount}
           display={display}
         />
       )}
