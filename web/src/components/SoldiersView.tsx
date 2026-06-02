@@ -39,6 +39,13 @@ const ROSTER_AUTOSAVE_MS = 600;
 type DevJsonSource = "soldiers" | "types" | "platoons";
 type RosterSortKey = "type" | "platoon" | "name" | "id";
 
+const ROSTER_SORT_OPTIONS: { key: RosterSortKey; label: string }[] = [
+  { key: "name", label: "Name" },
+  { key: "id", label: "ID" },
+  { key: "type", label: "Type" },
+  { key: "platoon", label: "Platoon" },
+];
+
 export function SoldiersView() {
   const qc = useQueryClient();
   const isMobile = useIsMobile();
@@ -532,6 +539,79 @@ export function SoldiersView() {
               <Plus size={22} strokeWidth={2.5} />
             </button>
           </header>
+
+          {isMobile && (
+            <div className="soldiers-roster-mobile-controls" aria-label="Sort and filter roster">
+              <div className="soldiers-roster-mobile-row">
+                <span className="soldiers-roster-mobile-label">Sort</span>
+                <div className="soldiers-roster-mobile-chips" role="group" aria-label="Sort by column">
+                  {ROSTER_SORT_OPTIONS.map(({ key, label }) => {
+                    const active = sortKey === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        className={`soldiers-roster-chip${active ? " soldiers-roster-chip-active" : ""}`}
+                        aria-pressed={active}
+                        aria-label={
+                          active
+                            ? `Sorted by ${label} ${sortDir === "asc" ? "ascending" : "descending"}`
+                            : `Sort by ${label}`
+                        }
+                        onClick={() => toggleSort(key)}
+                      >
+                        {label}
+                        {active ? (sortDir === "asc" ? " ↑" : " ↓") : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="soldiers-roster-mobile-row soldiers-roster-mobile-row-end">
+                <span className="soldiers-roster-mobile-label">Filter</span>
+                <div className="soldiers-roster-mobile-filters">
+                  <div
+                    className={`soldiers-roster-filter-chip${
+                      selectedTypeCodes != null ? " soldiers-roster-filter-chip-active" : ""
+                    }`}
+                  >
+                    <ColumnFilterMenu
+                      label="type"
+                      options={typeFilterOptions}
+                      selected={selectedTypeCodes}
+                      onChange={setSelectedTypeCodes}
+                    />
+                    <span>Type</span>
+                  </div>
+                  <div
+                    className={`soldiers-roster-filter-chip${
+                      selectedPlatoonCodes != null ? " soldiers-roster-filter-chip-active" : ""
+                    }`}
+                  >
+                    <ColumnFilterMenu
+                      label="platoon"
+                      options={platoonFilterOptions}
+                      selected={selectedPlatoonCodes}
+                      onChange={setSelectedPlatoonCodes}
+                    />
+                    <span>Platoon</span>
+                  </div>
+                  {(selectedTypeCodes != null || selectedPlatoonCodes != null) && (
+                    <button
+                      type="button"
+                      className="btn btn-plain soldiers-roster-clear-filters"
+                      onClick={() => {
+                        setSelectedTypeCodes(null);
+                        setSelectedPlatoonCodes(null);
+                      }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="glass-card contacts-list-card">
             {soldiersQ.isLoading && <p className="contacts-empty">Loading…</p>}

@@ -77,33 +77,32 @@ func (s *Server) handlePlanContext(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePlanListProposals(w http.ResponseWriter, r *http.Request) {
 	anchorS := strings.TrimSpace(r.URL.Query().Get("anchor"))
 	if anchorS == "" {
-		http.Error(w, `{"error":"anchor query param required (YYYY-MM-DD)"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "anchor query param required (YYYY-MM-DD)", Message: "anchor query param required (YYYY-MM-DD)"})
 		return
 	}
 	anchor, err := parseAnchorDate(anchorS)
 	if err != nil {
-		http.Error(w, `{"error":"invalid anchor"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "invalid anchor", Message: "invalid anchor"})
 		return
 	}
 	extra := s.resolvePlanDebugOffset(r.Context(), r, nil)
 	if err := s.validatePlanAnchor(anchor, extra); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		wantAnchor := s.allowedPlanAnchor(extra).Format("2006-01-02")
+		writeAPIError(w, planAnchorMismatch(err, wantAnchor, map[string]any{"anchor": anchorS}))
 		return
 	}
 
 	prefix := fmt.Sprintf("proposal-%s-", anchor.Format("2006-01-02"))
 	keys, err := repo.ListCfgKeys(r.Context(), s.Pool, prefix)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	existing := make(map[string]*repo.CfgRow)
 	for _, k := range keys {
 		row, err := repo.GetCfg(r.Context(), s.Pool, k)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 			return
 		}
 		slot := strings.TrimPrefix(k, prefix)
@@ -142,31 +141,30 @@ func (s *Server) handlePlanListProposals(w http.ResponseWriter, r *http.Request)
 func (s *Server) handlePlanGetProposal(w http.ResponseWriter, r *http.Request) {
 	slot := r.PathValue("slot")
 	if !validProposalSlot(slot) {
-		http.Error(w, `{"error":"slot must be 01-04"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "slot must be 01-04", Message: "slot must be 01-04"})
 		return
 	}
 	anchorS := strings.TrimSpace(r.URL.Query().Get("anchor"))
 	anchor, err := parseAnchorDate(anchorS)
 	if err != nil {
-		http.Error(w, `{"error":"anchor query param required"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "anchor query param required", Message: "anchor query param required"})
 		return
 	}
 	extra := s.resolvePlanDebugOffset(r.Context(), r, nil)
 	if err := s.validatePlanAnchor(anchor, extra); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		wantAnchor := s.allowedPlanAnchor(extra).Format("2006-01-02")
+		writeAPIError(w, planAnchorMismatch(err, wantAnchor, map[string]any{"anchor": anchorS, "slot": slot}))
 		return
 	}
 
 	key := repo.GetProposalKey(anchor, slot)
 	row, err := repo.GetCfg(r.Context(), s.Pool, key)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	if row.Version == 0 {
-		http.Error(w, `{"error":"proposal not found"}`, http.StatusNotFound)
+		writeAPIError(w, APIErrorBody{Status: http.StatusNotFound, Code: "not_found", Error: "proposal not found", Message: "proposal not found"})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -185,7 +183,7 @@ func (s *Server) handlePlanGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	var body planGenerateBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid JSON body"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "invalid JSON body", Message: "invalid JSON body"})
 		return
 	}
 	slot := strings.TrimSpace(body.Slot)
@@ -193,32 +191,36 @@ func (s *Server) handlePlanGenerate(w http.ResponseWriter, r *http.Request) {
 		slot = "01"
 	}
 	if !validProposalSlot(slot) {
-		http.Error(w, `{"error":"slot must be 01-04"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "slot must be 01-04", Message: "slot must be 01-04"})
 		return
 	}
 
 	extra := s.resolvePlanDebugOffset(r.Context(), r, body.DebugDayOffset)
-	out, status, msg, err := s.runScheduleSimulation(r.Context(), body.scheduleRunBody)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(msg))
+	out, apiErr := s.runScheduleSimulation(r.Context(), body.scheduleRunBody, extra, slot)
+	if apiErr != nil {
+		writeAPIError(w, *apiErr)
 		return
 	}
 	if err := s.validatePlanAnchor(out.Anchor, extra); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		wantAnchor := s.allowedPlanAnchor(extra).Format("2006-01-02")
+		writeAPIError(w, planAnchorMismatch(err, wantAnchor, scheduleRunRequestSnapshot(body.scheduleRunBody, slot)))
 		return
 	}
 
 	proposal := buildProposalFromSim(out, nil)
 	if err := s.saveProposal(r, out.Anchor, slot, proposal, nil); err != nil {
 		if errors.Is(err, repo.ErrVersionConflict) {
-			http.Error(w, `{"error":"version_conflict"}`, http.StatusConflict)
+			writeAPIError(w, APIErrorBody{
+				Status:  http.StatusConflict,
+				Code:    "version_conflict",
+				Error:   "Proposal was updated elsewhere",
+				Message: "version_conflict",
+				Request: scheduleRunRequestSnapshot(body.scheduleRunBody, slot),
+				Hints:   []string{"Reload the slot and retry generate or save."},
+			})
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 
@@ -244,30 +246,29 @@ func (s *Server) handlePlanPutProposal(w http.ResponseWriter, r *http.Request) {
 	}
 	slot := r.PathValue("slot")
 	if !validProposalSlot(slot) {
-		http.Error(w, `{"error":"slot must be 01-04"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "slot must be 01-04", Message: "slot must be 01-04"})
 		return
 	}
 	anchorS := strings.TrimSpace(r.URL.Query().Get("anchor"))
 	anchor, err := parseAnchorDate(anchorS)
 	if err != nil {
-		http.Error(w, `{"error":"anchor query param required"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "anchor query param required", Message: "anchor query param required"})
 		return
 	}
 	extra := s.resolvePlanDebugOffset(r.Context(), r, nil)
 	if err := s.validatePlanAnchor(anchor, extra); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		wantAnchor := s.allowedPlanAnchor(extra).Format("2006-01-02")
+		writeAPIError(w, planAnchorMismatch(err, wantAnchor, map[string]any{"anchor": anchorS, "slot": slot}))
 		return
 	}
 
 	var body planPutBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "invalid JSON body", Message: err.Error()})
 		return
 	}
 	if body.ExpectedVersion == nil {
-		http.Error(w, `{"error":"expected_version required"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "expected_version required", Message: "expected_version required"})
 		return
 	}
 	body.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -277,10 +278,17 @@ func (s *Server) handlePlanPutProposal(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.saveProposal(r, anchor, slot, body.planDoc, body.ExpectedVersion); err != nil {
 		if errors.Is(err, repo.ErrVersionConflict) {
-			http.Error(w, `{"error":"version_conflict"}`, http.StatusConflict)
+			writeAPIError(w, APIErrorBody{
+				Status:  http.StatusConflict,
+				Code:    "version_conflict",
+				Error:   "Proposal was updated elsewhere",
+				Message: "version_conflict",
+				Request: map[string]any{"anchor": anchorS, "slot": slot},
+				Hints:   []string{"Reload the slot and retry save."},
+			})
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 
@@ -336,36 +344,35 @@ func (s *Server) handlePlanDeleteProposal(w http.ResponseWriter, r *http.Request
 	}
 	slot := r.PathValue("slot")
 	if !validProposalSlot(slot) {
-		http.Error(w, `{"error":"slot must be 01-04"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "slot must be 01-04", Message: "slot must be 01-04"})
 		return
 	}
 	anchorS := strings.TrimSpace(r.URL.Query().Get("anchor"))
 	anchor, err := parseAnchorDate(anchorS)
 	if err != nil {
-		http.Error(w, `{"error":"anchor query param required"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "anchor query param required", Message: "anchor query param required"})
 		return
 	}
 	extra := s.resolvePlanDebugOffset(r.Context(), r, nil)
 	if err := s.validatePlanAnchor(anchor, extra); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		wantAnchor := s.allowedPlanAnchor(extra).Format("2006-01-02")
+		writeAPIError(w, planAnchorMismatch(err, wantAnchor, map[string]any{"anchor": anchorS, "slot": slot}))
 		return
 	}
 
 	key := repo.GetProposalKey(anchor, slot)
 	tx, err := s.Pool.Begin(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	defer tx.Rollback(r.Context())
 	if err := repo.DeleteCfgKey(r.Context(), tx, key); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -378,53 +385,59 @@ func (s *Server) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 	}
 	var body planApplyBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "invalid JSON body", Message: err.Error()})
 		return
 	}
 	slot := strings.TrimSpace(body.Slot)
 	if !validProposalSlot(slot) {
-		http.Error(w, `{"error":"slot must be 01-04"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "slot must be 01-04", Message: "slot must be 01-04"})
 		return
 	}
 	anchor, err := parseAnchorDate(body.AnchorDate)
 	if err != nil {
-		http.Error(w, `{"error":"invalid anchor_date"}`, http.StatusBadRequest)
+		writeAPIError(w, APIErrorBody{Status: http.StatusBadRequest, Code: "validation", Error: "invalid anchor_date", Message: "invalid anchor_date"})
 		return
 	}
 	extra := s.resolvePlanDebugOffset(r.Context(), r, body.DebugDayOffset)
 	if err := s.validatePlanAnchor(anchor, extra); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		wantAnchor := s.allowedPlanAnchor(extra).Format("2006-01-02")
+		writeAPIError(w, planAnchorMismatch(err, wantAnchor, map[string]any{"anchor_date": body.AnchorDate, "slot": slot}))
 		return
 	}
 
 	key := repo.GetProposalKey(anchor, slot)
 	row, err := repo.GetCfg(r.Context(), s.Pool, key)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	if row.Version == 0 {
-		http.Error(w, `{"error":"proposal not found"}`, http.StatusNotFound)
+		writeAPIError(w, APIErrorBody{
+			Status:  http.StatusNotFound,
+			Code:    "not_found",
+			Error:   "proposal not found",
+			Message: "proposal not found",
+			Request: map[string]any{"anchor_date": body.AnchorDate, "slot": slot},
+			Hints:   []string{"Generate or select a proposal before applying."},
+		})
 		return
 	}
 	var doc planDoc
 	if err := json.Unmarshal(row.Value, &doc); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 
 	dayPlans, err := model.SplitPlanByDate(doc)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 
 	ctx := r.Context()
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	defer tx.Rollback(ctx)
@@ -435,15 +448,21 @@ func (s *Server) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 	}
 	conflicts, err := repo.ExistingScheduleDates(ctx, tx, dates)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	if len(conflicts) > 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error":             "schedule_conflict",
-			"conflicting_dates": conflicts,
+		writeAPIError(w, APIErrorBody{
+			Status:           http.StatusConflict,
+			Code:             "schedule_conflict",
+			Error:            "Verified schedule already has these days",
+			Message:          "schedule_conflict",
+			Request:          map[string]any{"anchor_date": body.AnchorDate, "slot": slot},
+			ConflictingDates: conflicts,
+			Hints: []string{
+				"Delete the conflicting verified schedule day(s) before applying.",
+				"Or pick a different anchor / slot with no overlap.",
+			},
 		})
 		return
 	}
@@ -454,17 +473,17 @@ func (s *Server) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 			d.Plan.Continuation = doc.Continuation
 		}
 		if err := repo.InsertScheduleDay(ctx, tx, d, slot); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 			return
 		}
 		written = append(written, d.TsDate.Format("2006-01-02"))
 	}
 	if err := repo.DeleteCfgByPrefix(ctx, tx, "proposal-"); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
 		return
 	}
 

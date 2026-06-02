@@ -1,4 +1,9 @@
+import { ApiError } from "./lib/apiError";
+
 const base = "";
+
+export { ApiError } from "./lib/apiError";
+export type { ParsedApiError } from "./lib/apiError";
 
 export type ApiLogStatus = number | "pending" | "error";
 
@@ -115,7 +120,7 @@ export async function callApi<T = unknown>(
         error: typeof data === "string" ? data : JSON.stringify(data),
         response: data,
       });
-      throw new Error(typeof data === "string" ? data : JSON.stringify(data));
+      throw new ApiError(r.status, data);
     }
 
     updateLog({

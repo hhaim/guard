@@ -160,26 +160,32 @@ func validProposalSlot(slot string) bool {
 	}
 }
 
-func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody) (*simRunOutput, int, string, error) {
+func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody, debugOffset int, slot string) (*simRunOutput, *APIErrorBody) {
+	req := scheduleRunRequestSnapshot(body, slot)
+	proc := s.baseSimProcessing(debugOffset)
+
 	if body.Days <= 0 {
 		body.Days = 1
 	}
+	req["days"] = body.Days
+
 	anchor, err := parseAnchorDate(body.AnchorDate)
 	if err != nil {
-		return nil, 400, `{"error":"anchor_date required (YYYY-MM-DD)"}`, err
+		return nil, validationFailure("anchor_date required (YYYY-MM-DD)", err.Error(), req, proc)
 	}
+	proc["plan_anchor_date"] = anchor.Format("2006-01-02")
 
 	slotsRow, err := repo.GetCfg(ctx, s.Pool, "slots")
 	if err != nil {
-		return nil, 500, err.Error(), err
+		return nil, internalFailure(err.Error(), req)
 	}
 	soldiersRow, err := repo.GetCfg(ctx, s.Pool, "soldiers")
 	if err != nil {
-		return nil, 500, err.Error(), err
+		return nil, internalFailure(err.Error(), req)
 	}
 	globalRow, err := repo.GetCfg(ctx, s.Pool, "global")
 	if err != nil {
-		return nil, 500, err.Error(), err
+		return nil, internalFailure(err.Error(), req)
 	}
 
 	var global struct {
@@ -194,12 +200,15 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	}
 	planDayStartHour, err := guardsched.ParsePlanDayStart(planDayStartStr)
 	if err != nil {
-		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+		return nil, validationFailure("invalid plan_day_start", err.Error(), req, proc)
 	}
 	if global.HistoryDays <= 0 {
 		global.HistoryDays = 14
 	}
 	planDays := body.Days
+	proc["history_days"] = global.HistoryDays
+	proc["plan_day_start"] = planDayStartStr
+	proc["plan_day_start_hour"] = planDayStartHour
 	var seedPtr *int64
 	if body.Seed != nil {
 		seedPtr = body.Seed
@@ -213,8 +222,14 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		trials = *body.SimTrials
 	}
 	if trials > 1 && seedPtr == nil {
-		return nil, 400, `{"error":"sim_trials > 1 requires seed"}`, fmt.Errorf("sim_trials > 1 requires seed")
+		return nil, validationFailure(
+			"Seed required for multiple trials",
+			"sim_trials > 1 requires seed",
+			req, proc,
+			"Provide an integer seed when sim trials is greater than 1.",
+		)
 	}
+	proc["sim_trials"] = trials
 
 	minFreeH := 6.0
 	if body.MinConsecutiveFreeHours != nil {
@@ -243,7 +258,12 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		}
 	}
 	if len(yamlBytes) == 0 {
-		return nil, 400, `{"error":"slots must include zones_yaml string or be a raw YAML string"}`, fmt.Errorf("missing zones_yaml")
+		return nil, validationFailure(
+			"Zones configuration missing",
+			"slots must include zones_yaml string or be a raw YAML string",
+			req, proc,
+			"Configure zones YAML in the Slots tab.",
+		)
 	}
 
 	var soldiersDoc struct {
@@ -257,7 +277,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		} `json:"soldiers"`
 	}
 	if err := json.Unmarshal(soldiersRow.Value, &soldiersDoc); err != nil {
-		return nil, 400, err.Error(), err
+		return nil, validationFailure("Invalid soldiers configuration", err.Error(), req, proc)
 	}
 	var keys []string
 	idToType := map[string]string{}
@@ -281,35 +301,54 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	keys = availability.RosterFromIDs(keys)
 	typeCodes := guardsched.TypeCodesForRoster(keys, idToType)
 	platoonCodes := guardsched.PlatoonCodesForRoster(keys, idToPlatoon)
+	proc["soldier_count"] = len(keys)
 	if len(keys) < 1 {
-		return nil, 400, `{"error":"need at least one soldier"}`, fmt.Errorf("no soldiers")
+		return nil, validationFailure("No soldiers in roster", "need at least one soldier", req, proc, "Add soldiers in the Soldiers tab.")
 	}
 
 	simYaml, slotsPerBlock, err := guardsched.ZonesYAMLForSimulation(yamlBytes)
 	if err != nil {
-		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+		return nil, validationFailure("Invalid zones configuration", err.Error(), req, proc)
 	}
+	proc["slots_per_block"] = slotsPerBlock
 	if slotsPerBlock < 1 {
-		return nil, 400, `{"error":"no enabled slots in zones config"}`, fmt.Errorf("no enabled slots")
+		return nil, validationFailure("No enabled slots", "no enabled slots in zones config", req, proc, "Enable at least one slot in zones YAML.")
 	}
 	if len(keys) < slotsPerBlock {
-		return nil, 400, fmt.Sprintf(`{"error":"need at least %d soldiers"}`, slotsPerBlock), fmt.Errorf("not enough soldiers")
+		return nil, validationFailure(
+			"Not enough soldiers for slots",
+			fmt.Sprintf("need at least %d soldiers", slotsPerBlock),
+			req, proc,
+			fmt.Sprintf("Roster has %d soldiers but zones require at least %d.", len(keys), slotsPerBlock),
+		)
 	}
 
 	zc, err := guardsched.LoadZoneConfigYAML(simYaml, slotsPerBlock, body.ShiftHours)
 	if err != nil {
-		return nil, 400, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+		return nil, validationFailure("Invalid zones configuration", err.Error(), req, proc)
 	}
+	proc["shift_hours"] = zc.ShiftHours
+	proc["min_consecutive_free_hours"] = minFreeH
+	proc["min_free_shifts_after_duty"] = minCool
+	proc["band_relative"] = bandRel
 
 	availChecker, soldiersByDay, err := s.buildPlanAvailability(ctx, anchor, planDays, planDayStartHour, keys)
 	if err != nil {
-		return nil, 500, err.Error(), err
+		return nil, internalFailure(err.Error(), req)
 	}
 
 	prefix, err := loadVerifiedHistoryPrefix(ctx, s.Pool, anchor, global.HistoryDays, keys, zc.ShiftHours)
 	if err != nil {
-		return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+		code, headline, hints, details := classifySimulationError(err)
+		if code == "simulation_failed" {
+			code = "history_load_failed"
+			headline = "Could not load verified history"
+		}
+		return nil, simFailure(http.StatusUnprocessableEntity, code, headline, err.Error(), req, proc, hints, details)
 	}
+	proc["history_prefix_days"] = prefix.Days
+	proc["history_dates"] = prefix.Dates
+	proc["history_continuation_loaded"] = prefix.Continuation != nil && prefix.Continuation.RNGState != nil
 
 	simMode := "cold"
 	var recs []*guardsched.AssignmentRecord
@@ -323,13 +362,18 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		if prefix.Continuation != nil && prefix.Continuation.RNGState != nil {
 			witness, _, err = guardsched.ExtendWitnessFromContinuation(prefix.Continuation, prefix.Records, keys)
 			if err != nil {
-				return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+				return nil, simRunErrFromSim(err, req, proc, simMode)
 			}
 			simMode = "extend_witness"
 		} else {
 			simMode = "extend_bootstrap_cold"
 			if trials > 1 {
-				return nil, 400, `{"error":"history without continuation requires sim_trials 1"}`, fmt.Errorf("bootstrap requires single trial")
+				return nil, validationFailure(
+					"History bootstrap requires a single simulation trial",
+					"history without continuation requires sim_trials 1",
+					req, mergeProcessing(proc, map[string]any{"sim_mode": simMode}),
+					"Set sim trials to 1, or ensure the latest verified day has a continuation checkpoint.",
+				)
 			}
 			var seedUsed int64
 			if seedPtr != nil {
@@ -342,7 +386,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 				planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, seedPtr,
 			)
 			if err != nil {
-				return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+				return nil, simRunErrFromSim(err, req, mergeProcessing(proc, map[string]any{"sim_mode": simMode}), simMode)
 			}
 			seg := make([]*guardsched.AssignmentRecord, 0)
 			for _, a := range cold.Records {
@@ -363,13 +407,18 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 				planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, witness,
 			)
 			if err != nil {
-				return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+				return nil, simRunErrFromSim(err, req, mergeProcessing(proc, map[string]any{"sim_mode": simMode}), simMode)
 			}
 			recs = guardsched.ReindexExtendSegment(recs, prefixDays)
 		}
 	} else {
 		if trials > 1 {
-			return nil, 400, `{"error":"cold continuation capture requires sim_trials 1"}`, fmt.Errorf("cold continuation")
+			return nil, validationFailure(
+				"Cold run requires a single simulation trial",
+				"cold continuation capture requires sim_trials 1",
+				req, mergeProcessing(proc, map[string]any{"sim_mode": simMode}),
+				"Set sim trials to 1 for this configuration.",
+			)
 		}
 		var seedUsed int64
 		if seedPtr != nil {
@@ -382,7 +431,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, seedPtr,
 		)
 		if err != nil {
-			return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+			return nil, simRunErrFromSim(err, req, mergeProcessing(proc, map[string]any{"sim_mode": simMode}), simMode)
 		}
 		recs = cold.Records
 		stats = cold.Stats
@@ -390,8 +439,9 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		trialMeta = map[string]any{"trials_run": 1, "trial_seed": seedUsed}
 	}
 	if err != nil {
-		return nil, 422, fmt.Sprintf(`{"error":%q}`, err.Error()), err
+		return nil, simRunErrFromSim(err, req, mergeProcessing(proc, map[string]any{"sim_mode": simMode}), simMode)
 	}
+	proc["sim_mode"] = simMode
 
 	slotLabels := make([]string, len(zc.Slots))
 	for i, sl := range zc.Slots {
@@ -433,7 +483,15 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			"plan_day_start_hour":            planDayStartHour,
 			"plan_days":                      buildPlanDaysMeta(anchor, planDays, planDayStartHour),
 		},
-	}, 0, "", nil
+	}, nil
+}
+
+func simRunErrFromSim(err error, req, proc map[string]any, simMode string) *APIErrorBody {
+	if simMode != "" {
+		proc = mergeProcessing(proc, map[string]any{"sim_mode": simMode})
+	}
+	code, headline, hints, details := classifySimulationError(err)
+	return simFailure(http.StatusUnprocessableEntity, code, headline, err.Error(), req, proc, hints, details)
 }
 
 // loadPlanInputs reads cfg needed to convert proposals or apply to schedule rows.

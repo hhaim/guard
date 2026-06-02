@@ -1,7 +1,7 @@
 import { Copy, Download } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { apiGet } from "../api";
+import { ApiError, apiGet } from "../api";
 import {
   applyPlan,
   clearProposal,
@@ -19,7 +19,12 @@ import { planDocFromGenerate } from "../lib/planDoc";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
 import { downloadPlanMatrixXls, planMatrixXlsFilenameForProposal } from "../lib/planMatrixExport";
 import { downloadPlanReportPdf } from "../lib/planPdfExport";
+import { useDevPanel } from "../context/AppStateContext";
+import { parseApiError, type ParsedApiError } from "../lib/apiError";
+import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
 import { PlanDocView } from "./PlanDocView";
+import { PlanErrorPanel } from "./PlanErrorPanel";
+import { PlanTabErrorBoundary } from "./PlanTabErrorBoundary";
 import {
   AvailabilityBadges,
   fetchPreviewAvailabilityByDays,
@@ -100,7 +105,9 @@ export function PlanView({
   const [cfgVersion, setCfgVersion] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [planError, setPlanError] = useState<ParsedApiError | null>(null);
+  const [lastGenerateParams, setLastGenerateParams] = useState<PlanGenerateParams | null>(null);
+  const { openPanel } = useDevPanel();
   const [pdfExporting, setPdfExporting] = useState(false);
   const [slotLoading, setSlotLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -171,7 +178,7 @@ export function PlanView({
     async (slot: string, opts?: { silent?: boolean }) => {
       if (!anchor) return;
       const seq = ++loadSeqRef.current;
-      if (!opts?.silent) setErrorMsg(null);
+      if (!opts?.silent) setPlanError(null);
       setSlotLoading(true);
       try {
         const data = await getProposal(anchor, slot, requestDebugOffset);
@@ -179,11 +186,14 @@ export function PlanView({
         setProposal(data.proposal);
         setCfgVersion(data.version);
         setDirty(false);
-      } catch {
+      } catch (e) {
         if (seq !== loadSeqRef.current) return;
         setProposal(null);
         setCfgVersion(0);
         setDirty(false);
+        if (!opts?.silent && !(e instanceof ApiError && e.status === 404)) {
+          setPlanError(parseApiError(e));
+        }
       } finally {
         if (seq === loadSeqRef.current) setSlotLoading(false);
       }
@@ -194,7 +204,7 @@ export function PlanView({
   const selectSlot = (slot: string) => {
     setSelectedSlot(slot);
     setStatusMsg(null);
-    setErrorMsg(null);
+    setPlanError(null);
     void loadSlot(slot);
   };
 
@@ -268,25 +278,16 @@ export function PlanView({
   };
 
   const generateM = useMutation({
-    mutationFn: () => generatePlan(buildParams()),
+    mutationFn: (params: PlanGenerateParams) => generatePlan(params),
     onSuccess: (data) => {
       const p = data.proposal ?? planDocFromGenerate(data);
       setProposal(p);
       setDirty(false);
-      setErrorMsg(null);
+      setPlanError(null);
       setStatusMsg(`Generated proposal ${selectedSlot} (${p.assignments.length} assignments).`);
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
-    onError: (e) => {
-      let msg = e instanceof Error ? e.message : "Generate failed";
-      try {
-        const parsed = JSON.parse(msg) as { error?: string };
-        if (parsed.error) msg = parsed.error;
-      } catch {
-        /* keep */
-      }
-      setErrorMsg(msg);
-    },
+    onError: (e) => setPlanError(parseApiError(e)),
   });
 
   const saveM = useMutation({
@@ -296,11 +297,12 @@ export function PlanView({
     },
     onSuccess: () => {
       setDirty(false);
+      setPlanError(null);
       setStatusMsg(`Saved proposal ${selectedSlot}.`);
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
       void loadSlot(selectedSlot);
     },
-    onError: (e) => setErrorMsg(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => setPlanError(parseApiError(e)),
   });
 
   const clearM = useMutation({
@@ -309,10 +311,11 @@ export function PlanView({
       setProposal(null);
       setCfgVersion(0);
       setDirty(false);
+      setPlanError(null);
       setStatusMsg(`Cleared proposal ${selectedSlot}.`);
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
-    onError: (e) => setErrorMsg(e instanceof Error ? e.message : "Clear failed"),
+    onError: (e) => setPlanError(parseApiError(e)),
   });
 
   const applyM = useMutation({
@@ -321,26 +324,13 @@ export function PlanView({
       setProposal(null);
       setCfgVersion(0);
       setDirty(false);
+      setPlanError(null);
       setStatusMsg(
         `Applied proposal ${selectedSlot} to verified schedule (${data.dates_written.length} day(s): ${data.dates_written.join(", ")}). All proposals cleared.`
       );
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
-    onError: (e) => {
-      const raw = e instanceof Error ? e.message : "Apply failed";
-      try {
-        const body = JSON.parse(raw) as { conflicting_dates?: string[] };
-        if (body.conflicting_dates?.length) {
-          setErrorMsg(
-            `Cannot apply: verified schedule already exists for ${body.conflicting_dates.join(", ")}. Delete those days first (admin).`
-          );
-          return;
-        }
-      } catch {
-        /* not JSON */
-      }
-      setErrorMsg(raw);
-    },
+    onError: (e) => setPlanError(parseApiError(e)),
   });
 
   const onProposalChange = (next: PlanDoc) => {
@@ -355,7 +345,14 @@ export function PlanView({
       );
       if (!ok) return;
     }
-    generateM.mutate();
+    try {
+      const params = buildParams();
+      setLastGenerateParams(params);
+      setPlanError(null);
+      generateM.mutate(params);
+    } catch (e) {
+      setPlanError(parseApiError(e));
+    }
   };
 
   const handleClear = () => {
@@ -395,7 +392,7 @@ export function PlanView({
   const handleDownloadPdf = async () => {
     if (!proposal || !zonesDoc) return;
     setPdfExporting(true);
-    setErrorMsg(null);
+    setPlanError(null);
     try {
       await downloadPlanReportPdf({
         proposal,
@@ -407,7 +404,7 @@ export function PlanView({
         effectiveToday: planCtx?.effective_today,
       });
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : "PDF export failed");
+      setPlanError(parseApiError(e));
     } finally {
       setPdfExporting(false);
     }
@@ -427,7 +424,7 @@ export function PlanView({
         planMatrixXlsFilenameForProposal(proposal.anchor_date, selectedSlot),
       );
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : "Excel export failed");
+      setPlanError(parseApiError(e));
     }
   };
 
@@ -677,7 +674,13 @@ export function PlanView({
         {statusMsg && (
           <p className="contacts-hint plan-status-msg">{statusMsg}</p>
         )}
-        {errorMsg && <p className="msg-err plan-status-msg">{errorMsg}</p>}
+        {planError && (
+          <PlanErrorPanel
+            error={planError}
+            clientRequest={lastGenerateParams ?? undefined}
+            title="Plan action failed"
+          />
+        )}
       </section>
 
       <section
@@ -725,6 +728,13 @@ export function PlanView({
           </div>
         </header>
         <div className="run-results-body">
+          {planError && (generateM.isError || applyM.isError) && (
+            <PlanErrorPanel
+              error={planError}
+              clientRequest={lastGenerateParams ?? undefined}
+              title={applyM.isError ? "Apply failed" : "Generate failed"}
+            />
+          )}
           {(planCtxQ.isFetching && !planContextReady) || slotLoading ? (
             <p className="contacts-empty">
               {planCtxQ.isFetching && !planContextReady
@@ -752,20 +762,30 @@ export function PlanView({
             !slotLoading &&
             !zonesLoading &&
             zonesDoc && (
-              <PlanDocView
-                plan={previewProposal}
-                zones={zonesDoc}
-                soldierIds={soldierIds}
-                soldiers={soldiers}
-                platoonColors={platoonColors}
-                sections={PLAN_TAB_PREVIEW_SECTIONS}
-                onPlanChange={readOnly ? undefined : onProposalChange}
-                readOnly={readOnly}
-                soldiersByDay={previewAvailQ.data}
-              />
+              <PlanTabErrorBoundary onReset={() => setShowPreview(false)}>
+                <PlanDocView
+                  plan={previewProposal}
+                  zones={zonesDoc}
+                  soldierIds={soldierIds}
+                  soldiers={soldiers}
+                  platoonColors={platoonColors}
+                  sections={PLAN_TAB_PREVIEW_SECTIONS}
+                  onPlanChange={readOnly ? undefined : onProposalChange}
+                  readOnly={readOnly}
+                  soldiersByDay={previewAvailQ.data}
+                />
+              </PlanTabErrorBoundary>
             )}
         </div>
       </section>
+
+      <DevPanelTrigger onOpen={() => openPanel("logs")} />
+      <DeveloperPanel
+        jsonText={proposal ? JSON.stringify(proposal, null, 2) : "{}"}
+        onJsonTextChange={() => {}}
+        jsonError={null}
+        onResetDefaults={() => {}}
+      />
     </div>
   );
 }
