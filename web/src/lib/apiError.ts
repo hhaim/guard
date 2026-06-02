@@ -14,6 +14,7 @@ export type ParsedApiError = {
 
 const CODE_HEADLINES: Record<string, string> = {
   rest_constraint: "Could not assign all duties",
+  type_quota_unfilled: "Not enough soldiers of the required type",
   schedule_conflict: "Verified schedule already has these days",
   anchor_mismatch: "Planning anchor does not match server",
   history_shift_mismatch: "History day uses a different shift length",
@@ -46,10 +47,30 @@ export function headlineForCode(code: string | undefined, fallback: string): str
   return CODE_HEADLINES[code] ?? fallback;
 }
 
+/** Infer simulator sub-code when the API omits `code` (legacy bodies). */
+function inferCodeFromMessage(message: string): string | undefined {
+  if (message.includes("full_day_team:")) return "type_quota_unfilled";
+  if (message.includes("rest constraint") || message.includes("cannot fill day")) return "rest_constraint";
+  if (message.includes("schedule_conflict")) return "schedule_conflict";
+  return undefined;
+}
+
+/** True when the server returned the structured plan/sim error envelope. */
+export function isStructuredApiError(p: ParsedApiError): boolean {
+  return Boolean(
+    p.code &&
+      (p.processing != null ||
+        p.request != null ||
+        (p.hints != null && p.hints.length > 0) ||
+        p.details != null)
+  );
+}
+
 function parsedFromBody(body: Record<string, unknown>, status?: number, raw?: unknown): ParsedApiError {
-  const code = typeof body.code === "string" ? body.code : undefined;
   const errField = typeof body.error === "string" ? body.error : "";
   const msgField = typeof body.message === "string" ? body.message : errField;
+  const code =
+    (typeof body.code === "string" ? body.code : undefined) ?? inferCodeFromMessage(msgField);
   const headline = headlineForCode(code, errField || msgField || "Request failed");
 
   const hints = Array.isArray(body.hints)

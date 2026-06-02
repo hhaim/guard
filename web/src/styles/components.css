@@ -1371,10 +1371,43 @@
   background: color-mix(in srgb, var(--color-danger, #c62828) 8%, var(--surface, #fff));
 }
 
+.plan-error-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.35rem;
+}
+
 .plan-error-title {
-  margin: 0 0 0.35rem;
+  margin: 0;
   font-size: var(--text-sm);
   font-weight: 600;
+  opacity: 0.85;
+}
+
+.plan-error-badge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-accent, #1565c0) 18%, transparent);
+  color: var(--color-accent, #1565c0);
+}
+
+.plan-error-badge-legacy {
+  background: color-mix(in srgb, var(--text, #111) 10%, transparent);
+  color: inherit;
+  opacity: 0.75;
+}
+
+.plan-error-legacy-hint {
+  margin: 0.5rem 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
   opacity: 0.85;
 }
 

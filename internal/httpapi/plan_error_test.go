@@ -71,6 +71,20 @@ func TestPlanAnchorMismatchJSON(t *testing.T) {
 	}
 }
 
+func TestClassifySimulationError_FullDayTeam(t *testing.T) {
+	err := errors.New("full_day_team: need 1 type A, have 0 available on day 1 slot 9")
+	code, headline, hints, details := classifySimulationError(err)
+	if code != "type_quota_unfilled" {
+		t.Fatalf("code=%q", code)
+	}
+	if headline == "" || len(hints) == 0 {
+		t.Fatal("expected headline and hints")
+	}
+	if details["day"] != 1 || details["slot"] != 9 || details["type_code"] != "A" {
+		t.Fatalf("details=%v", details)
+	}
+}
+
 func TestSimFailureEnvelope(t *testing.T) {
 	err := errors.Join(guardsched.ErrRestConstraint, errors.New("full_day cannot fill day 3 slot 1"))
 	code, headline, hints, details := classifySimulationError(err)

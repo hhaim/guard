@@ -92,7 +92,9 @@ func mergeProcessing(base map[string]any, extra map[string]any) map[string]any {
 
 var (
 	reFillDaySlot = regexp.MustCompile(`cannot fill day (\d+) slot (\d+)`)
-	reFillDayBlockSlot = regexp.MustCompile(`cannot fill day (\d+) block (\d+) slot (\d+)`)
+	reFillDayBlockSlot  = regexp.MustCompile(`cannot fill day (\d+) block (\d+) slot (\d+)`)
+	reFullDayTeamType   = regexp.MustCompile(`need \d+ type ([^,]+),`)
+	reOnDaySlot         = regexp.MustCompile(`on day (\d+) slot (\d+)`)
 )
 
 func classifySimulationError(err error) (code, headline string, hints []string, details map[string]any) {
@@ -139,6 +141,22 @@ func classifySimulationError(err error) (code, headline string, hints []string, 
 		code = "validation"
 		headline = "Cold run requires a single simulation trial"
 		hints = []string{"Set sim trials to 1 for this configuration."}
+	case strings.Contains(msg, "full_day_team:"):
+		code = "type_quota_unfilled"
+		headline = "Team post type quota could not be filled"
+		hints = []string{
+			"Ensure enough soldiers with each required type_code (see zones type_quotas).",
+			"Check Soldiers tab: absences and status on the plan day.",
+			"Earlier full_day / full_day_team slots may use the only soldiers of that type.",
+		}
+		details["pattern"] = "full_day_team"
+		if m := reOnDaySlot.FindStringSubmatch(msg); len(m) == 3 {
+			details["day"] = atoi(m[1])
+			details["slot"] = atoi(m[2])
+		}
+		if m := reFullDayTeamType.FindStringSubmatch(msg); len(m) == 2 {
+			details["type_code"] = strings.TrimSpace(m[1])
+		}
 	default:
 		code = "simulation_failed"
 		headline = "Schedule simulation failed"

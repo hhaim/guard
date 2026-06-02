@@ -106,6 +106,9 @@ export function PlanView({
   const [dirty, setDirty] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [planError, setPlanError] = useState<ParsedApiError | null>(null);
+  const [errorAction, setErrorAction] = useState<"generate" | "apply" | "save" | "clear" | "load" | null>(
+    null
+  );
   const [lastGenerateParams, setLastGenerateParams] = useState<PlanGenerateParams | null>(null);
   const { openPanel } = useDevPanel();
   const [pdfExporting, setPdfExporting] = useState(false);
@@ -113,6 +116,15 @@ export function PlanView({
   const [showPreview, setShowPreview] = useState(false);
 
   const requestDebugOffset = debugDayOffset > 0 ? debugDayOffset : undefined;
+
+  const setPlanFailure = useCallback(
+    (action: typeof errorAction, err: unknown) => {
+      setPlanError(parseApiError(err));
+      setErrorAction(action);
+      openPanel("response");
+    },
+    [openPanel]
+  );
 
   const proposalsQ = useQuery({
     queryKey: ["plan", "proposals", anchor, debugDayOffset],
@@ -192,19 +204,20 @@ export function PlanView({
         setCfgVersion(0);
         setDirty(false);
         if (!opts?.silent && !(e instanceof ApiError && e.status === 404)) {
-          setPlanError(parseApiError(e));
+          setPlanFailure("load", e);
         }
       } finally {
         if (seq === loadSeqRef.current) setSlotLoading(false);
       }
     },
-    [anchor, requestDebugOffset]
+    [anchor, requestDebugOffset, setPlanFailure]
   );
 
   const selectSlot = (slot: string) => {
     setSelectedSlot(slot);
     setStatusMsg(null);
     setPlanError(null);
+    setErrorAction(null);
     void loadSlot(slot);
   };
 
@@ -284,10 +297,11 @@ export function PlanView({
       setProposal(p);
       setDirty(false);
       setPlanError(null);
+      setErrorAction(null);
       setStatusMsg(`Generated proposal ${selectedSlot} (${p.assignments.length} assignments).`);
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
-    onError: (e) => setPlanError(parseApiError(e)),
+    onError: (e) => setPlanFailure("generate", e),
   });
 
   const saveM = useMutation({
@@ -298,11 +312,12 @@ export function PlanView({
     onSuccess: () => {
       setDirty(false);
       setPlanError(null);
+      setErrorAction(null);
       setStatusMsg(`Saved proposal ${selectedSlot}.`);
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
       void loadSlot(selectedSlot);
     },
-    onError: (e) => setPlanError(parseApiError(e)),
+    onError: (e) => setPlanFailure("save", e),
   });
 
   const clearM = useMutation({
@@ -312,10 +327,11 @@ export function PlanView({
       setCfgVersion(0);
       setDirty(false);
       setPlanError(null);
+      setErrorAction(null);
       setStatusMsg(`Cleared proposal ${selectedSlot}.`);
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
-    onError: (e) => setPlanError(parseApiError(e)),
+    onError: (e) => setPlanFailure("clear", e),
   });
 
   const applyM = useMutation({
@@ -325,12 +341,13 @@ export function PlanView({
       setCfgVersion(0);
       setDirty(false);
       setPlanError(null);
+      setErrorAction(null);
       setStatusMsg(
         `Applied proposal ${selectedSlot} to verified schedule (${data.dates_written.length} day(s): ${data.dates_written.join(", ")}). All proposals cleared.`
       );
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
-    onError: (e) => setPlanError(parseApiError(e)),
+    onError: (e) => setPlanFailure("apply", e),
   });
 
   const onProposalChange = (next: PlanDoc) => {
@@ -349,9 +366,10 @@ export function PlanView({
       const params = buildParams();
       setLastGenerateParams(params);
       setPlanError(null);
+      setErrorAction(null);
       generateM.mutate(params);
     } catch (e) {
-      setPlanError(parseApiError(e));
+      setPlanFailure("generate", e);
     }
   };
 
@@ -667,9 +685,10 @@ export function PlanView({
         </details>
 
         {planCtxQ.isError && (
-          <p className="msg-err plan-status-msg">
-            Failed to load planning context: {planCtxQ.error instanceof Error ? planCtxQ.error.message : "Unknown error"}
-          </p>
+          <PlanErrorPanel
+            error={parseApiError(planCtxQ.error)}
+            title="Could not load planning context"
+          />
         )}
         {statusMsg && (
           <p className="contacts-hint plan-status-msg">{statusMsg}</p>
@@ -678,13 +697,20 @@ export function PlanView({
           <PlanErrorPanel
             error={planError}
             clientRequest={lastGenerateParams ?? undefined}
-            title="Plan action failed"
+            title={
+              errorAction === "generate"
+                ? "Generate failed"
+                : errorAction === "apply"
+                  ? "Apply failed"
+                  : "Plan action failed"
+            }
+            defaultOpenTechnical={errorAction === "generate"}
           />
         )}
       </section>
 
       <section
-        className={`run-results-panel${previewProposal ? " has-data" : ""}`}
+        className={`run-results-panel${previewProposal || planError ? " has-data" : ""}`}
         aria-label="Plan results"
       >
         <header className="run-results-header">
@@ -728,11 +754,18 @@ export function PlanView({
           </div>
         </header>
         <div className="run-results-body">
-          {planError && (generateM.isError || applyM.isError) && (
+          {planError && (
             <PlanErrorPanel
               error={planError}
               clientRequest={lastGenerateParams ?? undefined}
-              title={applyM.isError ? "Apply failed" : "Generate failed"}
+              title={
+                errorAction === "apply"
+                  ? "Apply failed"
+                  : errorAction === "generate"
+                    ? "Generate failed"
+                    : "Plan action failed"
+              }
+              defaultOpenTechnical={errorAction === "generate"}
             />
           )}
           {(planCtxQ.isFetching && !planContextReady) || slotLoading ? (
@@ -742,7 +775,7 @@ export function PlanView({
                 : "Loading proposal…"}
             </p>
           ) : null}
-          {planContextReady && !slotLoading && !previewProposal && (
+          {planContextReady && !slotLoading && !previewProposal && !planError && (
             <p className="contacts-empty">
               Select a slot and click <strong>Generate new</strong> to preview the matrix and stats.
             </p>
@@ -779,7 +812,10 @@ export function PlanView({
         </div>
       </section>
 
-      <DevPanelTrigger onOpen={() => openPanel("logs")} />
+      <DevPanelTrigger
+        onOpen={() => openPanel(planError ? "response" : "logs")}
+        aria-label={planError ? "Open developer panel (last API response)" : "Open developer panel"}
+      />
       <DeveloperPanel
         jsonText={proposal ? JSON.stringify(proposal, null, 2) : "{}"}
         onJsonTextChange={() => {}}

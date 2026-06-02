@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, formatApiError, parseApiError } from "./apiError";
+import { ApiError, formatApiError, isStructuredApiError, parseApiError } from "./apiError";
 
 describe("parseApiError", () => {
   it("handles plain string errors", () => {
@@ -44,6 +44,24 @@ describe("parseApiError", () => {
     expect(p.code).toBe("schedule_conflict");
     expect(p.conflicting_dates).toEqual(["2026-06-03", "2026-06-04"]);
     expect(p.headline).toContain("Verified schedule");
+  });
+});
+
+describe("isStructuredApiError", () => {
+  it("detects structured envelope", () => {
+    const p = parseApiError(
+      new ApiError(422, {
+        error: "x",
+        code: "rest_constraint",
+        processing: { soldier_count: 10 },
+        message: "detail",
+      })
+    );
+    expect(isStructuredApiError(p)).toBe(true);
+  });
+
+  it("false for plain message", () => {
+    expect(isStructuredApiError(parseApiError(new Error("network")))).toBe(false);
   });
 });
 
