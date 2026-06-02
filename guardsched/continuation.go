@@ -93,14 +93,19 @@ func ExtendWitnessFromContinuation(c *ContinuationSnapshot, prefix []*Assignment
 }
 
 // ReindexExtendSegment maps extend output days [prefixDays..] to plan days [0..].
+// Non-rotating extend rows use plan-relative days; rotating rows use absolute days (see normalizeExtendNewRecords).
 func ReindexExtendSegment(recs []*AssignmentRecord, prefixDays int) []*AssignmentRecord {
-	out := make([]*AssignmentRecord, 0, len(recs))
-	for _, a := range recs {
+	norm := normalizeExtendNewRecords(recs, prefixDays)
+	out := make([]*AssignmentRecord, 0, len(norm))
+	for _, a := range norm {
 		if a == nil {
 			continue
 		}
 		cp := *a
 		cp.Day -= prefixDays
+		if cp.Day < 0 {
+			continue
+		}
 		out = append(out, &cp)
 	}
 	return out
