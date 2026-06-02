@@ -1683,6 +1683,10 @@
   text-decoration-thickness: 2px;
 }
 
+.sched-matrix-table td[style*="background"] .sched-soldier-link {
+  text-decoration-color: currentColor;
+}
+
 .sched-soldier-title-badge {
   text-decoration: none;
   font-size: var(--text-sm);

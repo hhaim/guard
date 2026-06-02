@@ -15,6 +15,7 @@ import { deleteVerifiedScheduleDay } from "../api/plan";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
 import { fetchVerifiedPlan, type PlanDoc } from "../lib/planDoc";
 import { downloadTextFile, planDocToYaml } from "../lib/scheduleExport";
+import { parsePlatoonColorsFromGlobal } from "../lib/platoonColors";
 import { PlanDocView } from "./PlanDocView";
 import { soldiersFromCfg } from "./ScheduleResultsReport";
 
@@ -64,6 +65,16 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
         "/api/cfg/soldiers"
       ),
   });
+
+  const globalQ = useQuery({
+    queryKey: ["cfg", "global"],
+    queryFn: () => apiGet<{ value: unknown }>("/api/cfg/global"),
+  });
+
+  const platoonColors = useMemo(
+    () => parsePlatoonColorsFromGlobal(globalQ.data?.value),
+    [globalQ.data]
+  );
 
   const scheduleQ = useQuery({
     queryKey: ["reports", "schedule", from, to],
@@ -319,6 +330,7 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
               zones={zonesDoc}
               soldierIds={soldierIds}
               soldiers={soldiers}
+              platoonColors={platoonColors}
               sections={reportSections}
             />
           </div>

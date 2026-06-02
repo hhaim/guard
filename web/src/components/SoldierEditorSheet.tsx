@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { fetchPlanContext } from "../api/plan";
 import { parsePlanDayStart } from "../lib/planDay";
+import { platoonAvatarStyle, type PlatoonColorEntry } from "../lib/platoonColors";
 import { soldierInitials, type Soldier } from "../lib/soldiers";
 import type { Platoon } from "../lib/soldierPlatoons";
 import type { SoldierType } from "../lib/soldierTypes";
@@ -13,6 +14,7 @@ type SoldierEditorSheetProps = {
   soldier: Soldier;
   types: SoldierType[];
   platoons: Platoon[];
+  platoonColors?: PlatoonColorEntry[];
   onChange: (s: Soldier) => void;
   onDone: () => void;
   onCancel: () => void;
@@ -57,6 +59,7 @@ export function SoldierEditorSheet({
   soldier,
   types,
   platoons,
+  platoonColors = [],
   onChange,
   onDone,
   onCancel,
@@ -66,6 +69,9 @@ export function SoldierEditorSheet({
 
   const title = mode === "new" ? "New Soldier" : "Edit";
   const canDone = soldier.id.trim() !== "";
+  const avatarStyle = soldier.platoon_code?.trim()
+    ? platoonAvatarStyle(soldier.platoon_code.trim(), platoonColors)
+    : undefined;
 
   const planCtxQ = useQuery({
     queryKey: ["plan", "context"],
@@ -103,7 +109,7 @@ export function SoldierEditorSheet({
         </header>
 
         <div className="contacts-editor-hero">
-          <div className="contacts-avatar contacts-avatar-lg" aria-hidden>
+          <div className="contacts-avatar contacts-avatar-lg" aria-hidden style={avatarStyle}>
             {soldierInitials(soldier)}
           </div>
         </div>

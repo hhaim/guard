@@ -5,6 +5,7 @@ import { apiGet, callApi } from "../api";
 import { fetchPlanContext, type PlanContext } from "../api/plan";
 import { useZonesDocument } from "../context/ZonesDocumentContext";
 import { planDebugDayOffsetFromValue } from "../lib/globalConfig";
+import { parsePlatoonColorsFromGlobal } from "../lib/platoonColors";
 import { planDocFromGenerate } from "../lib/planDoc";
 import type { ScheduleAssignment } from "../lib/scheduleReport";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
@@ -85,6 +86,10 @@ export function RunScheduleView() {
   const soldiers = useMemo(
     () => soldiersFromCfg(soldiersQ.data?.value),
     [soldiersQ.data]
+  );
+  const platoonColors = useMemo(
+    () => parsePlatoonColorsFromGlobal(globalQ.data?.value),
+    [globalQ.data]
   );
   const planCtx: PlanContext | undefined = planCtxQ.data;
   const [anchor, setAnchor] = useState("");
@@ -300,6 +305,7 @@ export function RunScheduleView() {
               zones={zonesDoc}
               soldierIds={soldierIds}
               soldiers={soldiers}
+              platoonColors={platoonColors}
             />
           )}
           {result && !result.ok && (

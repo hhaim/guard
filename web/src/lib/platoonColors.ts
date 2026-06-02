@@ -70,12 +70,35 @@ export function validatePlatoonColors(entries: PlatoonColorEntry[]): string | nu
   return null;
 }
 
+/** Stable palette index per platoon code (same platoon → same fallback color). */
+export function platoonFallbackIndex(code: string): number {
+  let h = 0;
+  for (let i = 0; i < code.length; i++) {
+    h = (Math.imul(31, h) + code.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h) % SOLDIER_BADGE_COLORS.length;
+}
+
+/** Avatar/circle fill — clears default CSS gradient on `.contacts-avatar`. */
+export function platoonAvatarStyle(
+  code: string,
+  colors: PlatoonColorEntry[],
+  fallbackIndex = 0
+): { background: string; backgroundImage: "none"; color: string } {
+  const { backgroundColor, color } = platoonBadgeStyle(code, colors, fallbackIndex);
+  return { background: backgroundColor, backgroundImage: "none", color };
+}
+
 export function platoonBadgeStyle(
   code: string,
   colors: PlatoonColorEntry[],
   fallbackIndex = 0
 ): { backgroundColor: string; color: string } {
   const c = code.trim();
+  if (!c) {
+    const fb = SOLDIER_BADGE_COLORS[fallbackIndex % SOLDIER_BADGE_COLORS.length];
+    return { backgroundColor: fb.bg, color: fb.fg };
+  }
   const entry = colors.find((x) => x.code === c);
   if (entry) {
     return {
@@ -83,6 +106,6 @@ export function platoonBadgeStyle(
       color: entry.fg ?? contrastForeground(entry.bg),
     };
   }
-  const fb = SOLDIER_BADGE_COLORS[fallbackIndex % SOLDIER_BADGE_COLORS.length];
+  const fb = SOLDIER_BADGE_COLORS[platoonFallbackIndex(c)];
   return { backgroundColor: fb.bg, color: fb.fg };
 }

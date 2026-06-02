@@ -17,7 +17,7 @@ import {
   type SoldiersDoc,
 } from "../lib/soldiers";
 import { importSoldierStatus } from "../api/soldierStatus";
-import { parsePlatoonColorsFromGlobal, platoonBadgeStyle } from "../lib/platoonColors";
+import { parsePlatoonColorsFromGlobal, platoonAvatarStyle, platoonBadgeStyle } from "../lib/platoonColors";
 import { platoonLabel } from "../lib/soldierPlatoons";
 import { typeLabel } from "../lib/soldierTypes";
 import { downloadText, pickTextFile } from "../lib/fileIo";
@@ -87,6 +87,35 @@ export function SoldiersView() {
     setSaveState("idle");
     setSaveError(null);
   }, [soldiersQ.data]);
+
+  // #region agent log
+  useEffect(() => {
+    const sample = doc.soldiers.find((s) => s.id.toLowerCase() === "s76");
+    if (!sample) return;
+    const pc = sample.platoon_code?.trim() ?? "";
+    const avatar = pc
+      ? platoonAvatarStyle(pc, platoonColors)
+      : platoonAvatarStyle("", platoonColors, 0);
+    fetch("http://127.0.0.1:7873/ingest/ffd4b145-0813-4a01-96e9-6b29cb6053ad", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "35b199" },
+      body: JSON.stringify({
+        sessionId: "35b199",
+        runId: "avatar-fix",
+        hypothesisId: "H-F",
+        location: "SoldiersView.tsx:avatar",
+        message: "soldier avatar style s76",
+        data: {
+          id: sample.id,
+          platoon_code: pc,
+          platoonColorsCount: platoonColors.length,
+          avatarStyle: avatar,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  }, [doc.soldiers, platoonColors]);
+  // #endregion
 
   const liveJson = useMemo(() => {
     if (jsonOverride != null) {
@@ -526,7 +555,15 @@ export function SoldiersView() {
                     onDoubleClick={() => openEditor(index)}
                   >
                     <td>
-                      <div className="contacts-avatar contacts-avatar-soldier-id" aria-hidden>
+                      <div
+                        className="contacts-avatar contacts-avatar-soldier-id"
+                        aria-hidden
+                        style={
+                          s.platoon_code?.trim()
+                            ? platoonAvatarStyle(s.platoon_code.trim(), platoonColors)
+                            : platoonAvatarStyle("", platoonColors, index)
+                        }
+                      >
                         {soldierInitials(s)}
                       </div>
                     </td>
@@ -546,7 +583,7 @@ export function SoldiersView() {
                         <code
                           className="soldier-type-badge"
                           title={platoonLabel(platoonsCfg.doc, s.platoon_code)}
-                          style={platoonBadgeStyle(s.platoon_code.trim(), platoonColors, index)}
+                          style={platoonBadgeStyle(s.platoon_code.trim(), platoonColors)}
                         >
                           {s.platoon_code.trim()}
                         </code>
@@ -585,6 +622,7 @@ export function SoldiersView() {
       )}
 
       <SoldierEditorSheet
+        platoonColors={platoonColors}
         open={editorOpen && draft != null}
         mode={editorMode}
         soldier={draft ?? emptySoldier(doc.soldiers)}

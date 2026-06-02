@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { auditPlatoonColorResolution } from "../lib/soldierDisplay";
 import { countEnabledSlots, type ZonesDoc } from "../lib/zones";
 import type { PlatoonColorEntry } from "../lib/platoonColors";
 import { buildSoldierDisplay, type SoldierDisplay } from "../lib/soldierDisplay";
@@ -57,6 +58,7 @@ function SoldierLink({
   onSelect,
   display,
   title,
+  matrixCell = false,
 }: {
   soldierIdx: number;
   label: string;
@@ -64,12 +66,14 @@ function SoldierLink({
   onSelect: (idx: number) => void;
   display: SoldierDisplay;
   title?: string;
+  matrixCell?: boolean;
 }) {
+  const style = matrixCell ? display.matrixBadgeStyle(soldierIdx) : display.badgeStyle(soldierIdx);
   return (
     <button
       type="button"
       className={`sched-soldier-link sched-soldier-badge${selected ? " is-selected" : ""}`}
-      style={display.badgeStyle(soldierIdx)}
+      style={style}
       onClick={() => onSelect(soldierIdx)}
       title={title}
     >
@@ -85,6 +89,7 @@ function MatrixCellContent({
   onSelectSoldier,
   display,
   useFullNames,
+  matrixCell = false,
 }: {
   cell: import("../lib/scheduleReport").MatrixCell;
   labelForIdx: (idx: number) => string;
@@ -92,6 +97,7 @@ function MatrixCellContent({
   onSelectSoldier: (idx: number) => void;
   display: SoldierDisplay;
   useFullNames?: boolean;
+  matrixCell?: boolean;
 }) {
   if (cell.disabled) {
     return <span className="sched-matrix-disabled">—</span>;
@@ -119,6 +125,7 @@ function MatrixCellContent({
             selected={selectedSoldier === idx}
             onSelect={onSelectSoldier}
             display={display}
+            matrixCell={matrixCell}
           />
         ))}
         {extra > 0 ? <span className="sched-matrix-cell-more"> (+{extra} more)</span> : null}
@@ -133,8 +140,22 @@ function MatrixCellContent({
       selected={selectedSoldier === idx}
       onSelect={onSelectSoldier}
       display={display}
+      matrixCell={matrixCell}
     />
   );
+}
+
+function matrixCellSoldierIndices(cell: import("../lib/scheduleReport").MatrixCell): number[] {
+  return cell.soldierIndices ?? (cell.soldierIdx != null && cell.soldierIdx >= 0 ? [cell.soldierIdx] : []);
+}
+
+function matrixCellBackgroundStyle(
+  cell: import("../lib/scheduleReport").MatrixCell,
+  display: SoldierDisplay
+): { backgroundColor: string } | undefined {
+  const indices = matrixCellSoldierIndices(cell);
+  if (indices.length === 0) return undefined;
+  return display.matrixCellStyle(indices[0]);
 }
 
 function ScheduleMatrixTable({
@@ -186,17 +207,24 @@ function ScheduleMatrixTable({
                       onSelectSoldier={onSelectSoldier}
                       display={display}
                       useFullNames={useFullNames}
+                      matrixCell
                     />
                   );
+                  const cellBg = matrixCellBackgroundStyle(cell, display);
                   if (cell.rowspan && cell.rowspan > 1) {
                     return (
-                      <td key={`${row.window}-${j}`} rowSpan={cell.rowspan} className={teamClass.trim()}>
+                      <td
+                        key={`${row.window}-${j}`}
+                        rowSpan={cell.rowspan}
+                        className={teamClass.trim()}
+                        style={cellBg}
+                      >
                         {inner}
                       </td>
                     );
                   }
                   return (
-                    <td key={`${row.window}-${j}`} className={teamClass.trim()}>
+                    <td key={`${row.window}-${j}`} className={teamClass.trim()} style={cellBg}>
                       {inner}
                     </td>
                   );
@@ -430,6 +458,47 @@ export function ScheduleResultsReport({
     () => buildSoldierDisplay(soldierIds, soldiers, report.soldierCount, platoonColors),
     [soldierIds, soldiers, report.soldierCount, platoonColors]
   );
+
+  // #region agent log
+  useEffect(() => {
+    const audit = auditPlatoonColorResolution(
+      soldierIds,
+      soldiers,
+      report.soldierCount,
+      platoonColors
+    );
+    const matrixSample = report.matrices.slice(0, 1).flatMap((m) =>
+      m.rows.slice(0, 4).flatMap((row) =>
+        row.cells
+          .filter((c) => !c.skip && !c.disabled && (c.soldierIndices?.length ?? 0) > 0)
+          .slice(0, 3)
+          .map((c) => {
+            const idx = c.soldierIndices?.[0] ?? c.soldierIdx ?? -1;
+            const st = idx >= 0 ? display.badgeStyle(idx) : null;
+            return {
+              day: m.day,
+              window: row.window,
+              soldierIdx: idx,
+              badgeBg: st?.backgroundColor ?? null,
+            };
+          })
+      )
+    );
+    fetch("http://127.0.0.1:7873/ingest/ffd4b145-0813-4a01-96e9-6b29cb6053ad", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "35b199" },
+      body: JSON.stringify({
+        sessionId: "35b199",
+        runId: "post-fix",
+        hypothesisId: "H-A,H-B,H-C,H-D",
+        location: "ScheduleResultsReport.tsx:display",
+        message: "platoon color audit",
+        data: { ...audit, matrixSample },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  }, [soldierIds, soldiers, report.soldierCount, report.matrices, platoonColors, display]);
+  // #endregion
 
   const soldierRows = useMemo(() => {
     if (selectedSoldier == null) return null;
