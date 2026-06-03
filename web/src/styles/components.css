@@ -2031,6 +2031,42 @@
   text-align: right;
 }
 
+.sched-timeline-label--named {
+  position: relative;
+  z-index: 1;
+}
+
+.sched-timeline-label--named:hover,
+.sched-timeline-label--named:focus-visible {
+  z-index: 30;
+}
+
+.sched-timeline-label--named[data-name]::after {
+  content: attr(data-name);
+  position: absolute;
+  left: calc(100% + 4px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.3rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25;
+  color: #fff;
+  background: rgba(30, 30, 35, 0.92);
+  border-radius: 6px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  visibility: hidden;
+}
+
+.sched-timeline-label--named:hover::after,
+.sched-timeline-label--named:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
 .sched-timeline-bar {
   position: relative;
   flex: 1;

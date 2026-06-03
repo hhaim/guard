@@ -305,6 +305,62 @@ function SoldierDetailTable({
   );
 }
 
+function buildSoldierNameById(soldiers: Soldier[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const s of soldiers) {
+    const name = s.full_name?.trim();
+    if (!name) continue;
+    out.set(s.id, name);
+    const key = s.key?.trim();
+    if (key) out.set(key, name);
+  }
+  return out;
+}
+
+function timelineSoldierName(
+  lane: { label: string; soldierIdx: number },
+  nameById: Map<string, string>,
+  display: SoldierDisplay,
+  soldierIds: string[],
+): string | undefined {
+  const fromLabel = nameById.get(lane.label);
+  if (fromLabel) return fromLabel;
+  const rosterId = soldierIds[lane.soldierIdx]?.trim();
+  if (rosterId) {
+    const fromRosterId = nameById.get(rosterId);
+    if (fromRosterId) return fromRosterId;
+  }
+  const fromIdx = display.fullLabel(lane.soldierIdx);
+  if (fromIdx && fromIdx !== lane.label) return fromIdx;
+  return undefined;
+}
+
+function TimelineSoldierLabel({
+  lane,
+  display,
+  nameById,
+  soldierIds,
+}: {
+  lane: { label: string; soldierIdx: number };
+  display: SoldierDisplay;
+  nameById: Map<string, string>;
+  soldierIds: string[];
+}) {
+  const name = timelineSoldierName(lane, nameById, display, soldierIds);
+
+  return (
+    <span
+      className={`sched-timeline-label sched-soldier-badge${name ? " sched-timeline-label--named" : ""}`}
+      data-name={name}
+      style={display.badgeStyle(lane.soldierIdx)}
+      aria-label={name ? `${lane.label}, ${name}` : lane.label}
+      tabIndex={name ? 0 : undefined}
+    >
+      {lane.label}
+    </span>
+  );
+}
+
 function SoldierTimelineChart({
   lanes,
   days,
@@ -315,6 +371,8 @@ function SoldierTimelineChart({
   totalHours,
   rosterCount,
   display,
+  nameById,
+  soldierIds,
 }: {
   lanes: ReturnType<typeof buildTimelineLanes>;
   days: number;
@@ -325,6 +383,8 @@ function SoldierTimelineChart({
   totalHours: number;
   rosterCount: number;
   display: SoldierDisplay;
+  nameById: Map<string, string>;
+  soldierIds: string[];
 }) {
   const layout = useMemo(
     () => timelineChartLayout(days, planDayStartHour, totalHours),
@@ -402,12 +462,12 @@ function SoldierTimelineChart({
               ) : null}
               {lanes.map((lane) => (
                 <div key={lane.soldierIdx} className="sched-timeline-lane">
-                  <span
-                    className="sched-timeline-label sched-soldier-badge"
-                    style={display.badgeStyle(lane.soldierIdx)}
-                  >
-                    {lane.label}
-                  </span>
+                  <TimelineSoldierLabel
+                    lane={lane}
+                    display={display}
+                    nameById={nameById}
+                    soldierIds={soldierIds}
+                  />
                   <div className="sched-timeline-bar">
                     {lane.segments.map((seg, i) => (
                       <span
@@ -536,6 +596,8 @@ export function ScheduleResultsReport({
     [soldierIds, soldiers, report.soldierCount, platoonColors]
   );
 
+  const soldierNameById = useMemo(() => buildSoldierNameById(soldiers), [soldiers]);
+
   const soldierRows = useMemo(() => {
     if (selectedSoldier == null) return null;
     return buildSoldierBlockRows(
@@ -647,6 +709,8 @@ export function ScheduleResultsReport({
           totalHours={report.totalHours}
           rosterCount={report.soldierCount}
           display={display}
+          nameById={soldierNameById}
+          soldierIds={soldierIds}
         />
       )}
 
