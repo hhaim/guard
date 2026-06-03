@@ -224,10 +224,18 @@ func (s *Server) handlePlanGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	savedRow, err := repo.GetCfg(r.Context(), s.Pool, repo.GetProposalKey(out.Anchor, slot))
+	if err != nil {
+		writeAPIError(w, APIErrorBody{Status: http.StatusInternalServerError, Code: "internal", Error: "Unexpected server error", Message: err.Error()})
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":          true,
 		"slot":        slot,
+		"version":     savedRow.Version,
+		"updated_at":  savedRow.UpdatedAt,
 		"anchor_date": proposal.AnchorDate,
 		"days":        proposal.Days,
 		"shift_hours": proposal.ShiftHours,

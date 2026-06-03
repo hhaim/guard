@@ -31,6 +31,8 @@ export type PlanGenerateParams = {
 export type PlanGenerateResult = {
   ok: boolean;
   slot: string;
+  version?: number;
+  updated_at?: string;
   anchor_date: string;
   days: number;
   shift_hours: number;

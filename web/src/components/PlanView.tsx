@@ -103,6 +103,11 @@ export function PlanView({
   const [seed, setSeed] = useState("");
   const [proposal, setProposal] = useState<PlanDoc | null>(null);
   const [cfgVersion, setCfgVersion] = useState(0);
+  const cfgVersionRef = useRef(0);
+  const syncCfgVersion = useCallback((version: number) => {
+    cfgVersionRef.current = version;
+    setCfgVersion(version);
+  }, []);
   const [dirty, setDirty] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [planError, setPlanError] = useState<ParsedApiError | null>(null);
@@ -196,12 +201,12 @@ export function PlanView({
         const data = await getProposal(anchor, slot, requestDebugOffset);
         if (seq !== loadSeqRef.current) return;
         setProposal(data.proposal);
-        setCfgVersion(data.version);
+        syncCfgVersion(data.version);
         setDirty(false);
       } catch (e) {
         if (seq !== loadSeqRef.current) return;
         setProposal(null);
-        setCfgVersion(0);
+        syncCfgVersion(0);
         setDirty(false);
         if (!opts?.silent && !(e instanceof ApiError && e.status === 404)) {
           setPlanFailure("load", e);
@@ -210,7 +215,7 @@ export function PlanView({
         if (seq === loadSeqRef.current) setSlotLoading(false);
       }
     },
-    [anchor, requestDebugOffset, setPlanFailure]
+    [anchor, requestDebugOffset, setPlanFailure, syncCfgVersion]
   );
 
   const selectSlot = (slot: string) => {
@@ -292,12 +297,20 @@ export function PlanView({
 
   const generateM = useMutation({
     mutationFn: (params: PlanGenerateParams) => generatePlan(params),
+    onMutate: () => {
+      loadSeqRef.current += 1;
+    },
     onSuccess: (data) => {
       const p = data.proposal ?? planDocFromGenerate(data);
       setProposal(p);
       setDirty(false);
       setPlanError(null);
       setErrorAction(null);
+      if (typeof data.version === "number") {
+        syncCfgVersion(data.version);
+      } else {
+        void loadSlot(selectedSlot, { silent: true });
+      }
       setStatusMsg(`Generated proposal ${selectedSlot} (${p.assignments.length} assignments).`);
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
@@ -307,15 +320,21 @@ export function PlanView({
   const saveM = useMutation({
     mutationFn: async () => {
       if (!proposal) throw new Error("Nothing to save");
-      return saveProposal(anchor, selectedSlot, proposal, cfgVersion, requestDebugOffset);
+      return saveProposal(anchor, selectedSlot, proposal, cfgVersionRef.current, requestDebugOffset);
     },
-    onSuccess: () => {
+    onMutate: () => {
+      loadSeqRef.current += 1;
+    },
+    onSuccess: (res) => {
+      if (typeof res.version === "number") {
+        syncCfgVersion(res.version);
+      }
       setDirty(false);
       setPlanError(null);
       setErrorAction(null);
       setStatusMsg(`Saved proposal ${selectedSlot}.`);
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
-      void loadSlot(selectedSlot);
+      void loadSlot(selectedSlot, { silent: true });
     },
     onError: (e) => setPlanFailure("save", e),
   });
@@ -324,7 +343,7 @@ export function PlanView({
     mutationFn: () => clearProposal(anchor, selectedSlot, requestDebugOffset),
     onSuccess: () => {
       setProposal(null);
-      setCfgVersion(0);
+      syncCfgVersion(0);
       setDirty(false);
       setPlanError(null);
       setErrorAction(null);
@@ -338,7 +357,7 @@ export function PlanView({
     mutationFn: () => applyPlan(anchor, selectedSlot, requestDebugOffset),
     onSuccess: (data) => {
       setProposal(null);
-      setCfgVersion(0);
+      syncCfgVersion(0);
       setDirty(false);
       setPlanError(null);
       setErrorAction(null);
@@ -755,18 +774,36 @@ export function PlanView({
         </header>
         <div className="run-results-body">
           {planError && (
-            <PlanErrorPanel
-              error={planError}
-              clientRequest={lastGenerateParams ?? undefined}
-              title={
-                errorAction === "apply"
-                  ? "Apply failed"
-                  : errorAction === "generate"
-                    ? "Generate failed"
-                    : "Plan action failed"
-              }
-              defaultOpenTechnical={errorAction === "generate"}
-            />
+            <>
+              <PlanErrorPanel
+                error={planError}
+                clientRequest={lastGenerateParams ?? undefined}
+                title={
+                  errorAction === "apply"
+                    ? "Apply failed"
+                    : errorAction === "generate"
+                      ? "Generate failed"
+                      : "Plan action failed"
+                }
+                defaultOpenTechnical={errorAction === "generate"}
+              />
+              {errorAction === "save" && planError.code === "version_conflict" ? (
+                <div className="plan-actions-row" style={{ marginTop: "0.75rem" }}>
+                  <button
+                    type="button"
+                    className="btn btn-tinted"
+                    disabled={slotLoading}
+                    onClick={() => {
+                      setPlanError(null);
+                      setErrorAction(null);
+                      void loadSlot(selectedSlot);
+                    }}
+                  >
+                    {slotLoading ? "Reloading…" : "Reload slot and retry edits"}
+                  </button>
+                </div>
+              ) : null}
+            </>
           )}
           {(planCtxQ.isFetching && !planContextReady) || slotLoading ? (
             <p className="contacts-empty">
