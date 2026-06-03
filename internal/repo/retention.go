@@ -3,14 +3,14 @@ package repo
 import (
 	"context"
 	"fmt"
-	"time"
 
+	"guard/guardsched"
 	"guard/internal/db"
 )
 
 // RunRetentionMaintenance compacts hot status rows then drops aged partitions.
 func RunRetentionMaintenance(ctx context.Context, pool *db.Pool, retentionDays, futureDays int) (dropped int, err error) {
-	if err := CompactStatusEntries(ctx, pool, time.Now().UTC()); err != nil {
+	if err := CompactStatusEntries(ctx, pool, guardsched.NowFakeUTC()); err != nil {
 		return 0, fmt.Errorf("compact status entries: %w", err)
 	}
 	if err := pool.QueryRow(ctx,

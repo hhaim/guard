@@ -28,10 +28,7 @@ import { parsePlatoonColorsFromGlobal } from "../lib/platoonColors";
 import { PlanDocView } from "./PlanDocView";
 import { fetchPreviewAvailabilityByDays } from "./SoldiersStatusBoard";
 import { soldiersFromCfg } from "./ScheduleResultsReport";
-
-function todayUTC(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+import { todayFakeUtcDate } from "../lib/wallClock";
 
 function rangeFromEndAndBack(endDate: string, daysBack: number): { from: string; to: string } {
   const end = new Date(`${endDate}T00:00:00Z`);
@@ -59,7 +56,7 @@ type StatsViewProps = {
 export function StatsView({ isAdmin = false }: StatsViewProps) {
   const qc = useQueryClient();
   const { doc: zonesDoc, slotsQ } = useZonesDocument();
-  const [endDate, setEndDate] = useState(todayUTC);
+  const [endDate, setEndDate] = useState(todayFakeUtcDate);
   const [daysBack, setDaysBack] = useState(14);
   const [showDayMatrix, setShowDayMatrix] = useState(false);
   const [deleteDate, setDeleteDate] = useState("");

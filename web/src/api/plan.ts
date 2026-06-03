@@ -1,6 +1,7 @@
 import { apiDelete, apiGet, callApi } from "../api";
 import type { PlanChange, PlanDoc, ScheduleAssignment } from "../lib/planDoc";
 import { normalizePlanDoc, planDocFromGenerate } from "../lib/planDoc";
+import { tomorrowFakeUtcDate } from "../lib/wallClock";
 
 export type { PlanChange, PlanDoc, ScheduleAssignment } from "../lib/planDoc";
 /** @deprecated Use PlanDoc */
@@ -82,9 +83,7 @@ function planDebugQuery(debugDayOffset?: number): string {
 
 /** @deprecated use fetchPlanContext().plan_anchor */
 export function tomorrowUTC(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
+  return tomorrowFakeUtcDate();
 }
 
 export function listProposals(anchor: string, debugDayOffset?: number): Promise<PlanListResponse> {

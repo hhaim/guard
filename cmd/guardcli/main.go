@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"guard/guardsched"
 	"guard/internal/db"
 	"guard/internal/repo"
 )
@@ -541,7 +542,7 @@ func cmdScheduleExport(args []string) int {
 	out := fs.String("o", "", "Output YAML file (default: stdout)")
 	_ = fs.Parse(args)
 
-	end := time.Now().UTC().Truncate(24 * time.Hour)
+	end := guardsched.TodayFakeUTC()
 	if *endS != "" {
 		t, err := time.Parse("2006-01-02", *endS)
 		if err != nil {

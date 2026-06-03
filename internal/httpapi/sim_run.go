@@ -57,7 +57,7 @@ func parseAnchorDate(s string) (time.Time, error) {
 const maxPlanDebugDayOffset = 366
 
 func utcToday() time.Time {
-	return time.Now().UTC().Truncate(24 * time.Hour)
+	return guardsched.TodayFakeUTC()
 }
 
 func clampPlanDebugDayOffset(n int) int {

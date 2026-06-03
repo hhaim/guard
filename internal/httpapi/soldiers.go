@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"guard/guardsched"
 	"guard/internal/availability"
 	"guard/internal/repo"
 )
@@ -30,7 +31,7 @@ func (s *Server) handleSoldiersList(w http.ResponseWriter, r *http.Request) {
 		} `json:"soldiers"`
 	}
 	_ = json.Unmarshal(row.Value, &doc)
-	now := time.Now().UTC()
+	now := guardsched.NowFakeUTC()
 	winStart, winEnd := availability.PlanDayBounds(now, 0, 5)
 	if g, err := repo.GetCfg(r.Context(), s.Pool, "global"); err == nil && g.Version != 0 {
 		if h, _, perr := globalPlanDayStartFromCfg(g.Value); perr == nil {

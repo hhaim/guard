@@ -6,6 +6,7 @@ import {
   type SoldierStatusEntry,
 } from "../api/soldierStatus";
 import { planDayBoundsIso } from "../lib/planDayBounds";
+import { nowFakeUtcIso } from "../lib/wallClock";
 
 type Props = {
   soldierId: string;
@@ -55,7 +56,7 @@ export function SoldierStatusTimeline({
     mutationFn: (e: SoldierStatusEntry) => {
       if (!e.id) throw new Error("Not editable");
       return patchSoldierStatus(e.id, e.start_at, {
-        end_at: new Date().toISOString(),
+        end_at: nowFakeUtcIso(),
       });
     },
     onSuccess: () => {
