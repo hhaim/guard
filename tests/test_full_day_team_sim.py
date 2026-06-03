@@ -187,6 +187,83 @@ def test_run_simulation_full_day_team_pin_platoon_same_platoon(tmp_path: Path) -
     assert p0 and p0 == p1
 
 
+def test_pin_platoon_rotates_across_days_dv3(tmp_path: Path) -> None:
+    """After a platoon serves carmel, quota-holder load should steer the next day elsewhere."""
+    root = Path(__file__).resolve().parents[1]
+    zone = g.load_zone_config(root / "zones-dv3.yaml", slots_per_block=10)
+    roster_path = root / "roster-dv3.yaml"
+    keys = g.roster_keys(79)
+    import yaml
+
+    data = yaml.safe_load(roster_path.read_text(encoding="utf-8"))
+    id_to_type = {str(r["id"]): str(r.get("type_code", "")).strip() for r in data["soldiers"]}
+    id_to_platoon = {str(r["id"]): str(r.get("platoon_code", "")).strip() for r in data["soldiers"]}
+    type_codes = g.type_codes_for_roster(keys, id_to_type)
+    platoon_codes = g.platoon_codes_for_roster(keys, id_to_platoon)
+
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=42,
+        num_soldiers=79,
+        slots_per_block=10,
+        days=3,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        type_codes=type_codes,
+        platoon_codes=platoon_codes,
+        min_free_shifts_after_duty=2,
+        min_consecutive_free_hours=6.0,
+        max_consecutive_duty_blocks=2,
+        band_relative=0.2,
+    )
+    recs = pack[3]
+    s8_idx = 7  # carmel slot
+    platoons = []
+    for day in range(3):
+        team = [keys[a.soldier_idx] for a in recs if a.day == day and a.slot == s8_idx]
+        assert len(team) == 8
+        platoons.append({id_to_platoon[k] for k in team})
+        assert len(platoons[-1]) == 1, f"day {day + 1} mixed platoons: {platoons[-1]}"
+    assert platoons[0] != platoons[1], f"expected platoon rotation day 2, got {platoons}"
+
+
+def test_pin_platoon_uniform_scarce_types_dv3_roster() -> None:
+    """A=1 and G=2 in every platoon; H/D/F/E counts differ — only A and G score."""
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    data = yaml.safe_load((root / "roster-dv3.yaml").read_text(encoding="utf-8"))
+    keys = g.roster_keys(79)
+    id_to_type = {str(r["id"]): str(r.get("type_code", "")).strip() for r in data["soldiers"]}
+    id_to_platoon = {str(r["id"]): str(r.get("platoon_code", "")).strip() for r in data["soldiers"]}
+    type_codes = g.type_codes_for_roster(keys, id_to_type)
+    platoon_codes = g.platoon_codes_for_roster(keys, id_to_platoon)
+    quotas = {"A": 1, "D": 1, "E": 3, "F": 1, "G": 1, "H": 1}
+    uniform = g._pin_platoon_uniform_scarce_types(platoon_codes, type_codes, quotas)
+    assert uniform == frozenset({"A", "G"})
+
+
+def test_platoon_quota_load_cost_skips_non_uniform_and_vacation() -> None:
+    """Cost uses uniform types only; skip G when only one medic is eligible."""
+    import numpy as np
+
+    cfg = {"type_quotas": {"A": 1, "G": 1, "H": 1}}
+    type_codes = ["A", "G", "G"]
+    platoon_codes = ["1", "1", "1"]
+    soldiers = [g.make_soldier(i, 24.0, 1, 1) for i in range(3)]
+    deltas = np.zeros(3)
+    soldiers[0].w_global = 4.0
+    uniform = g._pin_platoon_uniform_scarce_types(platoon_codes, type_codes, cfg["type_quotas"])
+    assert uniform == frozenset({"A", "G"})
+    cost, used = g._platoon_quota_load_cost(cfg, soldiers, type_codes, deltas, uniform)
+    assert used == ["A", "G"]
+
+    # One G on vacation: score only A
+    cost2, used2 = g._platoon_quota_load_cost(cfg, soldiers[:1], type_codes, deltas, uniform)
+    assert used2 == ["A"]
+    assert cost2 == soldiers[0].effective_global(0.0)
+
+
 def test_run_simulation_full_day_team_busy_tensor() -> None:
     zone, type_codes = _load_fixture()
     anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)

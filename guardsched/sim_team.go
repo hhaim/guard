@@ -203,6 +203,120 @@ func platoonCanFillFullDayTeam(
 	return total >= cfg.Headcount
 }
 
+func soldierEffectiveGlobal(s *Soldier, dg float64) float64 {
+	den := s.AvailableHours
+	if den < 1e-9 {
+		den = 1e-9
+	}
+	return (s.WGlobal + dg) / den
+}
+
+const pinPlatoonUniformScarceMax = 3
+
+func pinPlatoonUniformScarceTypes(
+	platoonCodes, typeCodes []string,
+	quotas map[string]int,
+) map[string]struct{} {
+	out := map[string]struct{}{}
+	if len(platoonCodes) == 0 || len(typeCodes) == 0 || len(quotas) == 0 {
+		return out
+	}
+	platoonSet := map[string]struct{}{}
+	var platoons []string
+	for _, pc := range platoonCodes {
+		pc = strings.TrimSpace(pc)
+		if pc == "" {
+			continue
+		}
+		if _, ok := platoonSet[pc]; ok {
+			continue
+		}
+		platoonSet[pc] = struct{}{}
+		platoons = append(platoons, pc)
+	}
+	sort.Strings(platoons)
+	if len(platoons) == 0 {
+		return out
+	}
+	counts := make(map[string]map[string]int, len(platoons))
+	for _, p := range platoons {
+		counts[p] = map[string]int{}
+	}
+	for idx, pc := range platoonCodes {
+		p := strings.TrimSpace(pc)
+		if p == "" {
+			continue
+		}
+		row, ok := counts[p]
+		if !ok {
+			continue
+		}
+		tc := soldierTypeCode(typeCodes, idx)
+		if tc == "" {
+			continue
+		}
+		row[tc]++
+	}
+	for code, q := range quotas {
+		if q > 1 {
+			continue
+		}
+		if len(platoons) == 0 {
+			continue
+		}
+		c0 := counts[platoons[0]][code]
+		if c0 <= 0 || c0 > pinPlatoonUniformScarceMax {
+			continue
+		}
+		uniform := true
+		for _, p := range platoons[1:] {
+			if counts[p][code] != c0 {
+				uniform = false
+				break
+			}
+		}
+		if uniform {
+			out[code] = struct{}{}
+		}
+	}
+	return out
+}
+
+func platoonQuotaLoadCost(
+	cfg FullDayTeamSpec,
+	eligible []*Soldier,
+	typeCodes []string,
+	deltasG []float64,
+	uniformTypes map[string]struct{},
+) float64 {
+	if len(cfg.TypeQuotas) == 0 || len(uniformTypes) == 0 {
+		return 0
+	}
+	byType := map[string][]float64{}
+	for _, s := range eligible {
+		tc := soldierTypeCode(typeCodes, s.Idx)
+		if tc == "" {
+			continue
+		}
+		byType[tc] = append(byType[tc], soldierEffectiveGlobal(s, deltasG[s.Idx]))
+	}
+	var cost float64
+	for _, ent := range sortedTypeQuotas(cfg.TypeQuotas, typeCodes) {
+		if _, ok := uniformTypes[ent.code]; !ok {
+			continue
+		}
+		loads := append([]float64(nil), byType[ent.code]...)
+		sort.Float64s(loads)
+		if len(loads) < ent.q {
+			continue
+		}
+		for i := 0; i < ent.q; i++ {
+			cost += loads[i]
+		}
+	}
+	return cost
+}
+
 func platoonFullDayTeamScore(
 	platoon string,
 	cfg FullDayTeamSpec,
@@ -218,21 +332,16 @@ func platoonFullDayTeamScore(
 	if !platoonCanFillFullDayTeam(platoon, cfg, soldiers, typeCodes, platoonCodes, excl, busy, L0, span, B, days, day, sh0, sh1, avail) {
 		return false, 0
 	}
-	var eligible int
-	var loadSum float64
+	var eligible []*Soldier
 	for _, s := range soldiers {
 		if !soldierEligibleFullDayTeam(s, nil, platoonCodes, platoon, "", typeCodes, excl, busy, L0, span, B, days, day, sh0, sh1, avail) {
 			continue
 		}
-		eligible++
-		loadSum += deltasG[s.Idx]
+		eligible = append(eligible, s)
 	}
-	avgLoad := 0.0
-	if eligible > 0 {
-		avgLoad = loadSum / float64(eligible)
-	}
-	// Prefer more eligible soldiers, then lower average load (fairness-friendly).
-	return true, float64(eligible)*1e6 - avgLoad
+	uniformTypes := pinPlatoonUniformScarceTypes(platoonCodes, typeCodes, cfg.TypeQuotas)
+	quotaCost := platoonQuotaLoadCost(cfg, eligible, typeCodes, deltasG, uniformTypes)
+	return true, float64(len(eligible)) - quotaCost*1e6
 }
 
 func orderedPlatoonsForFullDayTeam(

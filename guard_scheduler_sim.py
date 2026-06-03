@@ -1511,6 +1511,83 @@ def _platoon_can_fill_full_day_team(
     return total >= int(cfg["headcount"])
 
 
+# pin_platoon rotation cost: only types with the same roster count (1..3) in every platoon.
+_PIN_PLATOON_UNIFORM_SCARCE_MAX = 3
+
+
+def _pin_platoon_uniform_scarce_types(
+    platoon_codes: Optional[Sequence[str]],
+    type_codes: Optional[Sequence[str]],
+    quotas: Dict[str, int],
+    *,
+    max_count: int = _PIN_PLATOON_UNIFORM_SCARCE_MAX,
+) -> frozenset[str]:
+    """Type codes with identical roster count in every platoon (<= max_count).
+
+    Example: A=1 and G=2 in each platoon are included; H=3/2/3 is excluded.
+    Bulk multi-seat quotas (e.g. E×3) are always excluded.
+    """
+    if not platoon_codes or not type_codes or not quotas:
+        return frozenset()
+    platoons = sorted({str(pc).strip() for pc in platoon_codes if str(pc).strip()})
+    if not platoons:
+        return frozenset()
+    counts: Dict[str, Dict[str, int]] = {p: {} for p in platoons}
+    for idx, pc in enumerate(platoon_codes):
+        p = str(pc).strip()
+        if p not in counts:
+            continue
+        tc = _soldier_type_code(type_codes, idx)
+        if not tc:
+            continue
+        counts[p][tc] = counts[p].get(tc, 0) + 1
+    uniform: set[str] = set()
+    for code, q in quotas.items():
+        if int(q) > 1:
+            continue
+        per_platoon = [counts[p].get(code, 0) for p in platoons]
+        c0 = per_platoon[0]
+        if c0 <= 0 or c0 > max_count:
+            continue
+        if all(c == c0 for c in per_platoon):
+            uniform.add(code)
+    return frozenset(uniform)
+
+
+def _platoon_quota_load_cost(
+    cfg: Dict[str, Any],
+    eligible: Sequence[Soldier],
+    type_codes: Optional[Sequence[str]],
+    deltas_g: np.ndarray,
+    uniform_types: frozenset[str],
+) -> Tuple[float, List[str]]:
+    """Load cost for uniform scarce quota seats (pin_platoon rotation).
+
+    Only types in ``uniform_types`` contribute. If a type has too few eligible
+    soldiers (vacation/busy), that type is skipped for this platoon/day.
+    """
+    quotas: Dict[str, int] = dict(cfg.get("type_quotas") or {})
+    if not quotas or not uniform_types:
+        return 0.0, []
+    by_type: Dict[str, List[float]] = {}
+    for s in eligible:
+        tc = _soldier_type_code(type_codes, s.idx)
+        if not tc:
+            continue
+        by_type.setdefault(tc, []).append(s.effective_global(float(deltas_g[s.idx])))
+    cost = 0.0
+    used: List[str] = []
+    for code, q in _sorted_type_quotas(quotas, type_codes or ()):
+        if code not in uniform_types:
+            continue
+        loads = sorted(by_type.get(code, []))
+        if len(loads) < q:
+            continue
+        cost += sum(loads[:q])
+        used.append(code)
+    return cost, used
+
+
 def _platoon_full_day_team_score(
     platoon: str,
     cfg: Dict[str, Any],
@@ -1547,8 +1624,7 @@ def _platoon_full_day_team_score(
         availability,
     ):
         return False, 0.0
-    eligible = 0
-    load_sum = 0.0
+    eligible: List[Soldier] = []
     for s in soldiers:
         if not _soldier_eligible_full_day_team(
             s,
@@ -1569,10 +1645,14 @@ def _platoon_full_day_team_score(
             availability,
         ):
             continue
-        eligible += 1
-        load_sum += s.effective_global(float(deltas_g[s.idx]))
-    avg_load = load_sum / eligible if eligible > 0 else 0.0
-    return True, float(eligible) * 1e6 - avg_load
+        eligible.append(s)
+    quotas = dict(cfg.get("type_quotas") or {})
+    uniform_types = _pin_platoon_uniform_scarce_types(platoon_codes, type_codes, quotas)
+    quota_cost, _scarce_types = _platoon_quota_load_cost(
+        cfg, eligible, type_codes, deltas_g, uniform_types
+    )
+    # Prefer lower quota-holder load (commanders/typed seats); eligible count is tiebreaker only.
+    return True, float(len(eligible)) - quota_cost * 1e6
 
 
 def _ordered_platoons_for_full_day_team(
@@ -1601,6 +1681,9 @@ def _ordered_platoons_for_full_day_team(
         seen.add(pc)
         codes.append(pc)
     ranked: List[Tuple[str, bool, float]] = []
+    _uniform_types = _pin_platoon_uniform_scarce_types(
+        platoon_codes, type_codes, dict(cfg.get("type_quotas") or {})
+    )
     for pc in codes:
         ok, sc = _platoon_full_day_team_score(
             pc,
@@ -1621,6 +1704,64 @@ def _ordered_platoons_for_full_day_team(
             deltas_g,
         )
         ranked.append((pc, ok, sc))
+        # #region agent log
+        if _config_flag_enabled(cfg, "pin_platoon"):
+            import json as _json, time as _time
+            _elig = [
+                s
+                for s in soldiers
+                if _soldier_eligible_full_day_team(
+                    s,
+                    (),
+                    platoon_codes,
+                    pc,
+                    "",
+                    type_codes,
+                    excl,
+                    busy,
+                    L0,
+                    span,
+                    B,
+                    days,
+                    day,
+                    sh0,
+                    sh1,
+                    availability,
+                )
+            ]
+            _qc, _scarce = (
+                _platoon_quota_load_cost(cfg, _elig, type_codes, deltas_g, _uniform_types)
+                if ok
+                else (None, [])
+            )
+            _payload = {
+                "sessionId": "cefca6",
+                "runId": "post-fix",
+                "hypothesisId": "A",
+                "location": "guard_scheduler_sim.py:_ordered_platoons_for_full_day_team",
+                "message": "pin_platoon score",
+                "data": {
+                    "day": day + 1,
+                    "platoon": pc,
+                    "ok": ok,
+                    "score": sc,
+                    "eligible": len(_elig),
+                    "quota_cost": _qc,
+                    "uniform_types": sorted(_uniform_types),
+                    "scored_types": _scarce,
+                },
+                "timestamp": int(_time.time() * 1000),
+            }
+            try:
+                with open(
+                    "/Users/hhaim/scratch/guard/.cursor/debug-cefca6.log",
+                    "a",
+                    encoding="utf-8",
+                ) as _lf:
+                    _lf.write(_json.dumps(_payload) + "\n")
+            except OSError:
+                pass
+        # #endregion
     ranked.sort(key=lambda r: (not r[1], -r[2], r[0]))
     return [r[0] for r in ranked]
 
