@@ -1681,9 +1681,6 @@ def _ordered_platoons_for_full_day_team(
         seen.add(pc)
         codes.append(pc)
     ranked: List[Tuple[str, bool, float]] = []
-    _uniform_types = _pin_platoon_uniform_scarce_types(
-        platoon_codes, type_codes, dict(cfg.get("type_quotas") or {})
-    )
     for pc in codes:
         ok, sc = _platoon_full_day_team_score(
             pc,
@@ -1704,64 +1701,6 @@ def _ordered_platoons_for_full_day_team(
             deltas_g,
         )
         ranked.append((pc, ok, sc))
-        # #region agent log
-        if _config_flag_enabled(cfg, "pin_platoon"):
-            import json as _json, time as _time
-            _elig = [
-                s
-                for s in soldiers
-                if _soldier_eligible_full_day_team(
-                    s,
-                    (),
-                    platoon_codes,
-                    pc,
-                    "",
-                    type_codes,
-                    excl,
-                    busy,
-                    L0,
-                    span,
-                    B,
-                    days,
-                    day,
-                    sh0,
-                    sh1,
-                    availability,
-                )
-            ]
-            _qc, _scarce = (
-                _platoon_quota_load_cost(cfg, _elig, type_codes, deltas_g, _uniform_types)
-                if ok
-                else (None, [])
-            )
-            _payload = {
-                "sessionId": "cefca6",
-                "runId": "post-fix",
-                "hypothesisId": "A",
-                "location": "guard_scheduler_sim.py:_ordered_platoons_for_full_day_team",
-                "message": "pin_platoon score",
-                "data": {
-                    "day": day + 1,
-                    "platoon": pc,
-                    "ok": ok,
-                    "score": sc,
-                    "eligible": len(_elig),
-                    "quota_cost": _qc,
-                    "uniform_types": sorted(_uniform_types),
-                    "scored_types": _scarce,
-                },
-                "timestamp": int(_time.time() * 1000),
-            }
-            try:
-                with open(
-                    "/Users/hhaim/scratch/guard/.cursor/debug-cefca6.log",
-                    "a",
-                    encoding="utf-8",
-                ) as _lf:
-                    _lf.write(_json.dumps(_payload) + "\n")
-            except OSError:
-                pass
-        # #endregion
     ranked.sort(key=lambda r: (not r[1], -r[2], r[0]))
     return [r[0] for r in ranked]
 
