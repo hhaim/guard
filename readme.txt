@@ -16,6 +16,10 @@ go run ./cmd/guardsim -x 80 -y 11 -d 4 -seed 42 -min-consecutive-free-hours 6 -z
 python3 guard_scheduler_sim.py -x 80 -y 11 -d 40 --seed 42 --min-consecutive-free-hours 6 --zones zones-dv2.yaml --min-free-shifts-after-duty 2 --roster roster-dv2.yaml --hot
 
 
+python3 guard_scheduler_sim.py -x 79 -y 1 -d 1 --seed 42 --min-consecutive-free-hours 6 --zones-dv3.yaml --min-free-shifts-after-duty 2 --roaster roster-dv3.yaml 
+python3 guard_scheduler_sim.py -x 79 -y 10 -d 1 --seed 42 --min-consecutive-free-hours 6 --zones zones-dv3.yaml --min-free-shifts-after-duty 2 --roster roster-dv3.yaml  --anchor-date 2026-06-01
+
+
 ================
 * add daniel use-case 
 * create a test 
