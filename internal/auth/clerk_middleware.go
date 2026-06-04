@@ -2,6 +2,7 @@ package auth
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -29,7 +30,7 @@ func ParseAuthorizedParties(corsOrigin string) []string {
 		add(p)
 	}
 	add(corsOrigin)
-	if strings.TrimSpace(os.Getenv("CLERK_DEV_ORIGINS")) != "0" {
+	if includeDevOrigins(corsOrigin) {
 		for _, d := range []string{
 			"http://localhost:8080",
 			"http://127.0.0.1:8080",
@@ -40,6 +41,25 @@ func ParseAuthorizedParties(corsOrigin string) []string {
 		}
 	}
 	return out
+}
+
+func includeDevOrigins(corsOrigin string) bool {
+	if strings.TrimSpace(os.Getenv("CLERK_DEV_ORIGINS")) == "0" {
+		return false
+	}
+	corsOrigin = strings.TrimSpace(corsOrigin)
+	if corsOrigin == "" {
+		return true
+	}
+	u, err := url.Parse(corsOrigin)
+	if err != nil || u.Host == "" {
+		return true
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || host == "127.0.0.1" {
+		return true
+	}
+	return !strings.EqualFold(u.Scheme, "https")
 }
 
 func authorizedPartyMatcher(parties []string) jwt.AuthorizedPartyHandler {

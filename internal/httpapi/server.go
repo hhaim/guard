@@ -90,20 +90,8 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"status": "ok"}
-	if s.Auth != nil {
-		out["auth"] = map[string]any{
-			"clerk_jwt":           true,
-			"authorized_parties":  s.Auth.AuthorizedParties,
-		}
-	} else {
-		out["auth"] = map[string]any{
-			"clerk_jwt": false,
-			"hint":      "Set CLERK_SECRET_KEY on the API (same Clerk app as VITE_CLERK_PUBLISHABLE_KEY)",
-		}
-	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleGetCfg(w http.ResponseWriter, r *http.Request) {

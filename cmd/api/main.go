@@ -16,6 +16,7 @@ import (
 	"guard/internal/auth"
 	"guard/internal/db"
 	"guard/internal/httpapi"
+	"guard/internal/middleware"
 	"guard/internal/repo"
 )
 
@@ -96,7 +97,8 @@ func main() {
 		staticDir = "web/dist"
 	}
 	handler := withStatic(api.Handler(), staticDir)
-	handler = corsMiddleware(handler, os.Getenv("CORS_ORIGIN"))
+	handler = middleware.CORS(handler, os.Getenv("CORS_ORIGIN"))
+	handler = middleware.SecurityHeaders(handler)
 
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
@@ -132,18 +134,3 @@ func withStatic(api http.Handler, dir string) http.Handler {
 	})
 }
 
-func corsMiddleware(next http.Handler, origin string) http.Handler {
-	if origin == "" {
-		origin = "*"
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key, Authorization")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}

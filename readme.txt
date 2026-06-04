@@ -31,6 +31,7 @@ deploy:
 =========
 more .env
 fly deploy --build-arg VITE_CLERK_PUBLISHABLE_KEY='pk_...'
+fly secrets set CSP_REPORT_ONLY=1
 
 curl https://guard-scheduler.fly.dev/health
 fly logs
