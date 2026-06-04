@@ -347,6 +347,7 @@ func RunSimulationZoneConfigExtend(
 
 	if !skipNonrotExtend {
 	// --- full_day_team ---
+	pinPlatoonWins := make(map[int]map[string]int)
 	for day := dayStart; day < dayEnd; day++ {
 		planDay := day - prefixDays
 		clear2D(deltasLoc)
@@ -362,10 +363,18 @@ func RunSimulationZoneConfigExtend(
 			locI := zone.Slots[sidx].LocationIndex
 			tid := zone.Locations[locI].TypeID
 			cfg := zone.FullDayTeamSpecs[tid]
+			var pinWins map[string]int
+			if cfg.PinPlatoon {
+				pinWins = pinPlatoonWins[locI]
+				if pinWins == nil {
+					pinWins = make(map[string]int)
+					pinPlatoonWins[locI] = pinWins
+				}
+			}
 			if err := fillFullDayTeamPost(
 				zone, day, planDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes, busy,
 				dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
-				B, sh, totalDays, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, extendAvail, &newAssignments,
+				B, sh, totalDays, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, extendAvail, &newAssignments, pinWins,
 			); err != nil {
 				return nil, nil, err
 			}

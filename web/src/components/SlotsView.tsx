@@ -1071,11 +1071,11 @@ function FullDayTeamConfigFields({
             onChange(pin_platoon ? { ...config, pin_platoon: true } : { ...config, pin_platoon: undefined });
           }}
         />
-        <span className="settings-row-label">Pin platoon (one platoon per team shift)</span>
+        <span className="settings-row-label">Pin platoon (prefer one platoon per team shift)</span>
       </label>
       <p className="contacts-hint">
-        When enabled, every soldier on this post for a day comes from the same platoon. The scheduler picks the
-        fittest platoon first, then tries others if needed.
+        Tries to staff the whole team from one platoon (fittest first). If a quota seat cannot be filled inside that
+        platoon, soldiers may be taken from other platoons; type minimums are always enforced.
       </p>
     </>
   );

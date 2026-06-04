@@ -17,7 +17,10 @@ python3 guard_scheduler_sim.py -x 80 -y 11 -d 40 --seed 42 --min-consecutive-fre
 
 
 python3 guard_scheduler_sim.py -x 79 -y 1 -d 1 --seed 42 --min-consecutive-free-hours 6 --zones-dv3.yaml --min-free-shifts-after-duty 2 --roaster roster-dv3.yaml 
-python3 guard_scheduler_sim.py -x 79 -y 10 -d 1 --seed 42 --min-consecutive-free-hours 6 --zones zones-dv3.yaml --min-free-shifts-after-duty 2 --roster roster-dv3.yaml  --anchor-date 2026-06-01
+python3 guard_scheduler_sim.py -x 79 -y 10 -d 1 --seed 42 --min-consecutive-free-hours 6 --zones zones-dv3.yaml --min-free-shifts-after-duty 2 --roster roster-dv3.yaml  --anchor-date 2026-06-04 
+
+# dv3 sick-H scenario: only s43 H available 2026-06-04..07 (plan days 0-3); simulate 3 days from anchor
+python3 guard_scheduler_sim.py -x 79 -y 10 -d 3 --seed 42 --min-consecutive-free-hours 6 --zones zones-dv3.yaml --min-free-shifts-after-duty 2 --roster roster-dv3-h-sick.yaml --anchor-date 2026-06-04
 
 
 ================
@@ -45,3 +48,7 @@ export DATABASE_URL="$(npx -y neonctl@latest connection-string --pooled)"
 * add id to soldiers 
 * add accordion to slots 
 * add color setting 
+
+feature:
+  - pin only if possible (take the other ) 
+  - 

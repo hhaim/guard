@@ -261,20 +261,36 @@ func run() int {
 	}
 
 	if strings.TrimSpace(*rosterPath) != "" {
-		raw, err := os.ReadFile(*rosterPath)
+		rosterRaw, err := os.ReadFile(*rosterPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: read roster: %v\n", err)
 			return 2
 		}
-		typeCodes, err = guardsched.LoadRosterTypeCodesYAML(raw, roster)
+		typeCodes, err = guardsched.LoadRosterTypeCodesYAML(rosterRaw, roster)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: roster types: %v\n", err)
 			return 2
 		}
-		platoonCodes, err = guardsched.LoadRosterPlatoonCodesYAML(raw, roster)
+		platoonCodes, err = guardsched.LoadRosterPlatoonCodesYAML(rosterRaw, roster)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: roster platoons: %v\n", err)
 			return 2
+		}
+		if anchorPtr != nil {
+			statusEntries, err := guardsched.LoadRosterStatusYAML(rosterRaw)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: roster status: %v\n", err)
+				return 2
+			}
+			if len(statusEntries) > 0 {
+				avail = guardsched.BuildRosterAvailabilityChecker(
+					*anchorPtr, planStartHour, roster, statusEntries, nDays,
+				)
+				if !*quiet {
+					fmt.Fprintf(os.Stderr, "Roster status: %d blocking entries (anchor=%s)\n",
+						len(statusEntries), anchorPtr.Format("2006-01-02"))
+				}
+			}
 		}
 	}
 

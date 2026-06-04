@@ -144,8 +144,9 @@ export function SlotsGuideEn() {
               <strong>Pin platoon</strong> (<code>pin_platoon</code>)
             </td>
             <td>
-              Fills typed minimums first (largest quota first), then generic seats; optional same-platoon team when{" "}
-              <code>pin_platoon</code>; matrix lists all names in the cell
+              Fills typed minimums first (largest quota first), then generic seats; with{" "}
+              <code>pin_platoon</code>, prefers one platoon per day and may mix platoons only when a quota cannot be met
+              inside the preferred platoon; matrix lists all names in the cell
             </td>
           </tr>
           <tr>
@@ -241,13 +242,15 @@ export function SlotsGuideEn() {
             </td>
           </tr>
           <tr>
-            <td>Pin platoon (one platoon per team shift)</td>
+            <td>Pin platoon (prefer one platoon per team shift)</td>
             <td>
               <code>pin_platoon: true</code>
             </td>
             <td>
-              All soldiers on that post for the day share one <code>platoon_code</code>; scheduler tries platoons by
-              fitness, then others. Requires roster platoon on soldiers.
+              Optimistic pinning: tries one <code>platoon_code</code> per day (by fitness), then per-seat fallback to
+              other platoons if a quota cannot be filled inside it. Single-seat quotas (e.g. <code>H: 1</code>) steer
+              rotation even when roster counts differ per platoon. <code>type_quotas</code> stay hard. Requires roster
+              platoon on soldiers.
             </td>
           </tr>
         </tbody>
@@ -344,8 +347,9 @@ export function SlotsGuideEn() {
           12:00–24:00 with different multipliers).
         </li>
         <li>
-          <strong>Pin platoon team post:</strong> <code>full_day_team</code> with <strong>Pin platoon</strong> checked;
-          assign <strong>Platoon</strong> on the roster (Soldiers tab). See YAML example above.
+          <strong>Pin platoon team post:</strong> <code>full_day_team</code> with <strong>Pin platoon</strong> checked
+          (one platoon when possible; cross-platoon only for missing quota seats); assign <strong>Platoon</strong> on the
+          roster (Soldiers tab). See YAML example above.
         </li>
         <li>
           <strong>Mixed roster:</strong> define several locations under zone locations, but only locations referenced in

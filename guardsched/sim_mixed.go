@@ -78,6 +78,7 @@ func RunSimulationZoneConfig(
 	}
 
 	// --- full_day_team ---
+	pinPlatoonWins := make(map[int]map[string]int)
 	for day := 0; day < days; day++ {
 		clear2D(deltasLoc)
 		clear1D(deltasG)
@@ -92,10 +93,18 @@ func RunSimulationZoneConfig(
 			locI := zone.Slots[sidx].LocationIndex
 			tid := zone.Locations[locI].TypeID
 			cfg := zone.FullDayTeamSpecs[tid]
+			var pinWins map[string]int
+			if cfg.PinPlatoon {
+				pinWins = pinPlatoonWins[locI]
+				if pinWins == nil {
+					pinWins = make(map[string]int)
+					pinPlatoonWins[locI] = pinWins
+				}
+			}
 			if err := fillFullDayTeamPost(
 				zone, day, day, sidx, locI, cfg, soldiers, typeCodes, platoonCodes, busy,
 				dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
-				B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, &assignments,
+				B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, &assignments, pinWins,
 			); err != nil {
 				return nil, nil, err
 			}

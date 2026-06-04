@@ -187,6 +187,180 @@ def test_run_simulation_full_day_team_pin_platoon_same_platoon(tmp_path: Path) -
     assert p0 and p0 == p1
 
 
+def test_pin_platoon_partial_fallback_mixed_platoons(tmp_path: Path) -> None:
+    """Strict single-platoon fill fails; optimistic prefer pulls quota seats from other platoons."""
+    p = tmp_path / "zones.yaml"
+    p.write_text(
+        """
+schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: team
+    pattern: full_day_team
+    config:
+      start: "09:00"
+      end: "17:00"
+      headcount: 3
+      type_quotas: { A: 1, B: 2 }
+      pin_platoon: true
+zone_loc:
+  - { id: loc, type: team, name: T, weight: 1.0 }
+slots:
+  - { location_id: loc, name: t1 }
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }
+""",
+        encoding="utf-8",
+    )
+    zone = g.load_zone_config(p, slots_per_block=1)
+    type_codes = ["A", "B", "B", "B"]
+    platoon_codes = ["1", "1", "2", "2"]
+    anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=11,
+        num_soldiers=4,
+        slots_per_block=1,
+        days=1,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        anchor=anchor,
+        type_codes=type_codes,
+        platoon_codes=platoon_codes,
+        **_SIM_KW,
+    )
+    recs = pack[3]
+    assert len(recs) == 3
+    type_counts: dict[str, int] = {}
+    platoons: set[str] = set()
+    for a in recs:
+        type_counts[type_codes[a.soldier_idx]] = type_counts.get(type_codes[a.soldier_idx], 0) + 1
+        platoons.add(platoon_codes[a.soldier_idx])
+    assert type_counts.get("A") == 1 and type_counts.get("B") == 2
+    assert len(platoons) >= 2
+
+
+def test_pin_platoon_global_infeasible(tmp_path: Path) -> None:
+    p = tmp_path / "zones.yaml"
+    p.write_text(
+        """
+schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: team
+    pattern: full_day_team
+    config:
+      start: "09:00"
+      end: "17:00"
+      headcount: 2
+      type_quotas: { A: 2 }
+      pin_platoon: true
+zone_loc:
+  - { id: loc, type: team, name: T, weight: 1.0 }
+slots:
+  - { location_id: loc, name: t1 }
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }
+""",
+        encoding="utf-8",
+    )
+    zone = g.load_zone_config(p, slots_per_block=1)
+    type_codes = ["A", "B"]
+    platoon_codes = ["1", "2"]
+    anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    with pytest.raises(ValueError):
+        g.run_simulation_best_of(
+            trials=1,
+            base_seed=3,
+            num_soldiers=2,
+            slots_per_block=1,
+            days=1,
+            zone=zone,
+            block_hours=zone.shift_hours,
+            anchor=anchor,
+            type_codes=type_codes,
+            platoon_codes=platoon_codes,
+            **_SIM_KW,
+        )
+
+
+def test_full_day_team_pick_pool_prefer_mode() -> None:
+    import numpy as np
+
+    soldiers = [g.make_soldier(i, 24.0, 1, 1) for i in range(3)]
+    type_codes = ["A", "B", "B"]
+    platoon_codes = ["1", "1", "2"]
+    busy = np.zeros((1, 3, 6), dtype=bool)
+    excl = frozenset()
+    pool = g._full_day_team_pick_pool(
+        soldiers,
+        (),
+        platoon_codes,
+        "1",
+        "prefer",
+        "B",
+        type_codes,
+        excl,
+        busy,
+        0,
+        6,
+        6,
+        1,
+        0,
+        9,
+        17,
+        None,
+    )
+    assert len(pool) == 1
+    assert platoon_codes[pool[0].idx] == "1"
+
+
+def test_pin_platoon_prefer_before_next_platoon_strict(tmp_path: Path) -> None:
+    """Top-scored platoon strict-fails; prefer with same platoon before trying next platoon strict."""
+    p = tmp_path / "zones.yaml"
+    p.write_text(
+        """
+schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: team
+    pattern: full_day_team
+    config:
+      start: "09:00"
+      end: "17:00"
+      headcount: 2
+      pin_platoon: true
+zone_loc:
+  - { id: loc, type: team, name: T, weight: 1.0 }
+slots:
+  - { location_id: loc, name: t1 }
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }
+""",
+        encoding="utf-8",
+    )
+    zone = g.load_zone_config(p, slots_per_block=1)
+    type_codes = ["A", "A", "A"]
+    platoon_codes = ["1", "1", "2"]
+    anchor = datetime(2026, 5, 27, tzinfo=timezone.utc)
+    pack, _ = g.run_simulation_best_of(
+        trials=1,
+        base_seed=5,
+        num_soldiers=3,
+        slots_per_block=1,
+        days=1,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        anchor=anchor,
+        type_codes=type_codes,
+        platoon_codes=platoon_codes,
+        **_SIM_KW,
+    )
+    recs = pack[3]
+    assert len(recs) == 2
+    assert any(platoon_codes[a.soldier_idx] == "1" for a in recs)
+
+
 def test_pin_platoon_rotates_across_days_dv3(tmp_path: Path) -> None:
     """After a platoon serves carmel, quota-holder load should steer the next day elsewhere."""
     root = Path(__file__).resolve().parents[1]
@@ -241,27 +415,51 @@ def test_pin_platoon_uniform_scarce_types_dv3_roster() -> None:
     quotas = {"A": 1, "D": 1, "E": 3, "F": 1, "G": 1, "H": 1}
     uniform = g._pin_platoon_uniform_scarce_types(platoon_codes, type_codes, quotas)
     assert uniform == frozenset({"A", "G"})
+    rotation = g._pin_platoon_rotation_types(platoon_codes, type_codes, quotas)
+    assert "H" in rotation
+    assert rotation >= frozenset({"A", "G", "H", "D", "F"})
 
 
 def test_platoon_quota_load_cost_skips_non_uniform_and_vacation() -> None:
-    """Cost uses uniform types only; skip G when only one medic is eligible."""
+    """Cost uses rotation types; skip G when only one medic is eligible in platoon."""
     import numpy as np
 
-    cfg = {"type_quotas": {"A": 1, "G": 1, "H": 1}}
+    cfg = {"type_quotas": {"A": 1, "G": 1}}
     type_codes = ["A", "G", "G"]
     platoon_codes = ["1", "1", "1"]
     soldiers = [g.make_soldier(i, 24.0, 1, 1) for i in range(3)]
     deltas = np.zeros(3)
     soldiers[0].w_global = 4.0
-    uniform = g._pin_platoon_uniform_scarce_types(platoon_codes, type_codes, cfg["type_quotas"])
-    assert uniform == frozenset({"A", "G"})
-    cost, used = g._platoon_quota_load_cost(cfg, soldiers, type_codes, deltas, uniform)
+    rotation = g._pin_platoon_rotation_types(platoon_codes, type_codes, cfg["type_quotas"])
+    assert rotation == frozenset({"A", "G"})
+    global_by = g._effective_loads_by_type(soldiers, type_codes, deltas)
+    local_by = global_by
+    cost, used = g._platoon_quota_load_cost(cfg, local_by, global_by, type_codes, rotation)
     assert used == ["A", "G"]
 
-    # One G on vacation: score only A
-    cost2, used2 = g._platoon_quota_load_cost(cfg, soldiers[:1], type_codes, deltas, uniform)
-    assert used2 == ["A"]
-    assert cost2 == soldiers[0].effective_global(0.0)
+    # Only A in platoon slice: G uses global loads + cross-platoon penalty
+    local_one = g._effective_loads_by_type(soldiers[:1], type_codes, deltas)
+    cost2, used2 = g._platoon_quota_load_cost(cfg, local_one, global_by, type_codes, rotation)
+    assert used2 == ["A", "G"]
+    assert cost2 > soldiers[0].effective_global(0.0)
+
+
+def test_platoon_quota_load_cost_H_local_beats_cross_platoon() -> None:
+    """Platoon with the only available H should score better than platoons that must borrow H."""
+    import numpy as np
+
+    cfg = {"type_quotas": {"H": 1}}
+    type_codes = ["H", "A", "A"]
+    platoon_codes = ["1", "2", "2"]
+    soldiers = [g.make_soldier(i, 24.0, 1, 1) for i in range(3)]
+    deltas = np.zeros(3)
+    global_by = g._effective_loads_by_type(soldiers, type_codes, deltas)
+    rotation = g._pin_platoon_rotation_types(platoon_codes, type_codes, cfg["type_quotas"])
+    local_p1 = g._effective_loads_by_type([soldiers[0]], type_codes, deltas)
+    local_p2 = g._effective_loads_by_type(soldiers[1:], type_codes, deltas)
+    cost_p1, _ = g._platoon_quota_load_cost(cfg, local_p1, global_by, type_codes, rotation)
+    cost_p2, _ = g._platoon_quota_load_cost(cfg, local_p2, global_by, type_codes, rotation)
+    assert cost_p1 < cost_p2
 
 
 def test_run_simulation_full_day_team_busy_tensor() -> None:

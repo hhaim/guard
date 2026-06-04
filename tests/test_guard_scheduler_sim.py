@@ -1529,3 +1529,20 @@ def test_run_simulation_rotating_respects_exclude(tmp_path: Path) -> None:
         assert a.soldier_idx not in excluded_idxs, (
             f"soldier S{a.soldier_idx} type {type_codes[a.soldier_idx]!r} on rotating slot"
         )
+
+
+def test_build_roster_availability_checker_uses_plan_start_hour() -> None:
+    """Regression: wrapper must pass (plan_start_hour, days) in AvailabilityChecker order."""
+    from datetime import datetime, timezone
+
+    sick = ROOT / "roster-dv3-h-sick.yaml"
+    if not sick.is_file():
+        pytest.skip("roster-dv3-h-sick.yaml not present")
+    anchor = datetime(2026, 6, 4, tzinfo=timezone.utc)
+    keys = g.roster_keys(79)
+    chk = g.build_roster_availability_checker(sick, anchor, keys, days=1, plan_day_start_hour=5)
+    assert chk is not None
+    assert chk.plan_start_hour == 5
+    assert chk.days == 1
+    s43 = keys.index("s43")
+    assert chk.avail_rotating_block(s43, 0, 5, 5, 4.0)

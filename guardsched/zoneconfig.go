@@ -24,7 +24,8 @@ type FullDayTeamSpec struct {
 	HoursFactor  float64 // credited duty fraction (default 1); busy span unchanged
 	Headcount    int
 	TypeQuotas   map[string]int
-	// PinPlatoon: all soldiers on this post share one platoon_code (class); try platoons in score order.
+	// PinPlatoon: optimistic platoon pinning — for each platoon in score order: strict fill, then per-seat
+	// relax (same preferred platoon), then next platoon. type_quotas remain hard in all cases.
 	PinPlatoon bool
 }
 
