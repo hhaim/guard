@@ -39,7 +39,7 @@ func TestDV2SparseHistoryPrefixMissingFullDaySlots(t *testing.T) {
 	cold, err := RunSimulationZoneConfigWithContinuation(
 		zc, nSoldiers, 1, 1, rng,
 		6, true, 0, 2, 2, 0.2,
-		5, nil, &wedAnchor, typeCodes, nil, &seed,
+		5, nil, &wedAnchor, typeCodes, nil, &seed, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestDV2SparseHistoryPrefixMissingFullDaySlots(t *testing.T) {
 	coldOnly, _, err := RunSimulationZoneConfig(
 		zc, nSoldiers, 1, NewPyRandom(seed),
 		6, true, 0, 2, 2, 0.2,
-		5, nil, &anchor, typeCodes, nil, nil,
+		5, nil, &anchor, typeCodes, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

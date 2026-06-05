@@ -25,7 +25,7 @@ func TestHotZonesS2ExtendOneDay(t *testing.T) {
 	seed := int64(42)
 	cold, err := RunSimulationZoneConfigWithContinuation(
 		z, 18, 1, 1, NewPyRandom(seed),
-		6, true, 0, 2, 2, 0.2, 5, nil, &anchor, typeCodes, nil, &seed,
+		6, true, 0, 2, 2, 0.2, 5, nil, &anchor, typeCodes, nil, &seed, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

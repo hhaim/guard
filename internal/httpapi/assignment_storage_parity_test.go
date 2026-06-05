@@ -48,7 +48,7 @@ func TestDBAssignmentStorageMatchesCheckpointPayload(t *testing.T) {
 	recs, _, err := guardsched.RunSimulationZoneConfig(
 		zone, numSoldiers, days, rng,
 		6, true, 0, 2, 2, 0.2,
-		5, nil, &anchor, typeCodes, nil, nil,
+		5, nil, &anchor, typeCodes, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

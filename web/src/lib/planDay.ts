@@ -106,7 +106,7 @@ export function planDayTitle(
 ): string {
   const calendarDate = calendarDateForDay(anchorDate, dayIndex0);
   const weekday = weekdayNameAtPlanDayStart(anchorDate, dayIndex0, planStartHour);
-  return `Day ${dayIndex0 + 1} — ${weekday}, ${calendarDate}`;
+  return `Day ${dayIndex0}  ${weekday}, ${calendarDate}`;
 }
 
 export function planDayTitleForCalendarDate(
@@ -115,7 +115,7 @@ export function planDayTitleForCalendarDate(
   planStartHour: number = DEFAULT_PLAN_DAY_START_HOUR,
 ): string {
   const weekday = weekdayNameForCalendarPlanDay(calendarDate, planStartHour);
-  return `Day ${dayIndex0 + 1} — ${weekday}, ${calendarDate}`;
+  return `Day ${dayIndex0}  ${weekday}, ${calendarDate}`;
 }
 
 export function resolvePlanDayStartHour(

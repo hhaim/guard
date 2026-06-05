@@ -77,12 +77,17 @@ export function buildMatrixCellTooltip(
   soldierIds: string[],
   soldiers: Soldier[],
   typesDoc?: SoldierTypesDoc,
+  coords?: { day: number; slot: number; shift: number },
 ): string[] {
   const meta = resolveSoldierMeta(soldierIdx, soldierIds, soldiers, typesDoc);
   const slotHours = slotHoursFromAssignments(shiftAssignments, slotsPerBlock);
-  return formatSoldierTooltipLines({
+  const lines = formatSoldierTooltipLines({
     ...meta,
     totalHours: compactVectorTotalHours(slotHours),
     slotHours,
   });
+  if (coords) {
+    return [`day:${coords.day} slot:${coords.slot} shift:${coords.shift}`, ...lines];
+  }
+  return lines;
 }

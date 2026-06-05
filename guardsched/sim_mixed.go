@@ -22,6 +22,7 @@ func RunSimulationZoneConfig(
 	anchor *time.Time,
 	typeCodes, platoonCodes []string,
 	witness *SimWitness,
+	customRules *CustomRuleSet,
 ) ([]*AssignmentRecord, *SimulationStats, error) {
 	slotsPerBlock := zone.SlotsPerBlock()
 	if numSoldiers < slotsPerBlock {
@@ -101,10 +102,14 @@ func RunSimulationZoneConfig(
 					pinPlatoonWins[locI] = pinWins
 				}
 			}
+			cfgDay := cfg
+			if customRules != nil {
+				cfgDay = customRules.ApplyTypeRemap(day, sidx, cfg)
+			}
 			if err := fillFullDayTeamPost(
-				zone, day, day, sidx, locI, cfg, soldiers, typeCodes, platoonCodes, busy,
+				zone, day, day, sidx, locI, cfgDay, soldiers, typeCodes, platoonCodes, busy,
 				dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
-				B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, &assignments, pinWins,
+				B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, &assignments, pinWins, customRules,
 			); err != nil {
 				return nil, nil, err
 			}
@@ -160,9 +165,21 @@ func RunSimulationZoneConfig(
 				}
 				return pool
 			}
-			chosenList, err := pickSoldiersForSlot(
+			inPoolFD := func(s *Soldier) bool {
+				if soldierExcludedByType(typeCodes, s.Idx, excl) {
+					return false
+				}
+				if anyBusySpan(busy, s.Idx, L0, span, B, days) {
+					return false
+				}
+				return soldierAvail(avail, s.Idx, day, func() bool {
+					return avail.AvailDutyWallHours(s.Idx, day, sh0, sh1+1)
+				})
+			}
+			chosenList, err := pickSoldiersNWithRules(
 				nReq, poolFn, locI, timeMid, deltasLoc, deltasTime, deltasG, r,
 				bandRelative, balanceTotalHours, totalHoursSlack, nil,
+				customRules, day, sidx, -1, soldiers, typeCodes, inPoolFD, false,
 			)
 			if err != nil {
 				return nil, nil, fmt.Errorf("%w: full_day cannot fill day %d slot %d: %v", ErrRestConstraint, day+1, sidx+1, err)
@@ -308,9 +325,21 @@ func RunSimulationZoneConfig(
 				}
 				return pool
 			}
-			chosenList, err := pickSoldiersForSlot(
+			inPoolWin := func(s *Soldier) bool {
+				if soldierExcludedByType(typeCodes, s.Idx, excl) {
+					return false
+				}
+				if anyBusySpan(busy, s.Idx, L0, span, B, days) {
+					return false
+				}
+				return soldierAvail(avail, s.Idx, day, func() bool {
+					return avail.AvailDutyWallHours(s.Idx, day, h0, h1x)
+				})
+			}
+			chosenList, err := pickSoldiersNWithRules(
 				nReq, poolFn, locI, timeMid, deltasLoc, deltasTime, deltasG, r,
 				bandRelative, balanceTotalHours, totalHoursSlack, nil,
+				customRules, day, sidx, -1, soldiers, typeCodes, inPoolWin, false,
 			)
 			if err != nil {
 				return nil, nil, fmt.Errorf("%w: windowed cannot fill day %d slot %d: %v", ErrRestConstraint, day+1, sidx+1, err)
@@ -350,6 +379,9 @@ func RunSimulationZoneConfig(
 	dfsRotOk := false
 	rotatingDfsTried := false
 	dfsExcl, dfsMayRun := zone.rotatingDfsTypeExclude(rotIdx)
+	if customRules != nil && customRules.HasAny() {
+		dfsMayRun = false
+	}
 	if dfsMayRun && xCool > 0 && len(rotIdx) > 0 &&
 		nChooseK(numSoldiers, len(rotIdx)) <= maxRotatingDfsCombinations {
 		rotatingDfsTried = true
@@ -400,9 +432,18 @@ func RunSimulationZoneConfig(
 							}
 							return pool
 						}
-						chosenList, err := pickSoldiersForRotatingSlot(
+						inPoolRot := func(s *Soldier) bool {
+							for _, x := range poolFn(nil) {
+								if x.Idx == s.Idx {
+									return true
+								}
+							}
+							return false
+						}
+						chosenList, err := pickSoldiersNWithRules(
 							nReq, poolFn, locI, timeJ, deltasLoc, deltasTime, deltasG, r,
 							bandRelative, balanceTotalHours, totalHoursSlack, rotPf,
+							customRules, day, sidx, b, soldiers, typeCodes, inPoolRot, true,
 						)
 						if err != nil {
 							return nil, nil, fmt.Errorf("%w: rotating DFS fill day %d block %d slot %d: %v", ErrRestConstraint, day+1, b+1, sidx+1, err)
@@ -500,9 +541,22 @@ func RunSimulationZoneConfig(
 						}
 						return pool
 					}
-					chosenList, err := pickSoldiersForRotatingSlot(
+					inPoolRot := func(s *Soldier) bool {
+						p := poolFn(nil)
+						if customRules != nil {
+							p = customRules.FilterPool(p, day, sidx, b, typeCodes)
+						}
+						for _, x := range p {
+							if x.Idx == s.Idx {
+								return true
+							}
+						}
+						return false
+					}
+					chosenList, err := pickSoldiersNWithRules(
 						nReq, poolFn, locI, timeJ, deltasLoc, deltasTime, deltasG, r,
 						bandRelative, balanceTotalHours, totalHoursSlack, rotPf,
+						customRules, day, sidx, b, soldiers, typeCodes, inPoolRot, true,
 					)
 					if err != nil {
 						extra := ""

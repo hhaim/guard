@@ -110,12 +110,23 @@ func fillFullDayTeamPost(
 	avail AvailabilityChecker,
 	assignments *[]*AssignmentRecord,
 	pinWins map[string]int,
+	customRules *CustomRuleSet,
 ) error {
+	if customRules != nil {
+		if pinID, ok := customRules.PinPlatoon(day, sidx); ok {
+			return fillFullDayTeamPostForPlatoon(
+				zone, day, assignmentDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes,
+				platoonPickStrict, pinID,
+				busy, dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
+				B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments, customRules,
+			)
+		}
+	}
 	if cfg.PinPlatoon {
 		winPc, err := fillFullDayTeamPostPinPlatoon(
 			zone, day, assignmentDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes,
 			busy, dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
-			B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments, pinWins,
+			B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments, pinWins, customRules,
 		)
 		if err != nil {
 			return err
@@ -129,7 +140,7 @@ func fillFullDayTeamPost(
 		zone, day, assignmentDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes,
 		platoonPickAny, "",
 		busy, dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
-		B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments,
+		B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments, customRules,
 	)
 }
 
@@ -510,6 +521,7 @@ func fillFullDayTeamPostPinPlatoon(
 	avail AvailabilityChecker,
 	assignments *[]*AssignmentRecord,
 	pinWins map[string]int,
+	customRules *CustomRuleSet,
 ) (string, error) {
 	sh0, sh1 := cfg.StartH, cfg.EndH
 	L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, sh0, sh1, false, cfg.RestAfterH, planDayStartHour)
@@ -527,7 +539,7 @@ func fillFullDayTeamPostPinPlatoon(
 			zone, day, assignmentDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes,
 			platoonPickStrict, pc,
 			busy, dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
-			B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments,
+			B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments, customRules,
 		)
 		if err == nil {
 			return pc, nil
@@ -537,7 +549,7 @@ func fillFullDayTeamPostPinPlatoon(
 			zone, day, assignmentDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes,
 			platoonPickPrefer, pc,
 			busy, dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
-			B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments,
+			B, sh, days, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, avail, assignments, customRules,
 		)
 		if err == nil {
 			return pc, nil
@@ -623,6 +635,7 @@ func fillFullDayTeamPostForPlatoon(
 	totalHoursSlack float64,
 	avail AvailabilityChecker,
 	assignments *[]*AssignmentRecord,
+	customRules *CustomRuleSet,
 ) error {
 	sh0, sh1 := cfg.StartH, cfg.EndH
 	L0, span := linearBusySpanDutyHoursPlusRest(day, B, sh, sh0, sh1, false, cfg.RestAfterH, planDayStartHour)
@@ -652,7 +665,28 @@ func fillFullDayTeamPostForPlatoon(
 				}
 				return fmt.Errorf("full_day_team: cannot fill %d generic seats on day %d slot %d", n-pick, day+1, sidx+1)
 			}
-			chosen := pickSoldier(pool, locI, timeMid, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, nil)
+			inPoolTeam := func(s *Soldier) bool {
+				for _, x := range pool {
+					if x.Idx == s.Idx {
+						return true
+					}
+				}
+				return false
+			}
+			chosenList, err := pickSoldiersNWithRules(
+				1, func(_ []*Soldier) []*Soldier { return pool },
+				locI, timeMid, deltasLoc, deltasTime, deltasG, r,
+				bandRelative, balanceTotalHours, totalHoursSlack, nil,
+				customRules, day, sidx, -1, soldiers, typeCodes, inPoolTeam, false,
+			)
+			if err != nil || len(chosenList) == 0 {
+				if typeFilter != "" {
+					return fmt.Errorf("full_day_team: need %d type %s, have %d available on day %d slot %d",
+						n, typeFilter, pick, day+1, sidx+1)
+				}
+				return fmt.Errorf("full_day_team: cannot fill %d generic seats on day %d slot %d", n-pick, day+1, sidx+1)
+			}
+			chosen := chosenList[0]
 			assigned = append(assigned, chosen)
 		}
 		return nil

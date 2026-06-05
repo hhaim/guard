@@ -6,6 +6,7 @@ export type HelpSectionId =
   | "slots"
   | "tutorial-12x4"
   | "plan-workflow"
+  | "expert-rules"
   | "stats"
   | "algorithm";
 
@@ -17,6 +18,7 @@ type HelpUiCopy = {
   languageLabel: string;
   langEn: string;
   langHe: string;
+  backToPlan: string;
   sectionTitles: Record<HelpSectionId, string>;
 };
 
@@ -30,12 +32,14 @@ const COPY: Record<HelpLocale, HelpUiCopy> = {
     languageLabel: "Language",
     langEn: "English",
     langHe: "עברית",
+    backToPlan: "Back to Plan",
     sectionTitles: {
       "getting-started": "Getting started",
       soldiers: "Soldiers",
       slots: "Slots & patterns",
       "tutorial-12x4": "Tutorial 12×4",
       "plan-workflow": "Plan workflow",
+      "expert-rules": "Expert rules",
       stats: "Stats tab",
       algorithm: "Fairness & constraints",
     },
@@ -49,12 +53,14 @@ const COPY: Record<HelpLocale, HelpUiCopy> = {
     languageLabel: "שפה",
     langEn: "English",
     langHe: "עברית",
+    backToPlan: "חזרה לתכנון",
     sectionTitles: {
       "getting-started": "תחילת עבודה",
       soldiers: "חיילים",
       slots: "משבצות ותבניות",
       "tutorial-12x4": "מדריך 12×4",
       "plan-workflow": "תהליך תכנון",
+      "expert-rules": "כללי מומחה",
       stats: "לשונית סטטיסטיקה",
       algorithm: "הוגנות ואילוצים",
     },

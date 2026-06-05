@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { AlgorithmGuide } from "./AlgorithmGuide";
 import { GettingStarted } from "./GettingStarted";
+import { ExpertRulesGuide } from "./ExpertRulesGuide";
 import { PlanWorkflowGuide } from "./PlanWorkflowGuide";
 import { SlotsGuide } from "./SlotsGuide";
 import { SoldiersGuide } from "./SoldiersGuide";
@@ -19,6 +20,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
   { id: "slots", title: "Slots & patterns", Component: SlotsGuide },
   { id: "tutorial-12x4", title: "Tutorial 12×4", Component: Tutorial12x4 },
   { id: "plan-workflow", title: "Plan workflow", Component: PlanWorkflowGuide },
+  { id: "expert-rules", title: "Expert rules", Component: ExpertRulesGuide },
   { id: "stats", title: "Stats tab", Component: StatsGuide },
   { id: "algorithm", title: "Fairness & constraints", Component: AlgorithmGuide },
 ];

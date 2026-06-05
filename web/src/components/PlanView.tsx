@@ -1,7 +1,7 @@
-import { Copy, Download } from "lucide-react";
+import { Check, Copy, Download, FileText, HelpCircle, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ApiError, apiGet } from "../api";
+import { ApiError, apiGet, apiPut } from "../api";
 import {
   applyPlan,
   clearProposal,
@@ -10,6 +10,7 @@ import {
   getProposal,
   listProposals,
   saveProposal,
+  type ExpertRulesCfg,
   type PlanGenerateParams,
   type PlanDoc,
 } from "../api/plan";
@@ -19,6 +20,7 @@ import { planDocFromGenerate } from "../lib/planDoc";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
 import { downloadPlanMatrixXls, planMatrixXlsFilenameForProposal } from "../lib/planMatrixExport";
 import { downloadPlanReportPdf } from "../lib/planPdfExport";
+import { EXPERT_RULES_EXAMPLE_TEXT } from "../lib/expertRulesExamples";
 import { useDevPanel } from "../context/AppStateContext";
 import { parseApiError, type ParsedApiError } from "../lib/apiError";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
@@ -67,9 +69,13 @@ function Field({
 export function PlanView({
   readOnly = false,
   onOpenHelp,
+  openExpertRulesAccordion = false,
+  onExpertRulesAccordionOpened,
 }: {
   readOnly?: boolean;
   onOpenHelp?: (sectionId?: string) => void;
+  openExpertRulesAccordion?: boolean;
+  onExpertRulesAccordionOpened?: () => void;
 }) {
   const qc = useQueryClient();
   const { doc: zonesDoc, slotsQ, loadError: zonesLoadError } = useZonesDocument();
@@ -119,6 +125,18 @@ export function PlanView({
   const [pdfExporting, setPdfExporting] = useState(false);
   const [slotLoading, setSlotLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [expertRulesText, setExpertRulesText] = useState("");
+  const [expertForce, setExpertForce] = useState(false);
+  const [expertGroups, setExpertGroups] = useState<Record<string, string>>({});
+  const [expertRulesVersion, setExpertRulesVersion] = useState(0);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [appendGroupSelect, setAppendGroupSelect] = useState("");
+  const [expertRulesOpen, setExpertRulesOpen] = useState(false);
+  const expertRulesHydratedRef = useRef(false);
+  const [expertParseError, setExpertParseError] = useState<string | null>(null);
+  const [ruleConflicts, setRuleConflicts] = useState<
+    { day: number; slot: number; shift: number; soldier_id: string; reason: string }[]
+  >([]);
 
   const requestDebugOffset = debugDayOffset > 0 ? debugDayOffset : undefined;
 
@@ -149,6 +167,28 @@ export function PlanView({
     queryKey: ["cfg", "global"],
     queryFn: () => apiGet<{ value: unknown }>("/api/cfg/global"),
   });
+
+  const expertRulesQ = useQuery({
+    queryKey: ["cfg", "expert_rules"],
+    queryFn: () =>
+      apiGet<{ value: ExpertRulesCfg; version: number }>("/api/cfg/expert_rules").catch(() => ({
+        value: {},
+        version: 0,
+      })),
+  });
+
+  useEffect(() => {
+    if (expertRulesHydratedRef.current || !expertRulesQ.data) return;
+    expertRulesHydratedRef.current = true;
+    const v = expertRulesQ.data.value as ExpertRulesCfg | undefined;
+    if (!v) return;
+    if (typeof v.rules_text === "string") setExpertRulesText(v.rules_text);
+    if (typeof v.force === "boolean") setExpertForce(v.force);
+    if (v.groups && typeof v.groups === "object") setExpertGroups(v.groups);
+    if (typeof expertRulesQ.data.version === "number") {
+      setExpertRulesVersion(expertRulesQ.data.version);
+    }
+  }, [expertRulesQ.data]);
 
   const platoonColors = useMemo(
     () => parsePlatoonColorsFromGlobal(globalQ.data?.value),
@@ -235,6 +275,12 @@ export function PlanView({
   }, [selectedSlot]);
 
   useEffect(() => {
+    if (!openExpertRulesAccordion) return;
+    setExpertRulesOpen(true);
+    onExpertRulesAccordionOpened?.();
+  }, [openExpertRulesAccordion, onExpertRulesAccordionOpened]);
+
+  useEffect(() => {
     if (!planContextReady) return;
     void loadSlot(selectedSlot, { silent: true });
   }, [anchor, selectedSlot, loadSlot, planContextReady]);
@@ -292,7 +338,82 @@ export function PlanView({
     if (debugDayOffset > 0) {
       body.debug_day_offset = debugDayOffset;
     }
+    const rulesTrim = expertRulesText.trim();
+    if (rulesTrim) {
+      body.rules_text = rulesTrim;
+    }
+    if (expertForce) {
+      body.force = true;
+    }
     return body;
+  };
+
+  const persistExpertRulesCfg = async (groups: Record<string, string>, rulesText: string) => {
+    const value: ExpertRulesCfg = {
+      schema_version: 1,
+      force: expertForce,
+      rules_text: rulesText,
+      groups,
+    };
+    const res = (await apiPut("/api/cfg/expert_rules", {
+      value,
+      expected_version: expertRulesVersion,
+    })) as { version?: number };
+    if (typeof res.version === "number") {
+      setExpertRulesVersion(res.version);
+    }
+    void qc.invalidateQueries({ queryKey: ["cfg", "expert_rules"] });
+  };
+
+  const appendExpertGroup = () => {
+    const name = appendGroupSelect.trim();
+    const chunk = expertGroups[name]?.trim();
+    if (!name || !chunk) return;
+    setExpertRulesText((prev) => {
+      const p = prev.trim();
+      return p ? `${p}\n${chunk}` : chunk;
+    });
+    setExpertParseError(null);
+  };
+
+  const saveExpertAsGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name) return;
+    const nextGroups = { ...expertGroups, [name]: expertRulesText };
+    setExpertGroups(nextGroups);
+    setAppendGroupSelect(name);
+    setNewGroupName("");
+    try {
+      await persistExpertRulesCfg(nextGroups, expertRulesText);
+      setStatusMsg(`Saved rule group “${name}”.`);
+    } catch (e) {
+      setPlanFailure("save", e);
+    }
+  };
+
+  const removeExpertGroup = async () => {
+    const name = appendGroupSelect.trim();
+    if (!name || !expertGroups[name]) return;
+    if (!window.confirm(`Delete saved group “${name}”?`)) return;
+    const nextGroups = { ...expertGroups };
+    delete nextGroups[name];
+    setExpertGroups(nextGroups);
+    setAppendGroupSelect("");
+    try {
+      await persistExpertRulesCfg(nextGroups, expertRulesText);
+      setStatusMsg(`Deleted group “${name}”.`);
+    } catch (e) {
+      setPlanFailure("save", e);
+    }
+  };
+
+  const insertExpertExamples = () => {
+    const chunk = EXPERT_RULES_EXAMPLE_TEXT.trim();
+    setExpertRulesText((prev) => {
+      const p = prev.trim();
+      return p ? `${p}\n\n${chunk}` : chunk;
+    });
+    setExpertParseError(null);
   };
 
   const generateM = useMutation({
@@ -306,15 +427,45 @@ export function PlanView({
       setDirty(false);
       setPlanError(null);
       setErrorAction(null);
+      setExpertParseError(null);
+      const raw = p.meta?.rule_conflicts;
+      if (Array.isArray(raw)) {
+        setRuleConflicts(
+          raw.filter(
+            (c): c is { day: number; slot: number; shift: number; soldier_id: string; reason: string } =>
+              c != null && typeof c === "object"
+          ) as { day: number; slot: number; shift: number; soldier_id: string; reason: string }[]
+        );
+      } else {
+        setRuleConflicts([]);
+      }
       if (typeof data.version === "number") {
         syncCfgVersion(data.version);
       } else {
         void loadSlot(selectedSlot, { silent: true });
       }
-      setStatusMsg(`Generated proposal ${selectedSlot} (${p.assignments.length} assignments).`);
+      setStatusMsg(() => {
+        let msg = `Generated proposal ${selectedSlot} (${p.assignments.length} assignments).`;
+        const applied = p.meta?.custom_rules_applied;
+        if (typeof applied === "number" && applied > 0) {
+          msg += ` Expert rules applied: ${applied}.`;
+        } else if (expertRulesText.trim()) {
+          msg += " Expert rules sent; none matched a seat (check day/slot/shift).";
+        }
+        if (expertRulesText.includes("force:") && !expertForce) {
+          msg += " Force prefer: enable Force if the named soldier did not appear.";
+        }
+        return msg;
+      });
       void qc.invalidateQueries({ queryKey: ["plan", "proposals", anchor, debugDayOffset] });
     },
-    onError: (e) => setPlanFailure("generate", e),
+    onError: (e) => {
+      const parsed = parseApiError(e);
+      if (parsed.code === "validation" && parsed.message.toLowerCase().includes("expert rules")) {
+        setExpertParseError(parsed.message);
+      }
+      setPlanFailure("generate", e);
+    },
   });
 
   const saveM = useMutation({
@@ -549,52 +700,178 @@ export function PlanView({
                 <div className="plan-actions-row">
                   <button
                     type="button"
-                    className="btn btn-filled"
+                    className="btn btn-filled btn-compact"
                     disabled={generateM.isPending || !planContextReady}
                     onClick={handleGenerate}
+                    title="Run simulator into selected proposal slot"
                   >
-                    {generateM.isPending ? "Generating…" : slotFilled ? "Regenerate" : "Generate new"}
+                    {generateM.isPending ? (
+                      "…"
+                    ) : slotFilled ? (
+                      <>
+                        <RefreshCw size={16} aria-hidden />
+                        <span className="sr-only">Generate</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play size={16} aria-hidden />
+                        <span className="sr-only">Generate</span>
+                      </>
+                    )}
                   </button>
                   <button
                     type="button"
-                    className="btn btn-tinted"
+                    className="btn btn-tinted btn-compact"
                     disabled={!proposal || saveM.isPending}
                     onClick={() => saveM.mutate()}
+                    title="Persist draft and manual swaps"
                   >
-                    {saveM.isPending ? "Saving…" : "Save proposal"}
+                    <Save size={16} aria-hidden />
+                    <span className="sr-only">{saveM.isPending ? "Saving" : "Save"}</span>
                   </button>
                   <button
                     type="button"
-                    className="btn btn-tinted"
+                    className="btn btn-tinted btn-compact"
                     disabled={!slotFilled || clearM.isPending}
                     onClick={handleClear}
+                    title="Delete this proposal slot only"
                   >
-                    {clearM.isPending ? "Clearing…" : "Clear proposal"}
+                    <Trash2 size={16} aria-hidden />
+                    <span className="sr-only">{clearM.isPending ? "Clearing" : "Clear"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-filled btn-compact"
+                    disabled={!proposal || applyM.isPending}
+                    onClick={handleApply}
+                    title={`Apply proposal ${selectedSlot} to verified schedule (clears all four slots)`}
+                  >
+                    <Check size={16} aria-hidden />
+                    <span className="sr-only">{applyM.isPending ? "Applying" : "Apply"}</span>
                   </button>
                 </div>
-                <p className="contacts-hint plan-action-hint">
-                  <strong>Generate</strong> runs the simulator into the selected slot. <strong>Save</strong> stores
-                  edits (swaps below). <strong>Clear</strong> removes this slot only.
-                </p>
               </div>
 
-              <div className="plan-actions-group plan-apply-group">
-                <span className="run-field-label title">3. Publish to verified schedule</span>
-                <button
-                  type="button"
-                  className="btn btn-filled plan-apply-btn"
-                  disabled={!proposal || applyM.isPending}
-                  onClick={handleApply}
-                >
-                  {applyM.isPending
-                    ? "Applying…"
-                    : `Apply proposal ${selectedSlot} to verified schedule`}
-                </button>
-                <p className="contacts-hint plan-action-hint">
-                  Applies <strong>proposal {selectedSlot}</strong> for anchor <strong>{anchor || "…"}</strong> only.
-                  Confirms before writing; clears all four proposal slots afterward.
-                </p>
-              </div>
+              <details
+                className="plan-sim-details plan-expert-details"
+                open={expertRulesOpen}
+                onToggle={(e) => setExpertRulesOpen(e.currentTarget.open)}
+              >
+                <summary>Expert rules</summary>
+                <div className="plan-expert-body">
+                  <details className="plan-expert-help" open>
+                    <summary>How to use</summary>
+                    <div className="plan-expert-hint-row">
+                      <p className="contacts-hint plan-expert-hint-text">
+                        One line per rule. Copy <code>day</code>, <code>slot</code>, <code>shift</code> from matrix
+                        tooltips.
+                      </p>
+                      {onOpenHelp ? (
+                        <button
+                          type="button"
+                          className="btn btn-tinted help-plan-link plan-expert-help-btn"
+                          onClick={() => onOpenHelp("expert-rules")}
+                          title="Open Help: Expert rules"
+                        >
+                          <HelpCircle size={18} aria-hidden />
+                          <span className="sr-only">Expert rules guide</span>
+                        </button>
+                      ) : null}
+                    </div>
+                  </details>
+                  {Object.keys(expertGroups).length > 0 ? (
+                    <div className="plan-expert-group-row">
+                      <select
+                        className="settings-input settings-input-wide plan-expert-ltr-input"
+                        value={appendGroupSelect}
+                        onChange={(e) => setAppendGroupSelect(e.target.value)}
+                      >
+                        <option value="">Saved group…</option>
+                        {Object.keys(expertGroups).sort().map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-tinted btn-compact"
+                        disabled={!appendGroupSelect}
+                        onClick={appendExpertGroup}
+                        title="Append selected group to editor"
+                      >
+                        <Plus size={16} aria-hidden />
+                        <span className="sr-only">Append group</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-tinted btn-compact"
+                        disabled={!appendGroupSelect}
+                        onClick={() => void removeExpertGroup()}
+                        title="Delete selected saved group"
+                      >
+                        <Trash2 size={16} aria-hidden />
+                        <span className="sr-only">Delete group</span>
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className="plan-expert-editor-wrap">
+                    <div className="plan-expert-editor-toolbar">
+                      <button
+                        type="button"
+                        className="btn btn-tinted btn-compact"
+                        onClick={insertExpertExamples}
+                        title="Insert all help examples into editor (appended)"
+                      >
+                        <FileText size={16} aria-hidden />
+                        <span className="sr-only">Add examples</span>
+                      </button>
+                    </div>
+                    <textarea
+                      className="settings-input plan-expert-rules-text"
+                      dir="ltr"
+                      value={expertRulesText}
+                      onChange={(e) => {
+                        setExpertRulesText(e.target.value);
+                        setExpertParseError(null);
+                      }}
+                      placeholder={"day:0 slot:1 shift:0 not:s1\nslot:8 pin:3"}
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div className="plan-expert-group-row">
+                    <input
+                      className="settings-input plan-expert-ltr-input plan-expert-group-name"
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      placeholder="Group name"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-tinted btn-compact"
+                      disabled={!newGroupName.trim()}
+                      onClick={() => void saveExpertAsGroup()}
+                      title="Save editor text as group (overwrites same name)"
+                    >
+                      <Save size={16} aria-hidden />
+                      <span className="sr-only">Save group</span>
+                    </button>
+                  </div>
+                  <label className="plan-expert-force contacts-hint">
+                    <input
+                      type="checkbox"
+                      checked={expertForce}
+                      onChange={(e) => setExpertForce(e.target.checked)}
+                    />
+                    <span>
+                      <strong>Force</strong> — assign forced soldiers even when rest/availability blocks them
+                    </span>
+                  </label>
+                  {expertParseError ? (
+                    <p className="contacts-hint plan-expert-error">{expertParseError}</p>
+                  ) : null}
+                </div>
+              </details>
             </>
           ) : (
             <p className="contacts-hint plan-action-hint">Read-only: you can view proposals and stats but cannot generate, save, or apply.</p>
@@ -709,6 +986,20 @@ export function PlanView({
             title="Could not load planning context"
           />
         )}
+        {ruleConflicts.length > 0 ? (
+          <div className="plan-status-msg" style={{ padding: "0 1.1rem 0.75rem" }}>
+            <p className="contacts-hint" style={{ margin: "0 0 0.35rem" }}>
+              <strong>Rule conflicts</strong> ({ruleConflicts.length}) — hard force overrides:
+            </p>
+            <ul className="contacts-hint" style={{ margin: 0, paddingLeft: "1.25rem" }}>
+              {ruleConflicts.map((c, i) => (
+                <li key={i}>
+                  day:{c.day} slot:{c.slot + 1} shift:{c.shift} {c.soldier_id} — {c.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {statusMsg && (
           <p className="contacts-hint plan-status-msg">{statusMsg}</p>
         )}

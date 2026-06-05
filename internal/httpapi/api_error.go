@@ -68,6 +68,15 @@ func scheduleRunRequestSnapshot(body scheduleRunBody, slot string) map[string]an
 	if body.DebugDayOffset != nil {
 		req["debug_day_offset"] = *body.DebugDayOffset
 	}
+	if strings.TrimSpace(body.RulesText) != "" {
+		req["rules_text"] = body.RulesText
+	}
+	if body.Force != nil {
+		req["force"] = *body.Force
+	}
+	if len(body.ExpertActiveGroups) > 0 {
+		req["expert_active_groups"] = body.ExpertActiveGroups
+	}
 	return req
 }
 

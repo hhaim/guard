@@ -193,6 +193,15 @@ export function formatBlockWindow(startHour: number, blockHours: number): string
   return `${pad2(sh)}:00 (+${bh} h)`;
 }
 
+/** Wall-clock window with 0-based shift_id suffix for expert rules / matrix rows. */
+export function formatBlockWindowWithShift(
+  startHour: number,
+  blockHours: number,
+  shiftId: number,
+): string {
+  return `${formatBlockWindow(startHour, blockHours)}(${shiftId})`;
+}
+
 export const REPORT_FUTURE_SHIFT_COUNT = 2;
 export const REPORT_FUTURE_MAX_HOURS = 12;
 
@@ -601,7 +610,7 @@ export function buildScheduleMatrices(
 
     for (const { srcD, srcB, labelB } of rowSpecs) {
       const sh = blockStartHour(planStart, labelB, zone.shiftHours);
-      let win = formatBlockWindow(sh, zone.shiftHours);
+      let win = formatBlockWindowWithShift(sh, zone.shiftHours, srcB);
       if (labelB >= zone.blocksPerDay) win = `${win} (next plan day)`;
       const cells: MatrixCell[] = [];
       const inDay = labelB < zone.blocksPerDay;
@@ -688,12 +697,12 @@ export function buildScheduleMatrices(
       ? weekdayNameForCalendarPlanDay(dayCalendarDate, planStart)
       : undefined;
     matrices.push({
-      day: d + 1,
+      day: d,
       title: dayCalendarDate
         ? planDayTitleForCalendarDate(d, dayCalendarDate, planStart)
         : anchor
           ? planDayTitle(d, anchor, planStart)
-          : `Day ${d + 1}`,
+          : `Day ${d}`,
       calendarDate: dayCalendarDate,
       weekday,
       headers,

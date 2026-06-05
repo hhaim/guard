@@ -60,6 +60,8 @@ func run() int {
 	hot := flag.Bool("hot", false, "Production-style incremental sim: per-day PlanDoc in checkpoint.json")
 	burstDays := flag.Int("burst-days", 1, "With -hot: calendar days per save/load burst")
 	quiet := flag.Bool("quiet", false, "Only print JSON/errors")
+	rulesPath := flag.String("rules", "", "Expert rules text file (compact one-line-per-rule format)")
+	forceRules := flag.Bool("force-rules", false, "Hard force mode for expert force: rules")
 	flag.Parse()
 
 	nSoldiers := *soldiers
@@ -324,11 +326,24 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "Wrote hot store: %s\n", guardsched.DefaultHotStatePath())
 		}
 	} else {
+		var customRules *guardsched.CustomRuleSet
+		if *rulesPath != "" {
+			raw, rerr := os.ReadFile(*rulesPath)
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "error: rules file: %v\n", rerr)
+				return 2
+			}
+			customRules, rerr = guardsched.ParseRulesText(string(raw), zc, keys, *forceRules)
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "error: parse rules: %v\n", rerr)
+				return 2
+			}
+		}
 		recs, stats, meta, err = guardsched.RunSimulationBestOfZoneConfig(
 			zc, nSoldiers, nDays, *simTrials, seedPtr,
 			*minFreeHours, true, 0,
 			*maxDutyBlocks, *minFreeShifts, *bandRelative,
-			planStartHour, avail, anchorPtr, typeCodes, platoonCodes,
+			planStartHour, avail, anchorPtr, typeCodes, platoonCodes, customRules,
 		)
 	}
 	if err != nil {

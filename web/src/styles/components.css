@@ -1338,6 +1338,123 @@
   gap: 0.5rem;
 }
 
+.plan-actions-row .btn-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  font-size: var(--text-sm);
+}
+
+.plan-expert-details textarea.plan-expert-rules-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: var(--text-sm);
+  min-height: 7rem;
+  width: 100%;
+  direction: ltr;
+  text-align: left;
+}
+
+.plan-expert-body {
+  padding: 0 0.25rem 0.5rem;
+  direction: ltr;
+  text-align: left;
+}
+
+[dir="rtl"] .plan-expert-details,
+[dir="rtl"] .plan-expert-body,
+[dir="rtl"] .plan-expert-details textarea.plan-expert-rules-text {
+  direction: ltr;
+  text-align: left;
+}
+
+.plan-expert-group-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.plan-expert-editor-wrap {
+  margin-bottom: 0.5rem;
+}
+
+.plan-expert-editor-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.35rem;
+}
+
+.plan-expert-editor-wrap textarea.plan-expert-rules-text {
+  margin-bottom: 0;
+}
+
+.plan-expert-ltr-input,
+.plan-expert-group-name {
+  direction: ltr;
+  text-align: left;
+}
+
+.plan-expert-group-name {
+  flex: 1 1 8rem;
+  min-width: 8rem;
+}
+
+[dir="rtl"] .plan-expert-ltr-input,
+[dir="rtl"] .plan-expert-group-name {
+  direction: ltr;
+  text-align: left;
+}
+
+.plan-expert-force {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  align-items: flex-start;
+}
+
+.plan-expert-error {
+  color: var(--danger, #b91c1c);
+  margin: 0.35rem 0 0;
+}
+
+.plan-expert-help {
+  margin-bottom: 0.75rem;
+  font-size: var(--text-sm);
+}
+
+.plan-expert-hint-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  direction: ltr;
+  text-align: left;
+}
+
+.plan-expert-hint-text {
+  flex: 1 1 auto;
+  margin: 0;
+  text-align: left;
+}
+
+.plan-expert-help-btn {
+  flex-shrink: 0;
+}
+
+[dir="rtl"] .plan-expert-hint-row,
+[dir="rtl"] .plan-expert-hint-text {
+  direction: ltr;
+  text-align: left;
+}
+
+.plan-expert-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
 .plan-action-hint {
   margin: 0;
   padding: 0;
@@ -2473,6 +2590,17 @@
 
 .help-header {
   padding: 0.85rem 1.1rem;
+}
+
+.help-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.65rem;
+}
+
+[dir="rtl"] .help-back-btn svg {
+  transform: scaleX(-1);
 }
 
 .help-header-row {

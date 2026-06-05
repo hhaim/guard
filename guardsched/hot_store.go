@@ -302,7 +302,7 @@ func RunSimulationHot(
 			cold, err := RunSimulationZoneConfigWithContinuation(
 				zc, numSoldiers, chunk, chunk, rng,
 				minFreeHours, true, 0, maxDutyBlocks, minFreeShifts, bandRel,
-				planStartHour, avail, &anchor, typeCodes, platoonCodes, baseSeed,
+				planStartHour, avail, &anchor, typeCodes, platoonCodes, baseSeed, nil,
 			)
 			if err != nil {
 				return nil, nil, nil, err

@@ -67,10 +67,20 @@ function SignedInApp() {
   const tabs = isAdmin ? ADMIN_TABS : isReadonly ? READONLY_TABS : [];
   const [tab, setTab] = useState<Tab>(isReadonly ? "plan" : "soldiers");
   const [helpSection, setHelpSection] = useState<string | null>(null);
+  const [helpReturnTab, setHelpReturnTab] = useState<Tab | null>(null);
+  const [openPlanExpertRules, setOpenPlanExpertRules] = useState(false);
 
   const openHelp = (sectionId?: string) => {
+    setHelpReturnTab(tab);
+    setOpenPlanExpertRules(sectionId === "expert-rules");
     if (sectionId) setHelpSection(sectionId);
     setTab("help");
+  };
+
+  const returnFromHelp = () => {
+    if (!helpReturnTab) return;
+    setTab(helpReturnTab);
+    setHelpReturnTab(null);
   };
 
   if (meQ.isLoading) {
@@ -103,6 +113,7 @@ function SignedInApp() {
             className={`tab-pill${tab === id ? " active" : ""}`}
             onPointerDown={(e) => {
               e.preventDefault();
+              if (id !== "help") setHelpReturnTab(null);
               setTab(id);
             }}
           >
@@ -115,7 +126,14 @@ function SignedInApp() {
       <ZonesDocumentProvider>
         {tab === "slots" && <SlotsView />}
         {tab === "time_zones" && <TimeZonesView />}
-        {tab === "plan" && <PlanView readOnly={isReadonly} onOpenHelp={openHelp} />}
+        {tab === "plan" && (
+          <PlanView
+            readOnly={isReadonly}
+            onOpenHelp={openHelp}
+            openExpertRulesAccordion={openPlanExpertRules}
+            onExpertRulesAccordionOpened={() => setOpenPlanExpertRules(false)}
+          />
+        )}
         {tab === "stats" && <StatsView isAdmin={isAdmin} />}
       </ZonesDocumentProvider>
       {tab === "global" && <GlobalConfigView />}
@@ -123,6 +141,8 @@ function SignedInApp() {
         <HelpView
           scrollToSection={helpSection}
           onScrolledToSection={() => setHelpSection(null)}
+          showBackToPlan={helpReturnTab === "plan"}
+          onBackToPlan={returnFromHelp}
         />
       )}
       {tab === "users" && isAdmin && <AdminUsersView />}

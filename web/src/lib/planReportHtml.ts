@@ -666,7 +666,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
         m,
         display.shortLabel,
         display,
-        `${m.title} — schedule matrix (time × slot)`
+        m.title
       )
     )
     .join("");
@@ -677,7 +677,7 @@ export function buildPlanReportHtml(input: PlanReportInput): string {
         m,
         display.fullLabel,
         display,
-        `${m.title} — schedule matrix (full name)`,
+        m.title,
         true
       )
     )

@@ -62,4 +62,17 @@ describe("soldierTooltip", () => {
     expect(lines.join("\n")).toMatch(/t:4h/);
     expect(lines.join("\n")).toMatch(/w:\[2:4\.0\]/);
   });
+
+  it("prepends day slot shift coords for matrix cells", () => {
+    const lines = buildMatrixCellTooltip(
+      0,
+      [],
+      4,
+      ["s0"],
+      [{ id: "s0", full_name: "A" }],
+      undefined,
+      { day: 0, slot: 2, shift: 2 },
+    );
+    expect(lines[0]).toBe("day:0 slot:2 shift:2");
+  });
 });

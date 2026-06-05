@@ -29,6 +29,7 @@ func RunSimulationZoneConfigWithContinuation(
 	anchor *time.Time,
 	typeCodes, platoonCodes []string,
 	seed *int64,
+	customRules *CustomRuleSet,
 ) (*ColdSimResult, error) {
 	var witness *SimWitness
 	if witnessSplit > 0 {
@@ -38,7 +39,7 @@ func RunSimulationZoneConfigWithContinuation(
 		zone, numSoldiers, horizonDays, r,
 		minConsecutiveFreeHours, balanceTotalHours, totalHoursSlack,
 		maxConsecutiveDutyBlocks, minFreeShiftsAfterDuty, bandRelative,
-		planDayStartHour, avail, anchor, typeCodes, platoonCodes, witness,
+		planDayStartHour, avail, anchor, typeCodes, platoonCodes, witness, customRules,
 	)
 	if err != nil {
 		return nil, err

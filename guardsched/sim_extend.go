@@ -374,7 +374,7 @@ func RunSimulationZoneConfigExtend(
 			if err := fillFullDayTeamPost(
 				zone, day, planDay, sidx, locI, cfg, soldiers, typeCodes, platoonCodes, busy,
 				dailyRawLoc, dailyRawTime, deltasLoc, deltasTime, deltasG, simZ,
-				B, sh, totalDays, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, extendAvail, &newAssignments, pinWins,
+				B, sh, totalDays, planDayStartHour, r, bandRelative, balanceTotalHours, totalHoursSlack, extendAvail, &newAssignments, pinWins, nil,
 			); err != nil {
 				return nil, nil, err
 			}

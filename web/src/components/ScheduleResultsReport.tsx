@@ -174,6 +174,7 @@ function MatrixCellContent({
       soldierIds,
       soldiers,
       typesDoc,
+      { day: row.planDay, slot: slotIndex + 1, shift: row.srcBlock },
     );
   };
   if (cell.disabled) {
@@ -273,7 +274,7 @@ function ScheduleMatrixTable({
 }) {
   return (
     <div className="sched-matrix-block">
-      <h4 className="sched-subtitle">{matrix.title} — schedule matrix (time × slot)</h4>
+      <h4 className="sched-subtitle">{matrix.title}</h4>
       <div className="sched-table-scroll">
         <table className="sched-table sched-matrix-table">
           <thead>

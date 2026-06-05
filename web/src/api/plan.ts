@@ -26,6 +26,17 @@ export type PlanGenerateParams = {
   sim_trials: number;
   seed?: number;
   debug_day_offset?: number;
+  rules_text?: string;
+  force?: boolean;
+  expert_active_groups?: string[];
+};
+
+export type ExpertRulesCfg = {
+  schema_version?: number;
+  force?: boolean;
+  rules_text?: string;
+  active_groups?: string[];
+  groups?: Record<string, string>;
 };
 
 export type PlanGenerateResult = {

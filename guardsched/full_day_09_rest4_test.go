@@ -44,7 +44,7 @@ func TestRunSimulation_fullDay0909_rotatingBlockedUntil13(t *testing.T) {
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	r := NewPyRandom(7)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, n, 2, r, 0, true, 0, 0, 0, 0.2, planStart, nil, &anchor, typeCodes, nil, nil,
+		zc, n, 2, r, 0, true, 0, 0, 0, 0.2, planStart, nil, &anchor, typeCodes, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestRunSimulationExtend_fullDay0909_rotatingBlockedUntil13(t *testing.T) {
 	witness := &SimWitness{SplitDay: split}
 	r0 := NewPyRandom(7)
 	cold, _, err := RunSimulationZoneConfig(
-		zc, n, 2, r0, 0, true, 0, 0, 0, 0.2, planStart, nil, &anchor, typeCodes, nil, witness,
+		zc, n, 2, r0, 0, true, 0, 0, 0, 0.2, planStart, nil, &anchor, typeCodes, nil, witness, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

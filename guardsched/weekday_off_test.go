@@ -35,7 +35,7 @@ time_zones:
 	}
 	r := NewPyRandom(1)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, 8, 2, r, 6, true, 0, 2, 0, 0.2, 0, nil, &anchor, nil, nil, nil,
+		zc, 8, 2, r, 6, true, 0, 2, 0, 0.2, 0, nil, &anchor, nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ time_zones:
 	}
 	r := NewPyRandom(2)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, 4, 2, r, 6, true, 0, 2, 0, 0.2, 5, nil, &anchor, []string{"A"}, nil, nil,
+		zc, 4, 2, r, 6, true, 0, 2, 0, 0.2, 5, nil, &anchor, []string{"A"}, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ time_zones:
 	}
 	r := NewPyRandom(3)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, 6, 1, r, 6, true, 0, 2, 0, 0.2, 0, nil, nil, nil, nil, nil,
+		zc, 6, 1, r, 6, true, 0, 2, 0, 0.2, 0, nil, nil, nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -68,7 +68,7 @@ func TestRunSimulation_zonesS1_17x5_30d_noPerBlockOverlap(t *testing.T) {
 	seed := int64(42)
 	recs, _, _, err := RunSimulationBestOfZoneConfig(
 		z, 17, 30, 1, &seed,
-		6, true, 0, 2, 2, 0.2, planStartHour, nil, &anchor, typeCodes, nil,
+		6, true, 0, 2, 2, 0.2, planStartHour, nil, &anchor, typeCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestRunSimulation_zonesS2_17x5_30d_disabledWeekdaysNoPerBlockOverlap(t *tes
 	seed := int64(42)
 	recs, _, _, err := RunSimulationBestOfZoneConfig(
 		z, 17, 30, 1, &seed,
-		6, true, 0, 2, 2, 0.2, planStartHour, nil, &anchor, typeCodes, nil,
+		6, true, 0, 2, 2, 0.2, planStartHour, nil, &anchor, typeCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

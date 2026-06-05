@@ -24,6 +24,9 @@ type scheduleRunBody struct {
 	BandRelative            *float64 `json:"band_relative"`
 	SimTrials               *int     `json:"sim_trials"`
 	DebugDayOffset          *int     `json:"debug_day_offset,omitempty"` // per-request; testing only
+	RulesText               string   `json:"rules_text,omitempty"`
+	Force                   *bool    `json:"force,omitempty"`
+	ExpertActiveGroups      []string `json:"expert_active_groups,omitempty"`
 }
 
 type simRunOutput struct {
@@ -332,6 +335,11 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	proc["min_free_shifts_after_duty"] = minCool
 	proc["band_relative"] = bandRel
 
+	customRules, rulesErr := s.resolveCustomRules(ctx, body, zc, keys)
+	if rulesErr != nil {
+		return nil, rulesErr
+	}
+
 	availChecker, soldiersByDay, err := s.buildPlanAvailability(ctx, anchor, planDays, planDayStartHour, keys)
 	if err != nil {
 		return nil, internalFailure(err.Error(), req)
@@ -358,15 +366,21 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 
 	if prefix.Days > 0 && len(prefix.Records) > 0 {
 		prefixDays := prefix.Days
+		expertRulesActive := customRules != nil && customRules.HasAny()
 		var witness *guardsched.ExtendWitness
-		if prefix.Continuation != nil && prefix.Continuation.RNGState != nil {
+		if prefix.Continuation != nil && prefix.Continuation.RNGState != nil && !expertRulesActive {
 			witness, _, err = guardsched.ExtendWitnessFromContinuation(prefix.Continuation, prefix.Records, keys)
 			if err != nil {
 				return nil, simRunErrFromSim(err, req, proc, simMode)
 			}
 			simMode = "extend_witness"
 		} else {
-			simMode = "extend_bootstrap_cold"
+			if expertRulesActive && prefix.Continuation != nil && prefix.Continuation.RNGState != nil {
+				simMode = "extend_bootstrap_cold"
+				proc["expert_rules_extend"] = "bootstrap_cold"
+			} else {
+				simMode = "extend_bootstrap_cold"
+			}
 			if trials > 1 {
 				return nil, validationFailure(
 					"History bootstrap requires a single simulation trial",
@@ -383,7 +397,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 			cold, err := guardsched.RunSimulationZoneConfigWithContinuation(
 				zc, len(keys), prefixDays+planDays, prefixDays, rng,
 				minFreeH, true, 0, 2, minCool, bandRel,
-				planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, seedPtr,
+				planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, seedPtr, customRules,
 			)
 			if err != nil {
 				return nil, simRunErrFromSim(err, req, mergeProcessing(proc, map[string]any{"sim_mode": simMode}), simMode)
@@ -428,7 +442,7 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		cold, err := guardsched.RunSimulationZoneConfigWithContinuation(
 			zc, len(keys), planDays, planDays, rng,
 			minFreeH, true, 0, 2, minCool, bandRel,
-			planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, seedPtr,
+			planDayStartHour, availChecker, &anchor, typeCodes, platoonCodes, seedPtr, customRules,
 		)
 		if err != nil {
 			return nil, simRunErrFromSim(err, req, mergeProcessing(proc, map[string]any{"sim_mode": simMode}), simMode)
@@ -450,6 +464,32 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	bp, _ := guardsched.CalendarBlocksPerDaySafe(zc.ShiftHours)
 	assignJSON := guardsched.AssignmentRecordsToJSON(recs, keys)
 
+	meta := map[string]any{
+		"sim_trials":                     trials,
+		"trial":                          trialMeta,
+		"sim_mode":                       simMode,
+		"continuation_format":            guardsched.CheckpointFormatVersion,
+		"history_days":                   global.HistoryDays,
+		"history_prefix_days":            prefix.Days,
+		"history_dates":                  prefix.Dates,
+		"history_assignments_replayed":   prefix.AssignmentsReplayed,
+		"history_assignments_skipped":    prefix.AssignmentsSkipped,
+		"history_continuation_loaded":    prefix.Continuation != nil && prefix.Continuation.RNGState != nil,
+		"min_consecutive_free_hours":     minFreeH,
+		"min_free_shifts_after_duty":     minCool,
+		"band_relative":                  bandRel,
+		"shift_cooldown_exclusions":      stats.ShiftCooldownExclusions,
+		"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
+		"plan_day_start":                 planDayStartStr,
+		"plan_day_start_hour":            planDayStartHour,
+		"plan_days":                      buildPlanDaysMeta(anchor, planDays, planDayStartHour),
+	}
+	if rulesMeta := guardsched.CustomRulesMeta(customRules); rulesMeta != nil {
+		for k, v := range rulesMeta {
+			meta[k] = v
+		}
+	}
+
 	return &simRunOutput{
 		Anchor:       anchor,
 		Days:         planDays,
@@ -463,27 +503,37 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		BlocksPerDay: bp,
 		Soldiers:     soldiersByDay,
 		Continuation: continuationFromSched(contSnap),
-		Meta: map[string]any{
-			"sim_trials":                     trials,
-			"trial":                          trialMeta,
-			"sim_mode":                       simMode,
-			"continuation_format":          guardsched.CheckpointFormatVersion,
-			"history_days":                   global.HistoryDays,
-			"history_prefix_days":            prefix.Days,
-			"history_dates":                  prefix.Dates,
-			"history_assignments_replayed":   prefix.AssignmentsReplayed,
-			"history_assignments_skipped":    prefix.AssignmentsSkipped,
-			"history_continuation_loaded":    prefix.Continuation != nil && prefix.Continuation.RNGState != nil,
-			"min_consecutive_free_hours":     minFreeH,
-			"min_free_shifts_after_duty":     minCool,
-			"band_relative":                  bandRel,
-			"shift_cooldown_exclusions":      stats.ShiftCooldownExclusions,
-			"shift_cooldown_pool_iterations": stats.ShiftCooldownPoolIterations,
-			"plan_day_start":                 planDayStartStr,
-			"plan_day_start_hour":            planDayStartHour,
-			"plan_days":                      buildPlanDaysMeta(anchor, planDays, planDayStartHour),
-		},
+		Meta: meta,
 	}, nil
+}
+
+func (s *Server) resolveCustomRules(
+	ctx context.Context,
+	body scheduleRunBody,
+	zc *guardsched.ZoneConfig,
+	keys []string,
+) (*guardsched.CustomRuleSet, *APIErrorBody) {
+	forceHard := false
+	if body.Force != nil {
+		forceHard = *body.Force
+	}
+	var doc guardsched.ExpertRulesDoc
+	if row, err := repo.GetCfg(ctx, s.Pool, "expert_rules"); err == nil && row.Version != 0 {
+		_ = json.Unmarshal(row.Value, &doc)
+		if body.Force == nil {
+			forceHard = doc.Force
+		}
+	}
+	text := guardsched.MergeExpertRulesText(&doc, body.RulesText, body.ExpertActiveGroups)
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	cr, err := guardsched.ParseRulesText(text, zc, keys, forceHard)
+	if err != nil {
+		return nil, validationFailure("Invalid expert rules", err.Error(), nil, nil,
+			"Fix the rules text syntax. See Help → Expert rules.")
+	}
+	return cr, nil
 }
 
 func simRunErrFromSim(err error, req, proc map[string]any, simMode string) *APIErrorBody {

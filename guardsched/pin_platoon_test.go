@@ -83,7 +83,7 @@ time_zones:
 	platoonCodes := []string{"1", "1", "2", "2"}
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, 4, 1, NewPyRandom(7), 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, platoonCodes, nil,
+		zc, 4, 1, NewPyRandom(7), 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, platoonCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ time_zones:
 	platoonCodes := []string{"1", "1", "2", "2"}
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	recs, _, err := RunSimulationZoneConfig(
-		zc, 4, 1, NewPyRandom(11), 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, platoonCodes, nil,
+		zc, 4, 1, NewPyRandom(11), 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, platoonCodes, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +175,7 @@ time_zones:
 	platoonCodes := []string{"1", "2"}
 	anchor := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
 	_, _, err = RunSimulationZoneConfig(
-		zc, 2, 1, NewPyRandom(3), 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, platoonCodes, nil,
+		zc, 2, 1, NewPyRandom(3), 6, true, 0, 0, 0, 0.2, 0, nil, &anchor, typeCodes, platoonCodes, nil, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error when type_quotas cannot be met globally")
@@ -224,7 +224,7 @@ time_zones:
 		zc, 0, 0, 0, 0, cfg, soldiers, typeCodes, platoonCodes,
 		busy, new3DFloat(1, 3, 1), new3DFloat(1, 3, 1),
 		new2DFloat(3, 1), new2DFloat(3, 1), make([]float64, 3),
-		simZ, 24, 4, 1, 0, NewPyRandom(5), 0.2, false, 0, nil, &recs, nil,
+		simZ, 24, 4, 1, 0, NewPyRandom(5), 0.2, false, 0, nil, &recs, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
