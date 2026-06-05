@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -11,7 +11,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { ScheduleStatsBundle } from "../lib/scheduleReport";
+import { compactVectorTotalHours } from "../lib/formatCompactHourVector";
+import type { ScheduleStatsBundle, SoldierSummaryRow } from "../lib/scheduleReport";
+import { buildSoldierProfileTooltip } from "../lib/soldierTooltip";
+import type { Soldier } from "../lib/soldiers";
+import type { SoldierTypesDoc } from "../lib/soldierTypes";
+import { ColumnSortButton, type SortDirection } from "./ColumnSortButton";
+import { SoldierHoverTooltip } from "./SoldierHoverTooltip";
 
 const SERIES_COLORS = [
   "#1f77b4",
@@ -26,11 +32,26 @@ const SERIES_COLORS = [
   "#17becf",
 ];
 
+type SummarySortKey =
+  | "soldier"
+  | "type"
+  | "totalRaw"
+  | "globalScore"
+  | "rawSlot"
+  | "timeBand"
+  | "minFree"
+  | "meanFree"
+  | "maxFree"
+  | "slots";
+
 type Props = {
   stats: ScheduleStatsBundle;
   days: number;
   shiftHours: number;
   slotsPerBlock: number;
+  soldierIds?: string[];
+  soldiers?: Soldier[];
+  typesDoc?: SoldierTypesDoc;
 };
 
 function StatLineChart({
@@ -73,7 +94,99 @@ function StatLineChart({
   );
 }
 
-export function ScheduleStatsPanel({ stats, days, shiftHours, slotsPerBlock }: Props) {
+function SortableTh({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  onToggle,
+}: {
+  label: string;
+  sortKey: SummarySortKey;
+  activeKey: SummarySortKey;
+  direction: SortDirection;
+  onToggle: (key: SummarySortKey) => void;
+}) {
+  return (
+    <th scope="col" className="sched-summary-th-sortable">
+      <span className="sched-summary-th-label">{label}</span>
+      <ColumnSortButton
+        label={label}
+        active={activeKey === sortKey}
+        direction={direction}
+        onToggle={() => onToggle(sortKey)}
+      />
+    </th>
+  );
+}
+
+function compareSummaryRows(
+  a: SoldierSummaryRow,
+  b: SoldierSummaryRow,
+  key: SummarySortKey,
+  dir: SortDirection,
+): number {
+  let cmp = 0;
+  switch (key) {
+    case "soldier":
+      cmp = a.label.localeCompare(b.label, undefined, { numeric: true });
+      break;
+    case "type":
+      cmp = a.typeCode.localeCompare(b.typeCode) || a.label.localeCompare(b.label);
+      break;
+    case "totalRaw":
+      cmp = a.totalRawHours - b.totalRawHours;
+      break;
+    case "globalScore":
+      cmp = a.globalScore - b.globalScore;
+      break;
+    case "rawSlot":
+      cmp =
+        compactVectorTotalHours(a.rawHoursBySlot) - compactVectorTotalHours(b.rawHoursBySlot);
+      break;
+    case "timeBand":
+      cmp =
+        compactVectorTotalHours(a.rawHoursByTime) - compactVectorTotalHours(b.rawHoursByTime);
+      break;
+    case "minFree":
+      cmp = a.minMaxFree - b.minMaxFree;
+      break;
+    case "meanFree":
+      cmp = a.meanMaxFree - b.meanMaxFree;
+      break;
+    case "maxFree":
+      cmp = a.maxMaxFree - b.maxMaxFree;
+      break;
+    case "slots":
+      cmp = a.slotIds.length - b.slotIds.length || (a.slotIds[0] ?? 0) - (b.slotIds[0] ?? 0);
+      break;
+    default:
+      cmp = 0;
+  }
+  return dir === "asc" ? cmp : -cmp;
+}
+
+function SoldierTypeChip({ code }: { code: string }) {
+  if (!code) return null;
+  return (
+    <span className="sched-type-chip" title={code}>
+      {code}
+    </span>
+  );
+}
+
+export function ScheduleStatsPanel({
+  stats,
+  days,
+  shiftHours,
+  slotsPerBlock,
+  soldierIds = [],
+  soldiers = [],
+  typesDoc,
+}: Props) {
+  const [sortKey, setSortKey] = useState<SummarySortKey>("totalRaw");
+  const [sortDir, setSortDir] = useState<SortDirection>("desc");
+
   const runTitle = useMemo(
     () => `${days}d — ${stats.soldierCount} soldiers, ${slotsPerBlock} slots/block, shift_hours=${shiftHours}h`,
     [days, stats.soldierCount, slotsPerBlock, shiftHours],
@@ -83,6 +196,21 @@ export function ScheduleStatsPanel({ stats, days, shiftHours, slotsPerBlock }: P
     () => Array.from({ length: stats.soldierCount }, (_, s) => `S${s}`),
     [stats.soldierCount],
   );
+
+  const sortedSummary = useMemo(() => {
+    const rows = [...stats.summary];
+    rows.sort((a, b) => compareSummaryRows(a, b, sortKey, sortDir));
+    return rows;
+  }, [stats.summary, sortKey, sortDir]);
+
+  const toggleSort = (key: SummarySortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "totalRaw" ? "desc" : "asc");
+    }
+  };
 
   return (
     <section className="sched-section sched-stats-section">
@@ -152,39 +280,58 @@ export function ScheduleStatsPanel({ stats, days, shiftHours, slotsPerBlock }: P
         <h4 className="sched-subtitle">Soldier summary + consecutive free time</h4>
         <p className="sched-hint">
           <strong>Max consecutive free</strong> columns: min / mean / max over simulation days (hours per day).
-          <strong> Time bands</strong>: percent of that soldier&apos;s total raw guard hours (sums to 100%).
+          <strong> Raw h by slot</strong> and <strong>Time bands</strong>: compact vectors — only positive entries as{" "}
+          <code>[slot_id:hours]</code> or <code>[time_zone_index:hours]</code> (1-based); empty → <code>[]</code>.
         </p>
         <div className="sched-table-scroll">
           <table className="sched-table sched-summary-table">
             <thead>
               <tr>
-                <th>Soldier</th>
-                <th>Total raw guard h</th>
-                <th>Global score</th>
-                <th>Raw h by loc</th>
-                <th>Time bands (%)</th>
-                <th>Min max free</th>
-                <th>Mean max free</th>
-                <th>Max max free</th>
+                <SortableTh label="Soldier" sortKey="soldier" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Type" sortKey="type" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Total raw guard h" sortKey="totalRaw" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Global score" sortKey="globalScore" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Raw h by slot" sortKey="rawSlot" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Time bands" sortKey="timeBand" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Slots" sortKey="slots" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Min max free" sortKey="minFree" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Mean max free" sortKey="meanFree" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                <SortableTh label="Max max free" sortKey="maxFree" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
               </tr>
             </thead>
             <tbody>
-              {stats.summary.map((row) => (
-                <tr key={row.soldierIdx}>
-                  <th scope="row">{row.label}</th>
-                  <td>{row.totalRawHours.toFixed(2)}</td>
-                  <td>{row.globalScore.toFixed(4)}</td>
-                  <td className="sched-num-list">
-                    {row.rawHoursByLoc.map((h) => h.toFixed(1)).join(", ")}
-                  </td>
-                  <td className="sched-num-list">
-                    {row.timeBandPct.map((p) => `${p.toFixed(2)}%`).join(", ")}
-                  </td>
-                  <td>{row.minMaxFree.toFixed(2)}</td>
-                  <td>{row.meanMaxFree.toFixed(2)}</td>
-                  <td>{row.maxMaxFree.toFixed(2)}</td>
-                </tr>
-              ))}
+              {sortedSummary.map((row) => {
+                const tooltipLines = buildSoldierProfileTooltip(
+                  row.soldierIdx,
+                  row.rawHoursBySlot,
+                  soldierIds,
+                  soldiers,
+                  typesDoc,
+                );
+                return (
+                  <tr key={row.soldierIdx}>
+                    <th scope="row">
+                      <SoldierHoverTooltip lines={tooltipLines}>
+                        <span className="sched-summary-soldier-cell">
+                          <SoldierTypeChip code={row.typeCode} />
+                          <span>{row.label}</span>
+                        </span>
+                      </SoldierHoverTooltip>
+                    </th>
+                    <td>{row.typeCode || "—"}</td>
+                    <td>{row.totalRawHours.toFixed(2)}</td>
+                    <td>{row.globalScore.toFixed(4)}</td>
+                    <td className="sched-num-list sched-compact-vector">{row.rawHoursBySlotCompact}</td>
+                    <td className="sched-num-list sched-compact-vector">{row.timeBandHoursCompact}</td>
+                    <td className="sched-num-list">
+                      {row.slotIds.length > 0 ? row.slotIds.join(", ") : "—"}
+                    </td>
+                    <td>{row.minMaxFree.toFixed(2)}</td>
+                    <td>{row.meanMaxFree.toFixed(2)}</td>
+                    <td>{row.maxMaxFree.toFixed(2)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

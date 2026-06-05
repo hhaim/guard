@@ -5785,6 +5785,102 @@ def _soldier_busy_at_linear_index(
     return False
 
 
+# Platoon matrix cell colors (parity with web/src/lib/soldierDisplay.ts).
+_SOLDIER_BADGE_COLORS: List[Tuple[str, str]] = [
+    ("#dbeafe", "#1e3a8a"),
+    ("#fce7f3", "#831843"),
+    ("#d1fae5", "#065f46"),
+    ("#ffedd5", "#9a3412"),
+    ("#e9d5ff", "#581c87"),
+    ("#ccfbf1", "#134e4a"),
+    ("#fef3c7", "#78350f"),
+    ("#e0e7ff", "#312e81"),
+    ("#fecdd3", "#881337"),
+    ("#cffafe", "#155e75"),
+    ("#f3f4f6", "#1f2937"),
+    ("#fde68a", "#713f12"),
+]
+
+
+def _platoon_fallback_index(code: str) -> int:
+    h = 0
+    for ch in code:
+        h = (31 * h + ord(ch)) & 0xFFFFFFFF
+    if h & 0x80000000:
+        h = -((~h + 1) & 0xFFFFFFFF)
+    return abs(h) % len(_SOLDIER_BADGE_COLORS)
+
+
+def _hex_luminance(hex_color: str) -> float:
+    hx = hex_color.lstrip("#")
+    if len(hx) != 6:
+        return 0.5
+    r = int(hx[0:2], 16) / 255.0
+    g = int(hx[2:4], 16) / 255.0
+    b = int(hx[4:6], 16) / 255.0
+
+    def ch(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+
+def _contrast_foreground(bg: str) -> str:
+    return "#1f2937" if _hex_luminance(bg) > 0.45 else "#f9fafb"
+
+
+def load_platoon_colors_yaml(path: Path) -> Dict[str, str]:
+    """Read ``platoon_colors`` from global config YAML (``{code, bg}`` entries)."""
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    raw = data.get("platoon_colors")
+    if not isinstance(raw, list):
+        return {}
+    out: Dict[str, str] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code", "")).strip()
+        bg = str(item.get("bg", "")).strip()
+        if code and bg.startswith("#") and len(bg) == 7:
+            out[code] = bg
+    return out
+
+
+def _matrix_cell_bg_fg(
+    soldier_idx: int,
+    platoon_codes: Optional[Sequence[str]] = None,
+    platoon_colors: Optional[Dict[str, str]] = None,
+) -> Tuple[str, str]:
+    pc = _soldier_platoon_code(platoon_codes, soldier_idx)
+    if pc and platoon_colors and pc in platoon_colors:
+        bg = platoon_colors[pc]
+        return bg, _contrast_foreground(bg)
+    idx = _platoon_fallback_index(pc) if pc else soldier_idx % len(_SOLDIER_BADGE_COLORS)
+    bg, fg = _SOLDIER_BADGE_COLORS[idx % len(_SOLDIER_BADGE_COLORS)]
+    return bg, fg
+
+
+def _matrix_td_html(
+    indices: Sequence[int],
+    esc: Callable[[object], str],
+    *,
+    rowspan: int = 0,
+    platoon_codes: Optional[Sequence[str]] = None,
+    platoon_colors: Optional[Dict[str, str]] = None,
+) -> str:
+    if not indices:
+        return "<td>—</td>"
+    primary = int(indices[0])
+    bg, fg = _matrix_cell_bg_fg(primary, platoon_codes, platoon_colors)
+    lab = _format_matrix_cell_soldiers(indices)
+    style = f' style="background-color:{bg};color:{fg}"'
+    if rowspan > 1:
+        return f'<td rowspan="{rowspan}"{style}>{esc(lab)}</td>'
+    return f"<td{style}>{esc(lab)}</td>"
+
+
 def _format_matrix_cell_soldiers(indices: Sequence[int], *, max_show: int = _MATRIX_CELL_MAX_SOLDIERS) -> str:
     """Comma-separated S# labels for a matrix cell; cap display at ``max_show``."""
     labs = [f"S{i}" for i in sorted(set(indices))]
@@ -5807,6 +5903,8 @@ def build_day_schedule_matrix_html(
     block_hours: float,
     zone: ZoneConfig,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    platoon_codes: Optional[Sequence[str]] = None,
+    platoon_colors: Optional[Dict[str, str]] = None,
 ) -> str:
     """Per day: rows = time shift, columns = Slot 1..y, cell = soldier id(s) (rowspan for spanning posts)."""
     lookup_rot: Dict[Tuple[int, int, int], List[int]] = {}
@@ -5872,8 +5970,15 @@ def build_day_schedule_matrix_html(
                     if label_b < sb:
                         tds.append("<td>—</td>")
                     elif label_b == sb:
-                        lab = _format_matrix_cell_soldiers(indices)
-                        tds.append(f'<td rowspan="{rs}">{esc(lab)}</td>')
+                        tds.append(
+                            _matrix_td_html(
+                                indices,
+                                esc,
+                                rowspan=rs,
+                                platoon_codes=platoon_codes,
+                                platoon_colors=platoon_colors,
+                            )
+                        )
                         skip[j] = rs - 1
                     else:
                         soldiers = _matrix_slot_soldiers(
@@ -5886,8 +5991,16 @@ def build_day_schedule_matrix_html(
                             assignments=assignments,
                             blocks_pd=blocks_pd,
                         )
-                        lab = _format_matrix_cell_soldiers(soldiers) if soldiers else "—"
-                        tds.append(f"<td>{esc(lab)}</td>")
+                        tds.append(
+                            _matrix_td_html(
+                                soldiers,
+                                esc,
+                                platoon_codes=platoon_codes,
+                                platoon_colors=platoon_colors,
+                            )
+                            if soldiers
+                            else "<td>—</td>"
+                        )
                 else:
                     soldiers = _matrix_slot_soldiers(
                         src_d,
@@ -5899,8 +6012,16 @@ def build_day_schedule_matrix_html(
                         assignments=assignments,
                         blocks_pd=blocks_pd,
                     )
-                    lab = _format_matrix_cell_soldiers(soldiers) if soldiers else "—"
-                    tds.append(f"<td>{esc(lab)}</td>")
+                    tds.append(
+                        _matrix_td_html(
+                            soldiers,
+                            esc,
+                            platoon_codes=platoon_codes,
+                            platoon_colors=platoon_colors,
+                        )
+                        if soldiers
+                        else "<td>—</td>"
+                    )
             rows.append(f"<tr><th>{esc(win)}</th>{''.join(tds)}</tr>")
         sections.append(
             f"<h3 id='matrix-day-{d + 1}'>Day {d + 1} — schedule matrix (time × slot)</h3>\n"
@@ -5961,6 +6082,8 @@ def write_html_report(
     min_free_shifts_after_duty: int,
     zone_viz: str,
     plan_day_start_hour: int = DEFAULT_PLAN_DAY_START_HOUR,
+    platoon_codes: Optional[Sequence[str]] = None,
+    platoon_colors: Optional[Dict[str, str]] = None,
 ) -> None:
     col_labels = zone.heatmap_column_labels()
     nl = zone.n_loc
@@ -6184,6 +6307,8 @@ def write_html_report(
         block_hours,
         zone,
         plan_day_start_hour=plan_day_start_hour,
+        platoon_codes=platoon_codes,
+        platoon_colors=platoon_colors,
     )
     matrix_toc = " ".join(
         f"<a href='#matrix-day-{d + 1}'>Day {d + 1} matrix</a>" for d in range(days)
@@ -6459,6 +6584,13 @@ def main() -> None:
         default=None,
         metavar="PATH",
         help="Roster YAML for soldier type_code[] (UI export or legacy nested shape).",
+    )
+    p.add_argument(
+        "--global-config",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Optional global config YAML with platoon_colors for matrix cell backgrounds.",
     )
     p.add_argument("--seed", type=int, default=None, help="RNG seed (optional)")
     p.add_argument(
@@ -6770,6 +6902,13 @@ def main() -> None:
                     )
         except Exception as e:
             raise SystemExit(f"Roster types: {e}") from e
+
+    platoon_colors: Optional[Dict[str, str]] = None
+    if args.global_config:
+        try:
+            platoon_colors = load_platoon_colors_yaml(Path(args.global_config))
+        except Exception as e:
+            raise SystemExit(f"Global config: {e}") from e
 
     if args.sweep_band_relative is not None:
         raw_vals = [x.strip() for x in args.sweep_band_relative.split(",") if x.strip()]
@@ -7204,6 +7343,8 @@ def main() -> None:
             args.min_free_shifts_after_duty,
             args.zone_viz,
             plan_day_start_hour=plan_day_start_hour,
+            platoon_codes=platoon_codes,
+            platoon_colors=platoon_colors,
         )
         if args.pdf_output:
             export_html_to_pdf(Path(args.html_output), Path(args.pdf_output))

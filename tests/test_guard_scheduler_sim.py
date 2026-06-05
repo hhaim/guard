@@ -1218,6 +1218,38 @@ def test_duty_blocks_plan_aligned_09_to_09() -> None:
     assert (b0, b1) == (1, 5)
 
 
+def test_build_day_schedule_matrix_html_platoon_cell_color() -> None:
+    zone = g.load_zone_config(ZONES_V1, slots_per_block=3)
+    asn = [
+        g.AssignmentRecord(
+            day=0,
+            calendar_block=0,
+            start_hour=0,
+            slot=0,
+            soldier_idx=0,
+            loc_i=0,
+            time_j=0,
+            weight=1.0,
+            raw_hours=8.0,
+            kind="rotating",
+        )
+    ]
+    platoon_codes = ["P1"]
+    platoon_colors = {"P1": "#dbeafe"}
+    html = g.build_day_schedule_matrix_html(
+        asn,
+        days=1,
+        blocks_pd=3,
+        slots_per_block=3,
+        block_hours=8.0,
+        zone=zone,
+        platoon_codes=platoon_codes,
+        platoon_colors=platoon_colors,
+    )
+    assert 'background-color:#dbeafe' in html
+    assert "S0" in html
+
+
 def test_build_day_schedule_matrix_html_rowspan_full_day() -> None:
     zone = g.load_zone_config(ZONES_V1, slots_per_block=3)
     asn = [

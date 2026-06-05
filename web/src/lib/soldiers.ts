@@ -147,3 +147,22 @@ export function validateDoc(
   }
   return null;
 }
+
+/** Most frequent type_code in roster (for hiding common type badges in schedule matrix). */
+export function dominantSoldierTypeCode(soldiers: Soldier[]): string | null {
+  const counts = new Map<string, number>();
+  for (const s of soldiers) {
+    const code = s.type_code?.trim();
+    if (!code) continue;
+    counts.set(code, (counts.get(code) ?? 0) + 1);
+  }
+  let best = "";
+  let bestN = 0;
+  for (const [code, n] of counts) {
+    if (n > bestN) {
+      bestN = n;
+      best = code;
+    }
+  }
+  return bestN > 0 ? best : null;
+}

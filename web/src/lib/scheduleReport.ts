@@ -1,4 +1,7 @@
+import { formatCompactHourVector } from "./formatCompactHourVector";
 import type { PlanDaySoldiersDoc, ScheduleAssignment } from "./planDoc";
+import type { Soldier } from "./soldiers";
+import { typeLabel, type SoldierTypesDoc } from "./soldierTypes";
 import {
   calendarDateForPlanDay,
   isSoldierUnavailableForBlock,
@@ -73,6 +76,12 @@ export type MatrixCell = {
 
 export type MatrixRow = {
   window: string;
+  /** Source plan day index for assignment lookup. */
+  srcDay: number;
+  /** Source calendar block within srcDay. */
+  srcBlock: number;
+  /** 0-based plan day index for display matrix (may differ from srcDay for extension rows). */
+  planDay: number;
   cells: MatrixCell[];
 };
 
@@ -278,6 +287,30 @@ function matrixSlotSoldiers(
     soldierIndices: pairs.map((p) => p.idx),
     labels: pairs.map((p) => p.label),
   };
+}
+
+/** Assignments for one soldier in a matrix cell (day × block × slot). */
+export function matrixCellAssignmentsForSoldier(
+  soldierIdx: number,
+  srcDay: number,
+  srcBlock: number,
+  slot: number,
+  simDays: number,
+  blocksPd: number,
+  assignments: ScheduleAssignment[],
+): ScheduleAssignment[] {
+  const out: ScheduleAssignment[] = [];
+  const linearIndex = srcDay < simDays ? srcDay * blocksPd + srcBlock : simDays * blocksPd + srcBlock;
+  for (const a of assignments) {
+    if (a.soldier_idx !== soldierIdx || a.slot !== slot) continue;
+    const k = a.kind || "rotating";
+    if (k === "rotating") {
+      if (a.day === srcDay && a.calendar_block === srcBlock) out.push(a);
+      continue;
+    }
+    if (assignmentCoversLinearIndex(a, linearIndex, blocksPd)) out.push(a);
+  }
+  return out;
 }
 
 function pad2(n: number): string {
@@ -649,7 +682,7 @@ export function buildScheduleMatrices(
           });
         }
       }
-      rows.push({ window: win, cells });
+      rows.push({ window: win, srcDay: srcD, srcBlock: srcB, planDay: d, cells });
     }
     const weekday = dayCalendarDate
       ? weekdayNameForCalendarPlanDay(dayCalendarDate, planStart)
@@ -869,13 +902,28 @@ export function formatTimelineSegmentRange(
 export type SoldierSummaryRow = {
   soldierIdx: number;
   label: string;
+  soldierId: string;
+  typeCode: string;
+  typeName: string;
   totalRawHours: number;
   globalScore: number;
+  totalWeight: number;
   rawHoursByLoc: number[];
+  rawHoursBySlot: number[];
+  rawHoursByTime: number[];
   timeBandPct: number[];
+  rawHoursBySlotCompact: string;
+  timeBandHoursCompact: string;
+  slotIds: number[];
   minMaxFree: number;
   meanMaxFree: number;
   maxMaxFree: number;
+};
+
+export type BuildScheduleStatsOpts = {
+  soldierIds?: string[];
+  soldiers?: Soldier[];
+  typesDoc?: SoldierTypesDoc;
 };
 
 export type ScheduleFairnessMetrics = {
@@ -1201,15 +1249,19 @@ export function buildScheduleStats(
   days: number,
   zone: ZoneReportView,
   soldierCount: number,
+  opts?: BuildScheduleStatsOpts,
 ): ScheduleStatsBundle {
   const nl = zone.locNames.length;
   const nt = zone.timeNames.length;
+  const slotsPerBlock = zone.slotsPerBlock;
   const blocksPd = zone.blocksPerDay;
   const availableHours = days * 24;
 
   const rawLoc = Array.from({ length: soldierCount }, () => Array(nl).fill(0));
+  const rawSlot = Array.from({ length: soldierCount }, () => Array(slotsPerBlock).fill(0));
   const rawTime = Array.from({ length: soldierCount }, () => Array(nt).fill(0));
   const wGlobal = Array(soldierCount).fill(0);
+  const slotIdsPerSoldier = Array.from({ length: soldierCount }, () => new Set<number>());
   const dailyRawLoc = Array.from({ length: days }, () =>
     Array.from({ length: soldierCount }, () => Array(nl).fill(0)),
   );
@@ -1232,7 +1284,16 @@ export function buildScheduleStats(
       dailyRawTime[a.day][s][tj] += a.raw_hours;
     }
     wGlobal[s] += a.weight;
+    if (a.slot >= 0 && a.slot < slotsPerBlock) {
+      rawSlot[s][a.slot] += a.raw_hours;
+      slotIdsPerSoldier[s].add(a.slot + 1);
+    }
   }
+
+  const soldierIds = opts?.soldierIds ?? [];
+  const soldiers = opts?.soldiers ?? [];
+  const typesDoc = opts?.typesDoc;
+  const soldierById = new Map(soldiers.map((s) => [s.id, s]));
 
   const meanDailyRawLoc = Array.from({ length: soldierCount }, (_, s) =>
     Array.from({ length: nl }, (_, i) => {
@@ -1308,13 +1369,27 @@ export function buildScheduleStats(
       totT > 1e-12
         ? rawTime[s].map((h) => (100 * h) / totT)
         : rawTime[s].map(() => 0);
+    const rosterId = soldierIds[s]?.trim() || `S${s}`;
+    const soldierRec = soldierById.get(rosterId);
+    const typeCode = soldierRec?.type_code?.trim() ?? "";
+    const typeName = typeCode && typesDoc ? typeLabel(typesDoc, typeCode) : "";
+    const slotIds = [...slotIdsPerSoldier[s]].sort((a, b) => a - b);
     return {
       soldierIdx: s,
-      label: `S${s}`,
+      label: rosterId,
+      soldierId: rosterId,
+      typeCode,
+      typeName,
       totalRawHours: totalRaw,
       globalScore: wGlobal[s] / Math.max(availableHours, 1e-9),
+      totalWeight: wGlobal[s],
       rawHoursByLoc: rawLoc[s],
+      rawHoursBySlot: rawSlot[s],
+      rawHoursByTime: rawTime[s],
       timeBandPct,
+      rawHoursBySlotCompact: formatCompactHourVector(rawSlot[s]),
+      timeBandHoursCompact: formatCompactHourVector(rawTime[s]),
+      slotIds,
       minMaxFree: minMaxFreePerSoldier[s],
       meanMaxFree: meanMaxFreePerSoldier[s],
       maxMaxFree: maxMaxFreePerSoldier[s],
