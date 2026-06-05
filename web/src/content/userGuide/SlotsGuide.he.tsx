@@ -206,6 +206,13 @@ export function SlotsGuideHe() {
             <td>משקל הוגנות למשרד זה</td>
           </tr>
           <tr>
+            <td>מקדם שעות</td>
+            <td>
+              <code>hours_factor</code>
+            </td>
+            <td>שבר תורנות מזוכה להוגנות (ברירת מחדל 1); טווח עסוק ללא שינוי</td>
+          </tr>
+          <tr>
             <td>כמות כיתה (headcount)</td>
             <td>
               <code>headcount</code>
@@ -217,7 +224,7 @@ export function SlotsGuideHe() {
 
       <h3 className="help-subtitle">full_day_team</h3>
       <p>
-        כולל את כל שדות <strong>full_day</strong> ב־<code>config</code>, ובנוסף:
+        כולל את כל שדות <strong>full_day</strong> ב־<code>config</code> (כולל <code>hours_factor</code>), ובנוסף:
       </p>
       <table className="help-table">
         <thead>
@@ -228,13 +235,6 @@ export function SlotsGuideHe() {
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>מקדם שעות (Hours factor)</td>
-            <td>
-              <code>hours_factor</code>
-            </td>
-            <td>חלק תורנות מזוכה להוגנות (ברירת מחדל 1); טווח עסוק ללא שינוי</td>
-          </tr>
           <tr>
             <td>מכסות סוג (מינימום)</td>
             <td>

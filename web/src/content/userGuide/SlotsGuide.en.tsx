@@ -205,6 +205,13 @@ export function SlotsGuideEn() {
             <td>Fairness weight for this post</td>
           </tr>
           <tr>
+            <td>Hours factor</td>
+            <td>
+              <code>hours_factor</code>
+            </td>
+            <td>Credited duty fraction for fairness (default 1); busy span unchanged</td>
+          </tr>
+          <tr>
             <td>Headcount</td>
             <td>
               <code>headcount</code>
@@ -215,7 +222,7 @@ export function SlotsGuideEn() {
       </table>
 
       <h3 className="help-subtitle">full_day_team</h3>
-      <p>Includes all <strong>full_day</strong> <code>config</code> fields, plus:</p>
+      <p>Includes all <strong>full_day</strong> <code>config</code> fields (including <code>hours_factor</code>), plus:</p>
       <table className="help-table">
         <thead>
           <tr>
@@ -225,13 +232,6 @@ export function SlotsGuideEn() {
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>Hours factor</td>
-            <td>
-              <code>hours_factor</code>
-            </td>
-            <td>Credited duty fraction for fairness (default 1); busy span unchanged</td>
-          </tr>
           <tr>
             <td>Type quotas (minimums)</td>
             <td>

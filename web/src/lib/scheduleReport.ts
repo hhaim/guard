@@ -20,8 +20,10 @@ import {
 } from "./planDay";
 import {
   enabledSlots,
+  iterFullDayDutyHours,
   parseFullDayConfig,
   parseFullDayTeamConfig,
+  parseFullDayWallHours,
   parseTimeBandBound,
   slotDisplayLabel,
   timeBandContainsStartMin,
@@ -38,8 +40,10 @@ export type ZoneReportView = {
   locWeights: number[];
   locTypeIds: string[];
   typeWeightMult: Record<string, number>;
-  /** full_day_team credited duty fraction (default 1). */
+  /** full_day / full_day_team credited duty fraction (default 1). */
   typeHoursFactor: Record<string, number>;
+  /** Parsed duty wall-clock hours per slot type id. */
+  typeFullDayHours: Record<string, { startH: number; endH: number }>;
   slotLabels: string[];
   slotLocIndices: number[];
   slotTypeIds: string[];
@@ -363,6 +367,7 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock?: number): Zone
   const locTypeIds = doc.zone_loc.map((z) => z.type ?? "");
   const typeWeightMult: Record<string, number> = {};
   const typeHoursFactor: Record<string, number> = {};
+  const typeFullDayHours: Record<string, { startH: number; endH: number }> = {};
   for (const st of doc.slots_types) {
     if (st.pattern === "rotating") continue;
     const cfg = st.config ?? {};
@@ -370,8 +375,14 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock?: number): Zone
       const team = parseFullDayTeamConfig(cfg);
       typeWeightMult[st.id] = team.weight_multiplier;
       typeHoursFactor[st.id] = team.hours_factor;
+      const wh = parseFullDayWallHours(cfg);
+      if (wh) typeFullDayHours[st.id] = wh;
     } else if (st.pattern === "full_day") {
-      typeWeightMult[st.id] = parseFullDayConfig(cfg).weight_multiplier;
+      const fd = parseFullDayConfig(cfg);
+      typeWeightMult[st.id] = fd.weight_multiplier;
+      typeHoursFactor[st.id] = fd.hours_factor;
+      const wh = parseFullDayWallHours(cfg);
+      if (wh) typeFullDayHours[st.id] = wh;
     }
     if (st.pattern === "windowed_slots") {
       const slots = (cfg as { slots?: { weight_multiplier?: number; weight_mult?: number }[] }).slots;
@@ -412,6 +423,7 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock?: number): Zone
     locTypeIds,
     typeWeightMult,
     typeHoursFactor,
+    typeFullDayHours,
     slotLabels,
     slotLocIndices,
     slotTypeIds,
@@ -434,13 +446,47 @@ export function patternWeightMultiplier(
   return zone.typeWeightMult[typeId] ?? 1;
 }
 
-/** Credited duty fraction for full_day_team (1 for other patterns). */
+/** Credited duty fraction for full_day / full_day_team (1 for other patterns). */
 export function patternHoursFactor(zone: ZoneReportView, a: ScheduleAssignment): number {
   const kind = a.kind?.trim() || "rotating";
-  if (kind !== "full_day_team") return 1;
+  if (kind !== "full_day" && kind !== "full_day_team") return 1;
   const typeId = zone.locTypeIds[a.loc_i] ?? "";
   const hf = zone.typeHoursFactor[typeId];
   return hf != null && hf > 0 ? hf : 1;
+}
+
+function accumulateAssignmentTimeHours(
+  zone: ZoneReportView,
+  a: ScheduleAssignment,
+  rawTime: number[][],
+  dailyRawTime: number[][][],
+): void {
+  const s = a.soldier_idx;
+  const kind = a.kind?.trim() || "rotating";
+  if (kind === "full_day" || kind === "full_day_team") {
+    const typeId = zone.locTypeIds[a.loc_i] ?? "";
+    const wh = zone.typeFullDayHours[typeId];
+    if (!wh) {
+      const tj = a.time_j;
+      if (tj >= 0 && tj < zone.timeNames.length) {
+        rawTime[s][tj] += a.raw_hours;
+        dailyRawTime[a.day][s][tj] += a.raw_hours;
+      }
+      return;
+    }
+    const hf = patternHoursFactor(zone, a);
+    for (const h of iterFullDayDutyHours(wh.startH, wh.endH)) {
+      const tj = timeCategoryForHour(h, zone);
+      rawTime[s][tj] += hf;
+      dailyRawTime[a.day][s][tj] += hf;
+    }
+    return;
+  }
+  const tj = a.time_j;
+  if (tj >= 0 && tj < zone.timeNames.length) {
+    rawTime[s][tj] += a.raw_hours;
+    dailyRawTime[a.day][s][tj] += a.raw_hours;
+  }
 }
 
 /** One calendar block: shift_hours × loc × time × pattern multiplier × hours_factor. */
@@ -1283,15 +1329,11 @@ export function buildScheduleStats(
     if (s < 0 || s >= soldierCount) continue;
     if (a.day < 0 || a.day >= days) continue;
     const li = a.loc_i;
-    const tj = a.time_j;
     if (li >= 0 && li < nl) {
       rawLoc[s][li] += a.raw_hours;
       dailyRawLoc[a.day][s][li] += a.raw_hours;
     }
-    if (tj >= 0 && tj < nt) {
-      rawTime[s][tj] += a.raw_hours;
-      dailyRawTime[a.day][s][tj] += a.raw_hours;
-    }
+    accumulateAssignmentTimeHours(zone, a, rawTime, dailyRawTime);
     wGlobal[s] += a.weight;
     if (a.slot >= 0 && a.slot < slotsPerBlock) {
       rawSlot[s][a.slot] += a.raw_hours;

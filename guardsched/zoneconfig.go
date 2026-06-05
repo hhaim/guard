@@ -13,7 +13,8 @@ type FullDaySpec struct {
 	StartH, EndH int
 	RestAfterH   float64
 	WeightMult   float64
-	Headcount    int // soldiers per day for each slot row of this type (default 1)
+	HoursFactor  float64 // credited duty fraction (default 1); busy span unchanged
+	Headcount    int     // soldiers per day for each slot row of this type (default 1)
 }
 
 // FullDayTeamSpec holds parsed full_day_team slots_types config.
@@ -496,7 +497,14 @@ func parseFullDaySpecFromConfig(cfgAny any, tid, kind string, requireHeadcount b
 			return FullDaySpec{}, fmt.Errorf("%s %q: headcount must be >= 1", kind, tid)
 		}
 	}
-	return FullDaySpec{StartH: sh0, EndH: sh1, RestAfterH: ra, WeightMult: wm, Headcount: hc}, nil
+	hf := 1.0
+	if v, ok := cfg["hours_factor"]; ok {
+		hf = floatFromAny(v)
+	}
+	if hf <= 0 {
+		return FullDaySpec{}, fmt.Errorf("%s %q: hours_factor must be > 0", kind, tid)
+	}
+	return FullDaySpec{StartH: sh0, EndH: sh1, RestAfterH: ra, WeightMult: wm, HoursFactor: hf, Headcount: hc}, nil
 }
 
 func parseTypeQuotas(raw any) (map[string]int, error) {

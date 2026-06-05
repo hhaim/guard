@@ -910,6 +910,12 @@ function FullDayConfigFields({
         value={config.weight_multiplier}
         onChange={(weight_multiplier) => onChange({ ...config, weight_multiplier })}
       />
+      <DecimalNumField
+        label="Hours factor"
+        hint="Credited duty fraction for fairness (e.g. 0.5); busy span unchanged"
+        value={config.hours_factor}
+        onChange={(hours_factor) => onChange({ ...config, hours_factor })}
+      />
       {showHeadcount && (
         <NumField
           label="Headcount"
@@ -1049,12 +1055,6 @@ function FullDayTeamConfigFields({
         showHeadcount
         config={config}
         onChange={(base) => onChange({ ...config, ...base })}
-      />
-      <DecimalNumField
-        label="Hours factor"
-        hint="Credited duty fraction for fairness (e.g. 0.33); busy span unchanged"
-        value={config.hours_factor}
-        onChange={(hours_factor) => onChange({ ...config, hours_factor })}
       />
       <TypeQuotasEditor
         headcount={config.headcount}

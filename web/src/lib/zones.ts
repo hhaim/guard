@@ -26,6 +26,8 @@ export type FullDayConfig = {
   end: string;
   rest_after_hours: number;
   weight_multiplier: number;
+  /** Credited duty fraction for fairness (default 1); busy span unchanged. */
+  hours_factor: number;
   headcount: number;
 };
 
@@ -46,6 +48,7 @@ export const DEFAULT_FULL_DAY_CONFIG: FullDayConfig = {
   end: "22:00",
   rest_after_hours: 6,
   weight_multiplier: 1,
+  hours_factor: 1,
   headcount: 1,
 };
 
@@ -62,19 +65,14 @@ export const DEFAULT_WINDOWED_SLOTS_CONFIG: WindowedSlotsConfig = {
 };
 
 export type FullDayTeamConfig = FullDayConfig & {
-  headcount: number;
   type_quotas: Record<string, number>;
-  /** Credited duty fraction for fairness (default 1); busy span unchanged. */
-  hours_factor: number;
   /** When true, all soldiers on this post share one platoon_code (scheduler tries platoons by fitness). */
   pin_platoon?: boolean;
 };
 
 export const DEFAULT_FULL_DAY_TEAM_CONFIG: FullDayTeamConfig = {
   ...DEFAULT_FULL_DAY_CONFIG,
-  headcount: 1,
   type_quotas: {},
-  hours_factor: 1,
 };
 
 export type SlotType = {
@@ -113,18 +111,47 @@ export function parseFullDayConfig(config: Record<string, unknown> | undefined):
       c.weight_multiplier ?? c.weight_mult ?? c.w_mult,
       DEFAULT_FULL_DAY_CONFIG.weight_multiplier
     ),
+    hours_factor: asConfigNum(c.hours_factor, DEFAULT_FULL_DAY_CONFIG.hours_factor),
     headcount: Math.max(1, Math.round(asConfigNum(c.headcount, DEFAULT_FULL_DAY_CONFIG.headcount))),
   };
 }
 
 export function fullDayConfigToRecord(cfg: FullDayConfig): Record<string, unknown> {
-  return {
+  const row: Record<string, unknown> = {
     start: cfg.start,
     end: cfg.end,
     rest_after_hours: cfg.rest_after_hours,
     weight_multiplier: cfg.weight_multiplier,
     headcount: cfg.headcount,
   };
+  if (cfg.hours_factor !== 1) {
+    row.hours_factor = cfg.hours_factor;
+  }
+  return row;
+}
+
+/** Wall-clock duty hours for full_day (inclusive; start==end → 24h). */
+export function iterFullDayDutyHours(sh0: number, sh1: number): number[] {
+  if (sh1 <= sh0) {
+    const hours: number[] = [];
+    for (let h = sh0; h < 24; h++) hours.push(h);
+    for (let h = 0; h < sh0; h++) hours.push(h);
+    return hours;
+  }
+  const hours: number[] = [];
+  for (let h = sh0; h <= sh1; h++) hours.push(h);
+  return hours;
+}
+
+/** Parse full_day start/end to inclusive wall-clock hour indices (0..23). */
+export function parseFullDayWallHours(
+  config: Record<string, unknown> | undefined,
+): { startH: number; endH: number } | null {
+  const cfg = parseFullDayConfig(config);
+  const start = parseWallClockHour(cfg.start);
+  const end = parseWallClockHour(cfg.end);
+  if (!start.ok || !end.ok) return null;
+  return { startH: start.hour, endH: end.hour };
 }
 
 export function parseFullDayTeamConfig(config: Record<string, unknown> | undefined): FullDayTeamConfig {
@@ -147,7 +174,6 @@ export function parseFullDayTeamConfig(config: Record<string, unknown> | undefin
     ...base,
     headcount: Math.max(1, Math.round(asConfigNum(c.headcount, DEFAULT_FULL_DAY_TEAM_CONFIG.headcount))),
     type_quotas,
-    hours_factor: asConfigNum(c.hours_factor, DEFAULT_FULL_DAY_TEAM_CONFIG.hours_factor),
     ...(pin_platoon ? { pin_platoon: true } : {}),
   };
 }
@@ -155,9 +181,6 @@ export function parseFullDayTeamConfig(config: Record<string, unknown> | undefin
 export function fullDayTeamConfigToRecord(cfg: FullDayTeamConfig): Record<string, unknown> {
   const row: Record<string, unknown> = fullDayConfigToRecord(cfg);
   row.headcount = cfg.headcount;
-  if (cfg.hours_factor !== 1) {
-    row.hours_factor = cfg.hours_factor;
-  }
   if (Object.keys(cfg.type_quotas).length > 0) {
     row.type_quotas = cfg.type_quotas;
   }
@@ -354,11 +377,11 @@ export function validateSlotTypePattern(st: SlotType): string | null {
     if (st.pattern === "full_day" && cfg.headcount < 1) {
       return `full_day "${label}": headcount must be >= 1`;
     }
+    if (cfg.hours_factor <= 0) {
+      return `${st.pattern} "${label}": hours_factor must be > 0`;
+    }
     if (st.pattern === "full_day_team") {
       const team = cfg as FullDayTeamConfig;
-      if (team.hours_factor <= 0) {
-        return `full_day_team "${label}": hours_factor must be > 0`;
-      }
       let sumQ = 0;
       for (const q of Object.values(team.type_quotas)) sumQ += q;
       if (sumQ > team.headcount) {
