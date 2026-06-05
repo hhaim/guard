@@ -1369,6 +1369,12 @@ def test_matrix_future_extension_shows_kitchen_tail_on_day1() -> None:
         type_codes=type_codes,
     )
     assign = pack[3]
+    team_day0 = [a for a in assign if a.day == 0 and a.slot == 4 and a.kind == "full_day_team"]
+    assert len(team_day0) == 5
+    expected_tail = g._format_matrix_cell_soldiers([a.soldier_idx for a in team_day0])
+    team_day1 = [a for a in assign if a.day == 1 and a.slot == 4 and a.kind == "full_day_team"]
+    assert len(team_day1) == 5
+    expected_day1 = g._format_matrix_cell_soldiers([a.soldier_idx for a in team_day1])
     html = g.build_day_schedule_matrix_html(
         assign,
         days=2,
@@ -1382,10 +1388,10 @@ def test_matrix_future_extension_shows_kitchen_tail_on_day1() -> None:
     assert m is not None
     body = m.group()
     assert body.count("(next plan day)") == g.report_future_extension_blocks(zone.shift_hours)
-    assert re.search(
-        r"\(next plan day\)</th><td>S\d+</td><td>S\d+</td><td>S\d+</td><td>S\d+</td><td>S\d+",
-        body,
-    )
+    ext_rows = re.findall(r"<tr><th>[^<]*\(next plan day\)[^<]*</th>.*?</tr>", body, re.DOTALL)
+    assert len(ext_rows) == g.report_future_extension_blocks(zone.shift_hours)
+    assert expected_tail in ext_rows[0], "day-0 kitchen team tail should show in first extension row"
+    assert expected_day1 in ext_rows[1], "day-1 kitchen team should show in second extension row"
 
 
 def test_assert_rest_feasible_counting_min_formula() -> None:
