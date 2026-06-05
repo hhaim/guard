@@ -2253,6 +2253,11 @@
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
 }
 
+.sched-soldier-tooltip-wrap.is-left .sched-soldier-tooltip {
+  left: auto;
+  right: calc(100% + 4px);
+}
+
 .sched-soldier-tooltip-wrap:hover .sched-soldier-tooltip,
 .sched-soldier-tooltip-wrap:focus-within .sched-soldier-tooltip {
   display: flex;

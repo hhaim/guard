@@ -115,7 +115,11 @@ function SoldierLink({
     </button>
   );
   if (tooltipLines && tooltipLines.length > 0) {
-    return <SoldierHoverTooltip lines={tooltipLines}>{btn}</SoldierHoverTooltip>;
+    return (
+      <SoldierHoverTooltip lines={tooltipLines} placement={matrixCell ? "left" : "right"}>
+        {btn}
+      </SoldierHoverTooltip>
+    );
   }
   return btn;
 }
