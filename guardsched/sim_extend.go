@@ -616,6 +616,7 @@ func RunSimulationZoneConfigExtend(
 
 	// --- rotating (DFS on non-rotating busy, then replay prefix rot before suffix fill) ---
 	rotIdx = rotatingSlotIndices(slotPatterns)
+	capOneRotatingPerDay := zoneHasMultipleRotatingTypes(zone, rotIdx)
 	dfsRotOk := false
 	dfsExcl, dfsMayRun := zone.rotatingDfsTypeExclude(rotIdx)
 	if dfsMayRun && xCool > 0 && len(rotIdx) > 0 &&
@@ -623,7 +624,7 @@ func RunSimulationZoneConfigExtend(
 		dr := new3DBool(totalDays, numSoldiers, blocksPd)
 		copy3D(dr, busyRot)
 		nodes := 0
-		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, totalDays, blocksPd, len(rotIdx), kRestMask, maxConsecutiveDutyBlocks, xCool, extendAvail, planDayStartHour, sh, typeCodes, dfsExcl, &nodes) {
+		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, totalDays, blocksPd, len(rotIdx), kRestMask, maxConsecutiveDutyBlocks, xCool, extendAvail, planDayStartHour, sh, typeCodes, dfsExcl, capOneRotatingPerDay, &nodes) {
 			copy3D(busyRot, dr)
 			dfsRotOk = true
 			if len(rotPrefixReplay) > 0 {
@@ -674,7 +675,7 @@ func RunSimulationZoneConfigExtend(
 							}
 							return pool
 						}
-						chosenList, err := pickSoldiersForSlot(
+						chosenList, err := pickSoldiersForRotatingSlot(
 							nReq, poolFn, locI, timeJ, deltasLoc, deltasTime, deltasG, r,
 							bandRelative, balanceTotalHours, totalHoursSlack, rotPf,
 						)
@@ -775,9 +776,12 @@ func RunSimulationZoneConfigExtend(
 							}
 							pool = filt
 						}
+						if capOneRotatingPerDay {
+							pool = filterRotatingPoolOnePerDay(pool, busyRot, day, blocksPd)
+						}
 						return pool
 					}
-					chosenList, err := pickSoldiersForSlot(
+					chosenList, err := pickSoldiersForRotatingSlot(
 						nReq, poolFn, locI, timeJ, deltasLoc, deltasTime, deltasG, r,
 						bandRelative, balanceTotalHours, totalHoursSlack, rotPf,
 					)

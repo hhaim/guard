@@ -401,6 +401,61 @@ def test_pin_platoon_rotates_across_days_dv3(tmp_path: Path) -> None:
     assert platoons[0] != platoons[1], f"expected platoon rotation day 2, got {platoons}"
 
 
+def test_dv3_hot_day4_at_most_one_rotating_per_soldier(tmp_path: Path) -> None:
+    """Mixed valero+gate zones: no soldier gets two rotating blocks same day."""
+    import yaml
+    from datetime import datetime, timezone
+
+    root = Path(__file__).resolve().parents[1]
+    zone = g.load_zone_config(root / "zones-dv3.yaml", slots_per_block=10)
+    roster_path = root / "roster-dv3.yaml"
+    keys = g.roster_keys(79)
+    data = yaml.safe_load(roster_path.read_text(encoding="utf-8"))
+    id_to_type = {str(r["id"]): str(r.get("type_code", "")).strip() for r in data["soldiers"]}
+    id_to_platoon = {str(r["id"]): str(r.get("platoon_code", "")).strip() for r in data["soldiers"]}
+    type_codes = g.type_codes_for_roster(keys, id_to_type)
+    platoon_codes = g.platoon_codes_for_roster(keys, id_to_platoon)
+    anchor = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    state = tmp_path / "checkpoint.json"
+    pack, _ = g.run_simulation_hot(
+        total_days=4,
+        burst_days=1,
+        state_path=state,
+        num_soldiers=79,
+        slots_per_block=10,
+        zone=zone,
+        block_hours=zone.shift_hours,
+        base_seed=42,
+        sim_trials=1,
+        min_consecutive_free_hours=6.0,
+        balance_total_hours=True,
+        total_hours_slack=0.0,
+        min_free_shifts_after_duty=2,
+        max_consecutive_duty_blocks=2,
+        band_relative=0.2,
+        plan_day_start_hour=5,
+        availability=None,
+        anchor=anchor,
+        type_codes=type_codes,
+        platoon_codes=platoon_codes,
+    )
+    recs = pack[3]
+    day = 3
+    rot_by: dict[int, int] = {}
+    loc_types: dict[int, set[str]] = {}
+    for a in recs:
+        if a.kind != "rotating" or a.day != day:
+            continue
+        rot_by[a.soldier_idx] = rot_by.get(a.soldier_idx, 0) + 1
+        loc_types.setdefault(a.soldier_idx, set()).add(
+            zone.location_type_ids[zone.slot_location_indices[a.slot]]
+        )
+    for sid, n in rot_by.items():
+        assert n <= 1, f"soldier s{sid} has {n} rotating blocks on day {day + 1}"
+        lt = loc_types[sid]
+        assert not ({"valero", "rotating_slot"} <= lt), f"soldier s{sid} has valero+gate same day"
+
+
 def test_pin_platoon_uniform_scarce_types_dv3_roster() -> None:
     """A=1 and G=2 in every platoon; H/D/F/E counts differ — only A and G score."""
     import yaml

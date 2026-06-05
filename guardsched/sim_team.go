@@ -68,33 +68,23 @@ func soldierExcludedByType(typeCodes []string, idx int, excluded map[string]stru
 	return ok
 }
 
-// rotatingDfsTypeExclude returns the exclude set for rotating DFS when all rotating slots share
-// one type id. ok is false when mixed rotating type ids and any has a non-empty exclude (skip DFS).
+// rotatingDfsTypeExclude returns the union of type excludes across all rotating slot types.
+// Mixed rotating types (e.g. gate + valero) use the combined exclude set so DFS can run.
 func (z *ZoneConfig) rotatingDfsTypeExclude(rotSlotIndices []int) (excluded map[string]struct{}, ok bool) {
 	if len(rotSlotIndices) == 0 {
 		return nil, true
 	}
-	tids := map[string]struct{}{}
-	var only string
+	union := map[string]struct{}{}
 	for _, sidx := range rotSlotIndices {
 		if sidx < 0 || sidx >= len(z.Slots) {
 			continue
 		}
 		tid := z.Locations[z.Slots[sidx].LocationIndex].TypeID
-		tids[tid] = struct{}{}
-		if only == "" {
-			only = tid
+		for code := range z.TypeExcludes[tid] {
+			union[code] = struct{}{}
 		}
 	}
-	if len(tids) == 1 {
-		return z.TypeExcludes[only], true
-	}
-	for tid := range tids {
-		if len(z.TypeExcludes[tid]) > 0 {
-			return nil, false
-		}
-	}
-	return nil, true
+	return union, true
 }
 
 func fillFullDayTeamPost(
@@ -729,6 +719,30 @@ func pickSoldiersForSlot(
 			return nil, fmt.Errorf("need %d soldiers, have %d available", n, i)
 		}
 		chosen := pickSoldier(pool, locI, timeMid, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, rotPf)
+		assigned = append(assigned, chosen)
+	}
+	return assigned, nil
+}
+
+func pickSoldiersForRotatingSlot(
+	n int,
+	poolBase func(assigned []*Soldier) []*Soldier,
+	locI, timeMid int,
+	deltasLoc, deltasTime [][]float64,
+	deltasG []float64,
+	r *PyRandom,
+	bandRelative float64,
+	balanceTotalHours bool,
+	totalHoursSlack float64,
+	rotPf prefixFn,
+) ([]*Soldier, error) {
+	var assigned []*Soldier
+	for i := 0; i < n; i++ {
+		pool := poolBase(assigned)
+		if len(pool) == 0 {
+			return nil, fmt.Errorf("need %d soldiers, have %d available", n, i)
+		}
+		chosen := pickRotatingSoldier(pool, locI, timeMid, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, rotPf)
 		assigned = append(assigned, chosen)
 	}
 	return assigned, nil

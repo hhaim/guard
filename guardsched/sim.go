@@ -165,6 +165,43 @@ func effLocTime(s *Soldier, locI, timeJ int, deltasLoc, deltasTime [][]float64) 
 	return loc, tim
 }
 
+func zoneHasMultipleRotatingTypes(zone *ZoneConfig, rotSlotIndices []int) bool {
+	tids := map[string]struct{}{}
+	for _, sidx := range rotSlotIndices {
+		if sidx < 0 || sidx >= len(zone.Slots) {
+			continue
+		}
+		tid := zone.Locations[zone.Slots[sidx].LocationIndex].TypeID
+		tids[tid] = struct{}{}
+	}
+	return len(tids) > 1
+}
+
+func soldierHasRotatingDutyDay(busyRot [][][]bool, day, soldierIdx, blocksPd int) bool {
+	if day < 0 || day >= len(busyRot) || soldierIdx < 0 || soldierIdx >= len(busyRot[day]) {
+		return false
+	}
+	for b := 0; b < blocksPd && b < len(busyRot[day][soldierIdx]); b++ {
+		if busyRot[day][soldierIdx][b] {
+			return true
+		}
+	}
+	return false
+}
+
+func filterRotatingPoolOnePerDay(pool []*Soldier, busyRot [][][]bool, day, blocksPd int) []*Soldier {
+	var filt []*Soldier
+	for _, s := range pool {
+		if !soldierHasRotatingDutyDay(busyRot, day, s.Idx, blocksPd) {
+			filt = append(filt, s)
+		}
+	}
+	if len(filt) == 0 {
+		return pool
+	}
+	return filt
+}
+
 func hybridSortKeyTuple(
 	s *Soldier, locI, timeJ int,
 	deltasLoc, deltasTime [][]float64,
@@ -199,6 +236,44 @@ func hybridSortKeyTuple(
 		etime[timeJ],
 		meanEtime,
 		s.totalRawGuardHours(),
+		float64(s.Idx),
+	}
+}
+
+func hybridRotatingSortKeyTuple(
+	s *Soldier, locI, timeJ int,
+	deltasLoc, deltasTime [][]float64,
+	dg float64,
+) []float64 {
+	den := math.Max(s.AvailableHours, 1e-9)
+	dloc := make([]float64, len(s.WLoc))
+	for i := range dloc {
+		dloc[i] = deltasLoc[s.Idx][i]
+	}
+	dtime := make([]float64, len(s.WTime))
+	for i := range dtime {
+		dtime[i] = deltasTime[s.Idx][i]
+	}
+	eloc := make([]float64, len(s.WLoc))
+	for i := range eloc {
+		eloc[i] = (s.WLoc[i] + dloc[i]) / den
+	}
+	etime := make([]float64, len(s.WTime))
+	for i := range etime {
+		etime[i] = (s.WTime[i] + dtime[i]) / den
+	}
+	eg := (s.WGlobal + dg) / den
+	var meanEtime float64
+	for _, v := range etime {
+		meanEtime += v
+	}
+	meanEtime /= float64(len(etime))
+	return []float64{
+		s.totalRawGuardHours(),
+		eloc[locI],
+		eg,
+		etime[timeJ],
+		meanEtime,
 		float64(s.Idx),
 	}
 }
@@ -312,6 +387,87 @@ func pickSoldier(
 	return applyTotalHoursBalance(pool2, r, balanceTotalHours, totalHoursSlack)
 }
 
+func pickRotatingSoldier(
+	candidates []*Soldier,
+	locI, timeJ int,
+	deltasLoc, deltasTime [][]float64,
+	deltasG []float64,
+	r *PyRandom,
+	bandRelative float64,
+	balanceTotalHours bool,
+	totalHoursSlack float64,
+	prefix prefixFn,
+) *Soldier {
+	if len(candidates) == 0 {
+		panic("no candidates")
+	}
+	type scored struct {
+		s   *Soldier
+		key [][]float64
+	}
+	var rows []scored
+	for _, s := range candidates {
+		h := hybridRotatingSortKeyTuple(s, locI, timeJ, deltasLoc, deltasTime, deltasG[s.Idx])
+		var full [][]float64
+		if prefix != nil {
+			full = append(full, floatSliceFromInts(prefix(s)))
+		}
+		full = append(full, h)
+		rows = append(rows, scored{s: s, key: full})
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return lexLessFloatSlices(rows[i].key, rows[j].key)
+	})
+	ranked := make([]*Soldier, len(rows))
+	for i := range rows {
+		ranked[i] = rows[i].s
+	}
+	minRaw := ranked[0].totalRawGuardHours()
+	for _, s := range ranked[1:] {
+		if v := s.totalRawGuardHours(); v < minRaw {
+			minRaw = v
+		}
+	}
+	rawCap := minRaw + math.Max(totalHoursSlack, 0.0)
+	var pool0 []*Soldier
+	for _, s := range ranked {
+		if s.totalRawGuardHours() <= rawCap+1e-9 {
+			pool0 = append(pool0, s)
+		}
+	}
+	if len(pool0) == 0 {
+		pool0 = ranked
+	}
+	bestLoc, _ := effLocTime(pool0[0], locI, timeJ, deltasLoc, deltasTime)
+	upperLoc := bandUpperRelativeOnly(bestLoc, bandRelative)
+	var pool1 []*Soldier
+	for _, s := range pool0 {
+		loc, _ := effLocTime(s, locI, timeJ, deltasLoc, deltasTime)
+		if loc <= upperLoc+1e-15 {
+			pool1 = append(pool1, s)
+		}
+	}
+	bestTime := math.Inf(1)
+	for _, s := range pool1 {
+		_, tim := effLocTime(s, locI, timeJ, deltasLoc, deltasTime)
+		if tim < bestTime {
+			bestTime = tim
+		}
+	}
+	upperTime := bandUpperRelativeOnly(bestTime, bandRelative)
+	var pool2 []*Soldier
+	for _, s := range pool1 {
+		_, tim := effLocTime(s, locI, timeJ, deltasLoc, deltasTime)
+		if tim <= upperTime+1e-15 {
+			pool2 = append(pool2, s)
+		}
+	}
+	if !balanceTotalHours {
+		return Choice(r, pool2)
+	}
+	return Choice(r, pool2)
+}
+
 func floatSliceFromInts(p []int) []float64 {
 	o := make([]float64, len(p))
 	for i, v := range p {
@@ -383,6 +539,7 @@ func rotatingEligibleForMask(
 	sh float64,
 	typeCodes []string,
 	typeExclude map[string]struct{},
+	enforceOneRotatingPerDay bool,
 ) []*Soldier {
 	var out []*Soldier
 	for _, s := range soldiers {
@@ -408,6 +565,9 @@ func rotatingEligibleForMask(
 		if avail != nil && !soldierAvail(avail, s.Idx, day, func() bool {
 			return avail.AvailRotatingBlock(s.Idx, day, b, planDayStartHour, sh)
 		}) {
+			continue
+		}
+		if enforceOneRotatingPerDay && soldierHasRotatingDutyDay(draftRot, day, s.Idx, blocksPd) {
 			continue
 		}
 		out = append(out, s)
@@ -508,13 +668,14 @@ func dfsRotatingOnlyMask(
 	sh float64,
 	typeCodes []string,
 	typeExclude map[string]struct{},
+	enforceOneRotatingPerDay bool,
 	nodes *int,
 ) bool {
 	if L >= days*blocksPd {
 		return true
 	}
 	day, b := L/blocksPd, L%blocksPd
-	cands := rotatingEligibleForMask(soldiers, draftRot, busy, day, b, blocksPd, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh, typeCodes, typeExclude)
+	cands := rotatingEligibleForMask(soldiers, draftRot, busy, day, b, blocksPd, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh, typeCodes, typeExclude, enforceOneRotatingPerDay)
 	if len(cands) < nRot {
 		return false
 	}
@@ -537,7 +698,7 @@ func dfsRotatingOnlyMask(
 			}
 		}
 		if !bad {
-			if dfsRotatingOnlyMask(draftRot, busy, soldiers, L+1, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh, typeCodes, typeExclude, nodes) {
+			if dfsRotatingOnlyMask(draftRot, busy, soldiers, L+1, days, blocksPd, nRot, kRest, maxConsecutiveDuty, xCool, avail, planDayStartHour, sh, typeCodes, typeExclude, enforceOneRotatingPerDay, nodes) {
 				return true
 			}
 		}
@@ -640,7 +801,7 @@ func RunSimulationAllRotating(
 		rotatingDfsTried = true
 		dr := new3DBool(days, numSoldiers, B)
 		nodes := 0
-		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, B, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, nil, planDayStartHour, sh, nil, nil, &nodes) {
+		if dfsRotatingOnlyMask(dr, busy, soldiers, 0, days, B, len(rotIdx), kRest, maxConsecutiveDutyBlocks, xCool, nil, planDayStartHour, sh, nil, nil, false, &nodes) {
 			copy3D(busyRot, dr)
 			dfsOk = true
 			for day := 0; day < days; day++ {
@@ -672,7 +833,7 @@ func RunSimulationAllRotating(
 								pool = append(pool, s)
 							}
 						}
-						chosen := pickSoldier(pool, locI, timeJ, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, rotPf)
+						chosen := pickRotatingSoldier(pool, locI, timeJ, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, rotPf)
 						assigned = append(assigned, chosen)
 						chosen.addAssignment(locI, timeJ, weight, sh)
 						busy[day][chosen.Idx][b] = true
@@ -746,7 +907,7 @@ func RunSimulationAllRotating(
 					}
 					panic(msg)
 				}
-				chosen := pickSoldier(pool, locI, timeJ, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, rotPf)
+				chosen := pickRotatingSoldier(pool, locI, timeJ, deltasLoc, deltasTime, deltasG, r, bandRelative, balanceTotalHours, totalHoursSlack, rotPf)
 				assigned = append(assigned, chosen)
 				chosen.addAssignment(locI, timeJ, weight, sh)
 				busy[day][chosen.Idx][b] = true

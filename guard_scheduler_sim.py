@@ -1880,21 +1880,16 @@ def _soldier_excluded_by_type(
 
 def _rotating_dfs_type_exclude(
     zone: ZoneConfig, rot_slot_indices: Sequence[int]
-) -> Optional[frozenset[str]]:
-    """Exclude set for rotating DFS, or None to skip DFS (mixed types with any exclude)."""
+) -> frozenset[str]:
+    """Union of type excludes across all rotating slot types (enables DFS for mixed zones)."""
     if not rot_slot_indices:
         return frozenset()
-    tids: List[str] = []
+    union: set[str] = set()
     for sidx in rot_slot_indices:
         loc_i = zone.slot_location_indices[sidx]
-        tids.append(zone.location_type_ids[loc_i])
-    unique = set(tids)
-    if len(unique) == 1:
-        return zone.type_excludes.get(next(iter(unique)), frozenset())
-    for tid in unique:
-        if zone.type_excludes.get(tid):
-            return None
-    return frozenset()
+        tid = zone.location_type_ids[loc_i]
+        union.update(zone.type_excludes.get(tid, frozenset()))
+    return frozenset(union)
 
 
 def _pick_soldiers_for_slot(
@@ -1932,6 +1927,30 @@ def _pick_soldiers_for_slot(
         )
         assigned.append(chosen)
     return assigned
+
+
+def _zone_has_multiple_rotating_types(zone: ZoneConfig, rot_slot_indices: Sequence[int]) -> bool:
+    tids = set()
+    for sidx in rot_slot_indices:
+        loc_i = zone.slot_location_indices[sidx]
+        tids.add(zone.location_type_ids[loc_i])
+    return len(tids) > 1
+
+
+def _soldier_has_rotating_duty_day(
+    busy_rot: np.ndarray, day: int, soldier_idx: int, blocks_pd: int
+) -> bool:
+    for b in range(blocks_pd):
+        if busy_rot[day, soldier_idx, b]:
+            return True
+    return False
+
+
+def _filter_rotating_pool_one_per_day(
+    pool: List[Soldier], busy_rot: np.ndarray, day: int, blocks_pd: int
+) -> List[Soldier]:
+    filt = [s for s in pool if not _soldier_has_rotating_duty_day(busy_rot, day, s.idx, blocks_pd)]
+    return filt if filt else pool
 
 
 def _fill_full_day_team_post(
@@ -2998,6 +3017,30 @@ def hybrid_sort_key(
     )
 
 
+def hybrid_rotating_sort_key(
+    s: Soldier,
+    loc_i: int,
+    time_j: int,
+    deltas_loc: np.ndarray,
+    deltas_time: np.ndarray,
+    dg: float,
+) -> Tuple[float, float, float, float, float, int]:
+    """Rotating picks: total raw hours first, then location/time fairness."""
+    dloc = deltas_loc[s.idx]
+    dtime = deltas_time[s.idx]
+    eloc = s.effective_loc_scores(dloc)
+    etime = s.effective_time_scores(dtime)
+    eg = s.effective_global(dg)
+    return (
+        s.total_raw_guard_hours(),
+        eloc[loc_i],
+        eg,
+        etime[time_j],
+        float(np.mean(etime)),
+        s.idx,
+    )
+
+
 def _eff_loc_time(
     s: Soldier,
     loc_i: int,
@@ -3082,6 +3125,94 @@ def pick_soldier(
     return _apply_total_hours_balance(
         pool2, rng, balance_total_hours=balance_total_hours, total_hours_slack=total_hours_slack
     )
+
+
+def pick_rotating_soldier(
+    candidates: List[Soldier],
+    loc_i: int,
+    time_j: int,
+    deltas_loc: np.ndarray,
+    deltas_time: np.ndarray,
+    deltas_g: np.ndarray,
+    rng: random.Random,
+    *,
+    band_relative: float = BAND_RELATIVE_DEFAULT,
+    balance_total_hours: bool = True,
+    total_hours_slack: float = 0.0,
+    prefix_key: Optional[Callable[[Soldier], Tuple[Any, ...]]] = None,
+) -> Soldier:
+    if not candidates:
+        raise ValueError("no candidates")
+
+    def eff_loc(s: Soldier) -> float:
+        return _eff_loc_time(s, loc_i, time_j, deltas_loc, deltas_time)[0]
+
+    def eff_time(s: Soldier) -> float:
+        return _eff_loc_time(s, loc_i, time_j, deltas_loc, deltas_time)[1]
+
+    def sort_key(s: Soldier) -> Tuple[Any, ...]:
+        h = hybrid_rotating_sort_key(
+            s, loc_i, time_j, deltas_loc, deltas_time, float(deltas_g[s.idx])
+        )
+        if prefix_key is None:
+            mid: Tuple[Any, ...] = h
+        else:
+            mid = tuple(prefix_key(s)) + h
+        return mid
+
+    ranked = sorted(candidates, key=sort_key)
+    min_raw = min(s.total_raw_guard_hours() for s in ranked)
+    raw_cap = min_raw + max(total_hours_slack, 0.0)
+    pool0 = [s for s in ranked if s.total_raw_guard_hours() <= raw_cap + 1e-9] or ranked
+
+    best_loc = eff_loc(pool0[0])
+    upper_loc = _band_upper_relative_only(best_loc, band_relative)
+    pool1 = [s for s in pool0 if eff_loc(s) <= upper_loc + 1e-15]
+
+    best_time = min(eff_time(s) for s in pool1)
+    upper_time = _band_upper_relative_only(best_time, band_relative)
+    pool2 = [s for s in pool1 if eff_time(s) <= upper_time + 1e-15]
+
+    if not balance_total_hours:
+        return rng.choice(pool2)
+    return rng.choice(pool2)
+
+
+def _pick_soldiers_for_rotating_slot(
+    n: int,
+    pool_base,
+    loc_i: int,
+    time_mid: int,
+    deltas_loc: np.ndarray,
+    deltas_time: np.ndarray,
+    deltas_g: np.ndarray,
+    rng: random.Random,
+    *,
+    band_relative: float,
+    balance_total_hours: bool,
+    total_hours_slack: float,
+    prefix_key=None,
+) -> List[Soldier]:
+    assigned: List[Soldier] = []
+    for _ in range(n):
+        pool = pool_base(assigned)
+        if not pool:
+            raise ValueError(f"need {n} soldiers, have {len(assigned)} available")
+        chosen = pick_rotating_soldier(
+            pool,
+            loc_i,
+            time_mid,
+            deltas_loc,
+            deltas_time,
+            deltas_g,
+            rng,
+            band_relative=band_relative,
+            balance_total_hours=balance_total_hours,
+            total_hours_slack=total_hours_slack,
+            prefix_key=prefix_key,
+        )
+        assigned.append(chosen)
+    return assigned
 
 
 def _rest_blocks_aligned(rest_after_h: float, sh: float) -> int:
@@ -3345,6 +3476,7 @@ def _rotating_eligible_for_mask(
     shift_hours: float = 4.0,
     type_codes: Optional[Sequence[str]] = None,
     type_exclude: frozenset[str] = frozenset(),
+    enforce_one_rotating_per_day: bool = False,
 ) -> List[Soldier]:
     out: List[Soldier] = []
     for s in soldiers:
@@ -3370,6 +3502,10 @@ def _rotating_eligible_for_mask(
             availability, s.idx, day, b, plan_start_hour, shift_hours
         ):
             continue
+        if enforce_one_rotating_per_day and _soldier_has_rotating_duty_day(
+            draft_rot, day, s.idx, blocks_pd
+        ):
+            continue
         out.append(s)
     return out
 
@@ -3392,6 +3528,7 @@ def _dfs_rotating_only_mask(
     shift_hours: float = 4.0,
     type_codes: Optional[Sequence[str]] = None,
     type_exclude: frozenset[str] = frozenset(),
+    enforce_one_rotating_per_day: bool = False,
 ) -> bool:
     """Fill ``draft_rot`` with exactly ``n_rot`` soldiers on duty per (day, block)."""
     if L >= days * blocks_pd:
@@ -3412,6 +3549,7 @@ def _dfs_rotating_only_mask(
         shift_hours,
         type_codes,
         type_exclude,
+        enforce_one_rotating_per_day,
     )
     if len(cands) < n_rot:
         return False
@@ -3447,6 +3585,7 @@ def _dfs_rotating_only_mask(
             shift_hours=shift_hours,
             type_codes=type_codes,
             type_exclude=type_exclude,
+            enforce_one_rotating_per_day=enforce_one_rotating_per_day,
         ):
             return True
         for s in comb:
@@ -3892,9 +4031,9 @@ def consume_rng_rotating_fill_days(
     dr = np.zeros((days, num_soldiers, blocks_pd), dtype=np.bool_)
     dfs_nodes = [0]
     dfs_type_exclude = _rotating_dfs_type_exclude(zone, rot_slot_indices)
+    cap_one_rotating_per_day = _zone_has_multiple_rotating_types(zone, rot_slot_indices)
     if not (
-        dfs_type_exclude is not None
-        and x_cool > 0
+        x_cool > 0
         and len(rot_slot_indices) > 0
         and math.comb(num_soldiers, len(rot_slot_indices))
         <= _ROTATING_COOLDOWN_DFS_MAX_COMBINATIONS
@@ -3915,6 +4054,7 @@ def consume_rng_rotating_fill_days(
             shift_hours=sh,
             type_codes=type_codes,
             type_exclude=dfs_type_exclude,
+            enforce_one_rotating_per_day=cap_one_rotating_per_day,
         )
     ):
         return
@@ -3952,7 +4092,7 @@ def consume_rng_rotating_fill_days(
                         and not _soldier_excluded_by_type(type_codes, s.idx, excl_r)
                     ]
 
-                _pick_soldiers_for_slot(
+                _pick_soldiers_for_rotating_slot(
                     n_req,
                     pool_fn_r,
                     loc_i,
@@ -4491,13 +4631,13 @@ def run_simulation(
                 )
 
     rot_slot_indices = _rotating_slot_indices(zone)
+    cap_one_rotating_per_day = _zone_has_multiple_rotating_types(zone, rot_slot_indices)
     k_rest_mask = k_rest if len(rot_slot_indices) == slots_per_block else 0
     dfs_rot_ok = False
     rotating_dfs_tried = False
     dfs_type_exclude = _rotating_dfs_type_exclude(zone, rot_slot_indices)
     if (
-        dfs_type_exclude is not None
-        and x_cool > 0
+        x_cool > 0
         and len(rot_slot_indices) > 0
         and math.comb(num_soldiers, len(rot_slot_indices)) <= _ROTATING_COOLDOWN_DFS_MAX_COMBINATIONS
     ):
@@ -4521,6 +4661,7 @@ def run_simulation(
             shift_hours=sh,
             type_codes=type_codes,
             type_exclude=dfs_type_exclude,
+            enforce_one_rotating_per_day=cap_one_rotating_per_day,
         ):
             np.copyto(busy_rot, dr)
             dfs_rot_ok = True
@@ -4587,7 +4728,7 @@ def run_simulation(
                             ]
 
                         try:
-                            chosen_list = _pick_soldiers_for_slot(
+                            chosen_list = _pick_soldiers_for_rotating_slot(
                                 n_req,
                                 pool_fn_r,
                                 loc_i,
@@ -4721,11 +4862,17 @@ def run_simulation(
                                     filt.append(s)
                                 else:
                                     stats.shift_cooldown_exclusions += 1
-                            return filt
-                        return base_pool
+                            pool_out = filt
+                        else:
+                            pool_out = base_pool
+                        if cap_one_rotating_per_day:
+                            pool_out = _filter_rotating_pool_one_per_day(
+                                pool_out, busy_rot, day, blocks_pd
+                            )
+                        return pool_out
 
                     try:
-                        chosen_list = _pick_soldiers_for_slot(
+                        chosen_list = _pick_soldiers_for_rotating_slot(
                             n_req,
                             pool_fn_rot,
                             loc_i,

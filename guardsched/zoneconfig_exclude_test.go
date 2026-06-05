@@ -55,7 +55,7 @@ func TestSoldierExcludedByType(t *testing.T) {
 	}
 }
 
-func TestRotatingDfsTypeExclude_mixedTypesSkipDFS(t *testing.T) {
+func TestRotatingDfsTypeExclude_mixedTypesUnionExclude(t *testing.T) {
 	raw := []byte(`
 schema_version: 2
 shift_hours: 4
@@ -89,8 +89,11 @@ time_zones:
 		t.Fatal(err)
 	}
 	rotIdx := []int{0, 1}
-	_, ok := zc.rotatingDfsTypeExclude(rotIdx)
-	if ok {
-		t.Fatal("mixed rotating types with exclude should skip DFS")
+	excl, ok := zc.rotatingDfsTypeExclude(rotIdx)
+	if !ok {
+		t.Fatal("mixed rotating types should use union exclude for DFS")
+	}
+	if _, has := excl["A"]; !has {
+		t.Fatal("union exclude should include A from rot_a")
 	}
 }
