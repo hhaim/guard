@@ -5,9 +5,7 @@ import { normalizePlanDoc } from "../lib/planDoc";
 import type { PlatoonColorEntry } from "../lib/platoonColors";
 import type { Soldier } from "../lib/soldiers";
 import { PlanChangeTable } from "./PlanChangeTable";
-import { PlanTopMetrics } from "./PlanTopMetrics";
 import { ScheduleResultsReport, type ScheduleReportSections } from "./ScheduleResultsReport";
-import { inferSoldierCount } from "../lib/scheduleReport";
 
 export type PlanDocViewProps = {
   plan: PlanDoc;
@@ -20,6 +18,7 @@ export type PlanDocViewProps = {
   onPlanChange?: (next: PlanDoc) => void;
   readOnly?: boolean;
   soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
+  statsPresentation?: "plan" | "history";
 };
 
 /**
@@ -36,20 +35,12 @@ export function PlanDocView({
   onPlanChange,
   readOnly = false,
   soldiersByDay,
+  statsPresentation = "plan",
 }: PlanDocViewProps) {
   const doc = useMemo(() => normalizePlanDoc(plan), [plan]);
-  const rosterSize = Math.max(soldierIds.length, inferSoldierCount(doc.assignments));
 
   return (
     <>
-      {doc.assignments.length > 0 && (
-        <PlanTopMetrics
-          plan={doc}
-          soldierCount={rosterSize}
-          soldierIds={soldierIds}
-          soldiersByDay={soldiersByDay}
-        />
-      )}
       {onPlanChange && (
         <PlanChangeTable
           plan={doc}
@@ -68,6 +59,7 @@ export function PlanDocView({
           platoonColors={platoonColors}
           sections={sections}
           soldiersByDay={soldiersByDay}
+          statsPresentation={statsPresentation}
         />
       ) : (
         <p className="contacts-empty">No assignments in plan.</p>

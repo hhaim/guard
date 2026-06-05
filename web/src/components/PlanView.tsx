@@ -1134,6 +1134,7 @@ export function PlanView({
                   onPlanChange={readOnly ? undefined : onProposalChange}
                   readOnly={readOnly}
                   soldiersByDay={availabilityByDay}
+                  statsPresentation="plan"
                 />
               </PlanTabErrorBoundary>
             )}

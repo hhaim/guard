@@ -11,6 +11,8 @@ import {
   buildScheduleStats,
   buildTimelineLanes,
   buildZoneReportView,
+  computePlanOverviewStats,
+  type PlanOverviewStats,
   formatTimelineSegmentRange,
   filterOnDutyTimelineLanes,
   inferSoldierCount,
@@ -57,6 +59,8 @@ type Props = {
   sections?: ScheduleReportSections;
   /** Per-day soldier availability; merged over plan.soldiers for timeline yellow segments. */
   soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
+  /** Plan tab: stacked hour bars + overview metrics; Stats tab: line charts + Z-score fairness. */
+  statsPresentation?: "plan" | "history";
 };
 
 function soldierTypeCode(soldierIdx: number, soldierIds: string[], soldiers: Soldier[]): string {
@@ -644,6 +648,7 @@ export function ScheduleResultsReport({
   platoonColors = [],
   sections: sectionsProp,
   soldiersByDay: soldiersByDayProp,
+  statsPresentation = "plan",
 }: Props) {
   const plan = useMemo(() => normalizePlanDoc(planProp), [planProp]);
   const { assignments, days, shift_hours: shiftHours, meta, anchor_date: anchorDate } = plan;
@@ -760,6 +765,38 @@ export function ScheduleResultsReport({
     }
     return m;
   }, [report.stats]);
+
+  const planOverview = useMemo((): PlanOverviewStats | undefined => {
+    if (statsPresentation !== "plan" || !report.stats) return undefined;
+    const roster =
+      soldierIds.length > 0
+        ? soldierIds
+        : Array.from({ length: report.soldierCount }, (_, i) => `S${i}`);
+    return computePlanOverviewStats(
+      assignments,
+      days,
+      report.soldierCount,
+      report.stats.summary,
+      {
+        soldierIds: roster,
+        anchorDate,
+        planDayStartHour,
+        shiftHours: report.zone.shiftHours,
+        soldiersByDay: timelineSoldiersByDay,
+      },
+    );
+  }, [
+    statsPresentation,
+    report.stats,
+    report.soldierCount,
+    report.zone.shiftHours,
+    assignments,
+    days,
+    soldierIds,
+    anchorDate,
+    planDayStartHour,
+    timelineSoldiersByDay,
+  ]);
 
   const soldierRows = useMemo(() => {
     if (selectedSoldier == null) return null;
@@ -906,6 +943,8 @@ export function ScheduleResultsReport({
           soldierIds={soldierIds}
           soldiers={soldiers}
           typesDoc={typesDoc}
+          statsPresentation={statsPresentation}
+          planOverview={planOverview}
         />
       )}
 

@@ -17,6 +17,7 @@ const stubZone = (): ZoneReportView => ({
   locIds: ["l0"],
   locWeights: [1],
   locTypeIds: [""],
+  slotTypeNameById: {},
   typeWeightMult: {},
   typeHoursFactor: {},
   typeFullDayHours: {},
@@ -130,6 +131,49 @@ describe("buildScheduleStats", () => {
     expect(timeHours[2]).toBeCloseTo(8, 5);
     expect(timeHours[3]).toBeCloseTo(4, 5);
     expect(timeHours[4]).toBeCloseTo(2, 5);
+  });
+
+  it("aggregates raw hours by slot type across locations sharing a type", () => {
+    const zone = buildZoneReportView({
+      ...dv3LikeZones(),
+      zone_loc: [
+        { id: "loc_a", type: "kitchen", name: "A", weight: 1, full_name: "A" },
+        { id: "loc_b", type: "kitchen", name: "B", weight: 1, full_name: "B" },
+      ],
+      slots: [
+        { location_id: "loc_a", name: "a1", full_name: "" },
+        { location_id: "loc_b", name: "b1", full_name: "" },
+      ],
+    }, 2);
+    const assignments: ScheduleAssignment[] = [
+      {
+        day: 0,
+        calendar_block: 0,
+        start_hour: 5,
+        slot: 0,
+        soldier_idx: 0,
+        loc_i: 0,
+        time_j: 0,
+        weight: 1,
+        raw_hours: 4,
+      },
+      {
+        day: 0,
+        calendar_block: 1,
+        start_hour: 9,
+        slot: 1,
+        soldier_idx: 0,
+        loc_i: 1,
+        time_j: 1,
+        weight: 1,
+        raw_hours: 3,
+      },
+    ];
+    const stats = buildScheduleStats(assignments, 1, zone, 2);
+    expect(stats.slotTypeIds).toEqual(["kitchen"]);
+    expect(stats.summary[0].rawHoursBySlotType).toEqual([7]);
+    expect(stats.summary[1].rawHoursBySlotType).toEqual([0]);
+    expect(stats.summary[1].totalRawHours).toBe(0);
   });
 
   it("applies hours_factor for full_day assignments", () => {

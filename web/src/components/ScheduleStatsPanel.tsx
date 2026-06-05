@@ -1,7 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   Legend,
   Line,
@@ -12,7 +10,8 @@ import {
   YAxis,
 } from "recharts";
 import { compactVectorTotalHours } from "../lib/formatCompactHourVector";
-import type { ScheduleStatsBundle, SoldierSummaryRow } from "../lib/scheduleReport";
+import type { PlanOverviewStats, ScheduleStatsBundle, SoldierSummaryRow } from "../lib/scheduleReport";
+import { loadFactorLevel } from "../lib/scheduleReport";
 import { buildSoldierProfileTooltip } from "../lib/soldierTooltip";
 import type { Soldier } from "../lib/soldiers";
 import type { SoldierTypesDoc } from "../lib/soldierTypes";
@@ -31,6 +30,8 @@ const SERIES_COLORS = [
   "#bcbd22",
   "#17becf",
 ];
+
+const DUTY_HOURS_EPS = 1e-9;
 
 type SummarySortKey =
   | "soldier"
@@ -52,7 +53,15 @@ type Props = {
   soldierIds?: string[];
   soldiers?: Soldier[];
   typesDoc?: SoldierTypesDoc;
+  statsPresentation?: "plan" | "history";
+  planOverview?: PlanOverviewStats;
 };
+
+function formatHours(h: number): string {
+  if (!Number.isFinite(h)) return "—";
+  if (h >= 100) return `${Math.round(h)} h`;
+  return `${h.toFixed(1)} h`;
+}
 
 function StatLineChart({
   title,
@@ -89,6 +98,130 @@ function StatLineChart({
             ))}
           </LineChart>
         </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function PlanOverviewMetrics({ overview }: { overview: PlanOverviewStats }) {
+  const loadPct = overview.loadFactor * 100;
+  const loadBand = loadFactorLevel(overview.loadFactor);
+  const avgHours = overview.avgHoursPerWorkingSoldier;
+
+  return (
+    <div className="sched-plan-overview glass-card" aria-label="Plan overview">
+      <h4 className="sched-subtitle">Plan overview</h4>
+      <div className="sched-plan-overview-grid">
+        <div className="plan-top-metric">
+          <span className="plan-top-metric-label">Load factor</span>
+          <span className={`plan-top-metric-value plan-top-metric-load--${loadBand}`}>
+            {loadPct.toFixed(1)}%
+          </span>
+          <span className="plan-top-metric-detail">
+            {formatHours(overview.totalWorkHours)} duty / {formatHours(overview.totalCapacityHours)} capacity
+          </span>
+        </div>
+        <div className="plan-top-metric">
+          <span className="plan-top-metric-label">Fairness (σ duty hours)</span>
+          <span className="plan-top-metric-value">{overview.fairnessStdDevHours.toFixed(2)} h</span>
+        </div>
+        <div className="plan-top-metric">
+          <span className="plan-top-metric-label">Soldiers free</span>
+          <span className="plan-top-metric-value">{overview.soldiersFree}</span>
+        </div>
+        <div className="plan-top-metric">
+          <span className="plan-top-metric-label">Soldiers assigned</span>
+          <span className="plan-top-metric-value">{overview.soldiersAssigned}</span>
+        </div>
+        <div className="plan-top-metric">
+          <span className="plan-top-metric-label">Avg hours / working soldier</span>
+          <span className="plan-top-metric-value">{formatHours(avgHours)}</span>
+        </div>
+        <div className="plan-top-metric">
+          <span className="plan-top-metric-label">Active slots</span>
+          <span className="plan-top-metric-value">{overview.activeSlots}</span>
+        </div>
+        <div className="plan-top-metric">
+          <span className="plan-top-metric-label">Total soldiers available</span>
+          <span className="plan-top-metric-value">{overview.totalSoldiersAvailable}</span>
+          {overview.assignableSoldierCount != null && (
+            <span className="plan-top-metric-detail">
+              {overview.assignableSoldierCount} assignable (availability snapshot)
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SoldierHoursStackedBars({
+  rows,
+  segments,
+  segmentLabels,
+  title,
+}: {
+  rows: SoldierSummaryRow[];
+  segments: (row: SoldierSummaryRow) => number[];
+  segmentLabels: string[];
+  title: string;
+}) {
+  if (rows.length === 0) return null;
+
+  const maxTotal = Math.max(
+    ...rows.map((row) => segments(row).reduce((a, b) => a + b, 0)),
+    DUTY_HOURS_EPS,
+  );
+
+  return (
+    <div className="sched-soldier-hours-chart">
+      <h4 className="sched-subtitle">{title}</h4>
+      {segmentLabels.length > 0 && (
+        <ul className="sched-soldier-hours-legend" aria-label="Segment legend">
+          {segmentLabels.map((label, i) => (
+            <li key={label}>
+              <span
+                className="sched-soldier-hours-legend-swatch"
+                style={{ backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] }}
+                aria-hidden
+              />
+              <span>{label}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="sched-soldier-hours-scroll">
+        {rows.map((row) => {
+          const segs = segments(row);
+          const total = segs.reduce((a, b) => a + b, 0);
+          return (
+            <div key={row.soldierIdx} className="sched-soldier-hours-row">
+              <span className="sched-soldier-hours-label" title={row.label}>
+                <SoldierTypeChip code={row.typeCode} />
+                <span className="sched-soldier-hours-label-text">{row.label}</span>
+              </span>
+              <div className="sched-soldier-hours-track" aria-label={`${row.label}: ${total.toFixed(1)} h`}>
+                {segs.map((h, i) => {
+                  if (h <= DUTY_HOURS_EPS) return null;
+                  const pct = (100 * h) / maxTotal;
+                  const segLabel = segmentLabels[i] ?? `Segment ${i + 1}`;
+                  return (
+                    <span
+                      key={i}
+                      className="sched-soldier-hours-seg"
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length],
+                      }}
+                      title={`${segLabel}: ${h.toFixed(1)} h`}
+                    />
+                  );
+                })}
+              </div>
+              <span className="sched-soldier-hours-total">{total.toFixed(1)} h</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -175,6 +308,47 @@ function SoldierTypeChip({ code }: { code: string }) {
   );
 }
 
+function FreeSoldiersFooter({
+  freeSoldiers,
+  soldierIds,
+  soldiers,
+  typesDoc,
+}: {
+  freeSoldiers: SoldierSummaryRow[];
+  soldierIds: string[];
+  soldiers: Soldier[];
+  typesDoc?: SoldierTypesDoc;
+}) {
+  if (freeSoldiers.length === 0) return null;
+  return (
+    <div className="sched-free-soldiers-footer">
+      <strong>
+        {freeSoldiers.length} soldier{freeSoldiers.length === 1 ? "" : "s"} free (0 guard hours):
+      </strong>{" "}
+      {freeSoldiers.map((row, i) => {
+        const tooltipLines = buildSoldierProfileTooltip(
+          row.soldierIdx,
+          row.rawHoursBySlot,
+          soldierIds,
+          soldiers,
+          typesDoc,
+        );
+        return (
+          <span key={row.soldierIdx}>
+            {i > 0 ? ", " : ""}
+            <SoldierHoverTooltip lines={tooltipLines}>
+              <span className="sched-free-soldier-entry">
+                <SoldierTypeChip code={row.typeCode} />
+                {row.label}
+              </span>
+            </SoldierHoverTooltip>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ScheduleStatsPanel({
   stats,
   days,
@@ -183,6 +357,8 @@ export function ScheduleStatsPanel({
   soldierIds = [],
   soldiers = [],
   typesDoc,
+  statsPresentation = "plan",
+  planOverview,
 }: Props) {
   const [sortKey, setSortKey] = useState<SummarySortKey>("totalRaw");
   const [sortDir, setSortDir] = useState<SortDirection>("desc");
@@ -192,16 +368,22 @@ export function ScheduleStatsPanel({
     [days, stats.soldierCount, slotsPerBlock, shiftHours],
   );
 
-  const soldierBarKeys = useMemo(
-    () => Array.from({ length: stats.soldierCount }, (_, s) => `S${s}`),
-    [stats.soldierCount],
-  );
+  const { onDutySummary, freeSoldiers, onDutyByHoursDesc } = useMemo(() => {
+    const free: SoldierSummaryRow[] = [];
+    const onDuty: SoldierSummaryRow[] = [];
+    for (const row of stats.summary) {
+      if (row.totalRawHours <= DUTY_HOURS_EPS) free.push(row);
+      else onDuty.push(row);
+    }
+    const byHours = [...onDuty].sort((a, b) => b.totalRawHours - a.totalRawHours);
+    return { onDutySummary: onDuty, freeSoldiers: free, onDutyByHoursDesc: byHours };
+  }, [stats.summary]);
 
   const sortedSummary = useMemo(() => {
-    const rows = [...stats.summary];
+    const rows = [...onDutySummary];
     rows.sort((a, b) => compareSummaryRows(a, b, sortKey, sortDir));
     return rows;
-  }, [stats.summary, sortKey, sortDir]);
+  }, [onDutySummary, sortKey, sortDir]);
 
   const toggleSort = (key: SummarySortKey) => {
     if (sortKey === key) {
@@ -216,65 +398,70 @@ export function ScheduleStatsPanel({
     <section className="sched-section sched-stats-section">
       <h3 className="sched-section-title">Statistics</h3>
 
-      <div className="sched-global-stats glass-card">
-        <h4 className="sched-subtitle">Global fairness</h4>
-        <ul className="sched-global-list">
-          <li>
-            <span className="sched-global-k">Fairness score</span>
-            <span className="sched-global-v">{stats.fairness.fairnessScore.toFixed(4)}</span>
-            <span className="sched-global-hint"> (lower is fairer)</span>
-          </li>
-          <li>
-            <span className="sched-global-k">Std all Z values</span>
-            <span className="sched-global-v">{stats.fairness.stdAllZ.toFixed(4)}</span>
-          </li>
-          <li>
-            <span className="sched-global-k">Min std across slots</span>
-            <span className="sched-global-v">{stats.fairness.minStdSlotZ.toFixed(4)}</span>
-          </li>
-          <li>
-            <span className="sched-global-k">Std raw hours (soldiers)</span>
-            <span className="sched-global-v">{stats.fairness.stdRawHours.toFixed(4)}</span>
-          </li>
-          <li>
-            <span className="sched-global-k">Raw hours spread</span>
-            <span className="sched-global-v">{stats.fairness.rawHoursSpread.toFixed(2)} h</span>
-          </li>
-        </ul>
-      </div>
+      {statsPresentation === "plan" && planOverview && (
+        <PlanOverviewMetrics overview={planOverview} />
+      )}
 
-      <StatLineChart
-        title={`Mean raw hours per day by location — ${runTitle}`}
-        yLabel="Mean raw guard hours per calendar day (h)"
-        data={stats.lineChartLoc}
-        seriesKeys={stats.locLabels}
-      />
-
-      <StatLineChart
-        title={`Mean raw hours per day by time band — ${runTitle}`}
-        yLabel="Mean raw guard hours per calendar day (h)"
-        data={stats.lineChartTime}
-        seriesKeys={stats.timeLabels}
-      />
-
-      <div className="sched-stat-chart">
-        <h4 className="sched-subtitle">Max consecutive free time (per day) — {runTitle}</h4>
-        <p className="sched-hint">Per day, per soldier: longest contiguous off-duty span (hours).</p>
-        <div className="sched-chart-box">
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={stats.maxFreeBarData} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-              <XAxis dataKey="day" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} label={{ value: "Max consecutive free (h)", angle: -90, position: "insideLeft", style: { fontSize: 11 } }} />
-              <Tooltip />
-              <Legend wrapperStyle={{ fontSize: 10 }} />
-              {soldierBarKeys.map((key, i) => (
-                <Bar key={key} dataKey={key} fill={SERIES_COLORS[i % SERIES_COLORS.length]} maxBarSize={days === 1 ? 48 : 24} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
+      {statsPresentation === "history" && (
+        <div className="sched-global-stats glass-card">
+          <h4 className="sched-subtitle">Global fairness</h4>
+          <ul className="sched-global-list">
+            <li>
+              <span className="sched-global-k">Fairness score</span>
+              <span className="sched-global-v">{stats.fairness.fairnessScore.toFixed(4)}</span>
+              <span className="sched-global-hint"> (lower is fairer)</span>
+            </li>
+            <li>
+              <span className="sched-global-k">Std all Z values</span>
+              <span className="sched-global-v">{stats.fairness.stdAllZ.toFixed(4)}</span>
+            </li>
+            <li>
+              <span className="sched-global-k">Min std across slots</span>
+              <span className="sched-global-v">{stats.fairness.minStdSlotZ.toFixed(4)}</span>
+            </li>
+            <li>
+              <span className="sched-global-k">Std raw hours (soldiers)</span>
+              <span className="sched-global-v">{stats.fairness.stdRawHours.toFixed(4)}</span>
+            </li>
+            <li>
+              <span className="sched-global-k">Raw hours spread</span>
+              <span className="sched-global-v">{stats.fairness.rawHoursSpread.toFixed(2)} h</span>
+            </li>
+          </ul>
         </div>
-      </div>
+      )}
+
+      {statsPresentation === "history" ? (
+        <>
+          <StatLineChart
+            title={`Mean raw hours per day by location — ${runTitle}`}
+            yLabel="Mean raw guard hours per calendar day (h)"
+            data={stats.lineChartLoc}
+            seriesKeys={stats.locLabels}
+          />
+          <StatLineChart
+            title={`Mean raw hours per day by time band — ${runTitle}`}
+            yLabel="Mean raw guard hours per calendar day (h)"
+            data={stats.lineChartTime}
+            seriesKeys={stats.timeLabels}
+          />
+        </>
+      ) : (
+        <>
+          <SoldierHoursStackedBars
+            title={`Guard hours by slot type — ${runTitle}`}
+            rows={onDutyByHoursDesc}
+            segments={(row) => row.rawHoursBySlotType}
+            segmentLabels={stats.slotTypeLabels}
+          />
+          <SoldierHoursStackedBars
+            title={`Guard hours by time band — ${runTitle}`}
+            rows={onDutyByHoursDesc}
+            segments={(row) => row.rawHoursByTime}
+            segmentLabels={stats.timeLabels}
+          />
+        </>
+      )}
 
       <div className="sched-summary-block">
         <h4 className="sched-subtitle">Soldier summary + consecutive free time</h4>
@@ -282,6 +469,7 @@ export function ScheduleStatsPanel({
           <strong>Max consecutive free</strong> columns: min / mean / max over simulation days (hours per day).
           <strong> Raw h by slot</strong> and <strong>Time bands</strong>: compact vectors — only positive entries as{" "}
           <code>[slot_id:hours]</code> or <code>[time_zone_index:hours]</code> (1-based); empty → <code>[]</code>.
+          Soldiers with zero guard hours are listed below the table.
         </p>
         <div className="sched-table-scroll">
           <table className="sched-table sched-summary-table">
@@ -335,11 +523,18 @@ export function ScheduleStatsPanel({
             </tbody>
           </table>
         </div>
+        <FreeSoldiersFooter
+          freeSoldiers={freeSoldiers}
+          soldierIds={soldierIds}
+          soldiers={soldiers}
+          typesDoc={typesDoc}
+        />
       </div>
 
-      {days > 1 && (
-        <div className="sched-summary-block">
-          <h4 className="sched-subtitle">Max consecutive free — numeric (day × soldier)</h4>
+      <div className="sched-summary-block">
+        <h4 className="sched-subtitle">Max consecutive free time — {runTitle}</h4>
+        <p className="sched-hint">Per day, per soldier: longest contiguous off-duty span (hours).</p>
+        {days > 1 && (
           <div className="sched-table-scroll">
             <table className="sched-table sched-summary-table">
               <thead>
@@ -362,8 +557,8 @@ export function ScheduleStatsPanel({
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }

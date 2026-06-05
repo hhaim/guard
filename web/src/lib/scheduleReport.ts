@@ -39,6 +39,8 @@ export type ZoneReportView = {
   locIds: string[];
   locWeights: number[];
   locTypeIds: string[];
+  /** Slot type id → display name from zones `slots_types`. */
+  slotTypeNameById: Record<string, string>;
   typeWeightMult: Record<string, number>;
   /** full_day / full_day_team credited duty fraction (default 1). */
   typeHoursFactor: Record<string, number>;
@@ -365,6 +367,10 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock?: number): Zone
   const locIds = doc.zone_loc.map((z) => z.id);
   const locWeights = doc.zone_loc.map((z) => (typeof z.weight === "number" ? z.weight : 1));
   const locTypeIds = doc.zone_loc.map((z) => z.type ?? "");
+  const slotTypeNameById: Record<string, string> = {};
+  for (const st of doc.slots_types) {
+    slotTypeNameById[st.id] = st.name?.trim() || st.id;
+  }
   const typeWeightMult: Record<string, number> = {};
   const typeHoursFactor: Record<string, number> = {};
   const typeFullDayHours: Record<string, { startH: number; endH: number }> = {};
@@ -421,6 +427,7 @@ export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock?: number): Zone
     locIds,
     locWeights,
     locTypeIds,
+    slotTypeNameById,
     typeWeightMult,
     typeHoursFactor,
     typeFullDayHours,
@@ -964,6 +971,8 @@ export type SoldierSummaryRow = {
   globalScore: number;
   totalWeight: number;
   rawHoursByLoc: number[];
+  /** Guard hours aggregated by slot type (zone_loc.type), aligned with `slotTypeIds`. */
+  rawHoursBySlotType: number[];
   rawHoursBySlot: number[];
   rawHoursByTime: number[];
   timeBandPct: number[];
@@ -995,6 +1004,10 @@ export type ScheduleStatsBundle = {
   nt: number;
   locLabels: string[];
   timeLabels: string[];
+  /** Ordered unique slot-type ids (zone_loc.type). */
+  slotTypeIds: string[];
+  /** Display labels for `slotTypeIds` (id + name when available). */
+  slotTypeLabels: string[];
   /** Mean raw guard hours per calendar day in each location (soldier × loc). */
   meanDailyRawLoc: number[][];
   /** Mean raw guard hours per calendar day in each time band (soldier × time). */
@@ -1134,6 +1147,120 @@ export function computePlanWorkloadMetrics(
     loadFactor: capacity > 0 ? totalWork / capacity : 0,
     fairnessStdDevHours: stddevSample(perSoldier),
   };
+}
+
+export type PlanOverviewStats = PlanWorkloadMetrics & {
+  soldiersFree: number;
+  soldiersAssigned: number;
+  avgHoursPerWorkingSoldier: number;
+  activeSlots: number;
+  totalSoldiersAvailable: number;
+  assignableSoldierCount?: number;
+};
+
+export type PlanOverviewOpts = PlanWorkloadOpts;
+
+const DUTY_HOURS_EPS = 1e-9;
+
+/** Unique soldiers assignable on at least one plan day (full ∪ partial ∖ absent). */
+export function countAssignableSoldiersAcrossPlanDays(
+  days: number,
+  anchorDate: string,
+  soldiersByDay?: Record<string, PlanDaySoldiersDoc>,
+): number | undefined {
+  if (!hasAvailabilitySnapshot(soldiersByDay) || !anchorDate.trim()) return undefined;
+  const ids = new Set<string>();
+  const simDays = Math.max(1, days);
+  for (let d = 0; d < simDays; d++) {
+    const cal = calendarDateForPlanDay(anchorDate, d);
+    const day = soldiersByDay?.[cal];
+    if (!day) continue;
+    for (const id of day.avail_full ?? []) {
+      const t = id.trim();
+      if (t) ids.add(t);
+    }
+    for (const id of Object.keys(day.avail_partial ?? {})) {
+      const t = id.trim();
+      if (t) ids.add(t);
+    }
+    for (const id of day.avail_absent ?? []) {
+      ids.delete(id.trim());
+    }
+  }
+  return ids.size;
+}
+
+export function computePlanOverviewStats(
+  assignments: ScheduleAssignment[],
+  days: number,
+  soldierCount: number,
+  statsSummary: SoldierSummaryRow[],
+  opts?: PlanOverviewOpts,
+): PlanOverviewStats {
+  const workload = computePlanWorkloadMetrics(assignments, days, soldierCount, opts);
+  let soldiersFree = 0;
+  let soldiersAssigned = 0;
+  for (const row of statsSummary) {
+    if (row.totalRawHours <= DUTY_HOURS_EPS) soldiersFree++;
+    else soldiersAssigned++;
+  }
+  const avgHoursPerWorkingSoldier =
+    soldiersAssigned > 0 ? workload.totalWorkHours / soldiersAssigned : Number.NaN;
+  const simDays = Math.max(1, days);
+  const activeSlotSet = new Set<number>();
+  for (const a of assignments) {
+    if (a.day < 0 || a.day >= simDays) continue;
+    if (a.slot >= 0) activeSlotSet.add(a.slot);
+  }
+  const rosterIds = opts?.soldierIds?.filter((id) => id.trim().length > 0) ?? [];
+  const totalSoldiersAvailable = Math.max(soldierCount, rosterIds.length);
+  const assignableSoldierCount = countAssignableSoldiersAcrossPlanDays(
+    days,
+    opts?.anchorDate ?? "",
+    opts?.soldiersByDay,
+  );
+  return {
+    ...workload,
+    soldiersFree,
+    soldiersAssigned,
+    avgHoursPerWorkingSoldier,
+    activeSlots: activeSlotSet.size,
+    totalSoldiersAvailable,
+    assignableSoldierCount,
+  };
+}
+
+function buildSlotTypeAggregation(
+  zone: ZoneReportView,
+  rawLoc: number[][],
+  soldierCount: number,
+): { slotTypeIds: string[]; slotTypeLabels: string[]; rawHoursBySlotType: number[][] } {
+  const typeOrder: string[] = [];
+  const typeIndex = new Map<string, number>();
+  const locToTypeIdx = zone.locTypeIds.map((typeId) => {
+    const tid = typeId || "";
+    let idx = typeIndex.get(tid);
+    if (idx === undefined) {
+      idx = typeOrder.length;
+      typeOrder.push(tid);
+      typeIndex.set(tid, idx);
+    }
+    return idx;
+  });
+  const nt = typeOrder.length;
+  const rawHoursBySlotType = Array.from({ length: soldierCount }, () => Array(nt).fill(0));
+  for (let s = 0; s < soldierCount; s++) {
+    for (let li = 0; li < (rawLoc[s]?.length ?? 0); li++) {
+      const h = rawLoc[s][li];
+      if (h > 0) rawHoursBySlotType[s][locToTypeIdx[li]] += h;
+    }
+  }
+  const slotTypeLabels = typeOrder.map((id) => {
+    if (!id) return "(no type)";
+    const name = zone.slotTypeNameById[id];
+    return name && name !== id ? `${id} — ${name}` : id;
+  });
+  return { slotTypeIds: typeOrder, slotTypeLabels, rawHoursBySlotType };
 }
 
 /** Load-factor color band: ≤10% green, ≥33% red, between amber. */
@@ -1393,6 +1520,12 @@ export function buildScheduleStats(
     fairnessScore: stdAll + 0.25 * stdRaw,
   };
 
+  const { slotTypeIds, slotTypeLabels, rawHoursBySlotType } = buildSlotTypeAggregation(
+    zone,
+    rawLoc,
+    soldierCount,
+  );
+
   const locShort = zone.locNames.map((n, i) => n || zone.locIds[i] || `L${i}`);
   const timeShort = zone.timeNames.map((n, i) => n || `T${i}`);
 
@@ -1435,6 +1568,7 @@ export function buildScheduleStats(
       globalScore: wGlobal[s] / Math.max(availableHours, 1e-9),
       totalWeight: wGlobal[s],
       rawHoursByLoc: rawLoc[s],
+      rawHoursBySlotType: rawHoursBySlotType[s],
       rawHoursBySlot: rawSlot[s],
       rawHoursByTime: rawTime[s],
       timeBandPct,
@@ -1453,6 +1587,8 @@ export function buildScheduleStats(
     nt,
     locLabels: locShort,
     timeLabels: timeShort,
+    slotTypeIds,
+    slotTypeLabels,
     meanDailyRawLoc,
     meanDailyRawTime,
     maxFree,

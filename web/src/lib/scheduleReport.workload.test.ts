@@ -5,7 +5,11 @@ import {
   planDayAssignableCapacityHours,
   soldierAssignableHoursForPlanDay,
 } from "./soldierAvailability";
-import { computePlanWorkloadMetrics } from "./scheduleReport";
+import {
+  computePlanOverviewStats,
+  computePlanWorkloadMetrics,
+  type SoldierSummaryRow,
+} from "./scheduleReport";
 
 const anchor = "2026-06-01";
 const planDayStartHour = 5;
@@ -194,5 +198,72 @@ describe("computePlanWorkloadMetrics", () => {
     });
     expect(m.totalWorkHours).toBe(4);
     expect(m.totalCapacityHours).toBe(51 * 24);
+  });
+});
+
+function summaryRow(
+  soldierIdx: number,
+  totalRawHours: number,
+  partial: Partial<SoldierSummaryRow> = {},
+): SoldierSummaryRow {
+  return {
+    soldierIdx,
+    label: `s${soldierIdx}`,
+    soldierId: `s${soldierIdx}`,
+    typeCode: "",
+    typeName: "",
+    totalRawHours,
+    globalScore: 0,
+    totalWeight: 0,
+    rawHoursByLoc: [],
+    rawHoursBySlotType: [],
+    rawHoursBySlot: [],
+    rawHoursByTime: [],
+    timeBandPct: [],
+    rawHoursBySlotCompact: "[]",
+    timeBandHoursCompact: "[]",
+    slotIds: [],
+    minMaxFree: 24,
+    meanMaxFree: 24,
+    maxMaxFree: 24,
+    ...partial,
+  };
+}
+
+describe("computePlanOverviewStats", () => {
+  it("counts free vs assigned soldiers and averages hours for on-duty only", () => {
+    const assignments = [
+      assignment({ day: 0, soldier_idx: 0, raw_hours: 8 }),
+      assignment({ day: 0, soldier_idx: 1, raw_hours: 4, slot: 1 }),
+    ];
+    const summary = [
+      summaryRow(0, 8),
+      summaryRow(1, 4),
+      summaryRow(2, 0),
+    ];
+    const overview = computePlanOverviewStats(assignments, 1, 3, summary, baseOpts());
+    expect(overview.soldiersAssigned).toBe(2);
+    expect(overview.soldiersFree).toBe(1);
+    expect(overview.avgHoursPerWorkingSoldier).toBeCloseTo(6);
+    expect(overview.activeSlots).toBe(2);
+    expect(overview.totalSoldiersAvailable).toBe(3);
+  });
+
+  it("reports assignable headcount when availability snapshot exists", () => {
+    const soldiersByDay: Record<string, PlanDaySoldiersDoc> = {
+      [anchor]: {
+        avail_full: ["a", "b"],
+        avail_partial: { c: [["05:00", "17:00"]] },
+        avail_absent: ["d"],
+      },
+    };
+    const overview = computePlanOverviewStats(
+      [assignment({ day: 0, soldier_idx: 0, raw_hours: 4 })],
+      1,
+      4,
+      [summaryRow(0, 4)],
+      baseOpts({ soldiersByDay, soldierIds: ["a", "b", "c", "d"] }),
+    );
+    expect(overview.assignableSoldierCount).toBe(3);
   });
 });

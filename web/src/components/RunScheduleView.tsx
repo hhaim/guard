@@ -306,6 +306,7 @@ export function RunScheduleView() {
               soldierIds={soldierIds}
               soldiers={soldiers}
               platoonColors={platoonColors}
+              statsPresentation="plan"
             />
           )}
           {result && !result.ok && (
