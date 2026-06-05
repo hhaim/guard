@@ -18,6 +18,10 @@ export function ExpertRulesGuideEn() {
           <code>shift</code> — 0-based block index (row label <code>05:00–09:00(0)</code>)
         </li>
         <li>Omit <code>shift</code> for full_day, full_day_team, and whole-slot rules</li>
+        <li>
+          Omit <code>day</code>, <code>slot</code>, or <code>shift</code> on <code>not</code> / <code>exclude</code> to
+          mean <strong>all</strong> plan days, slots, or shifts (see wildcard examples below)
+        </li>
       </ul>
 
       <h3 className="help-subtitle">Examples</h3>
@@ -30,6 +34,33 @@ export function ExpertRulesGuideEn() {
           </tr>
         </thead>
         <tbody>
+          <tr>
+            <td>
+              <code>exclude:s34</code>
+            </td>
+            <td>
+              Mark <code>s34</code> away for this plan — no assignments on any day, slot, or shift. Plan-only; does not
+              change Soldiers status.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>exclude:s34 day:0</code>
+            </td>
+            <td>
+              Same as above but only on plan day 0. Omit <code>day</code> to apply to every planning day.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>not:s3,s1 shift:0</code>
+            </td>
+            <td>
+              Exclude <code>s3</code> and <code>s1</code> from shift 0 in <strong>every slot</strong> (omit{" "}
+              <code>slot</code>). Affects rotating per-block picks; whole-slot patterns use shift -1 and are unaffected
+              unless you omit <code>shift</code> too.
+            </td>
+          </tr>
           <tr>
             <td>
               <code>day:0 slot:1 shift:0 not:s1</code>
@@ -113,7 +144,9 @@ export function ExpertRulesGuideEn() {
           </tr>
           <tr>
             <td>Checked (hard)</td>
-            <td>Assign anyway; list conflicts after generate</td>
+            <td>
+              Assign anyway unless blocked by <code>not</code> / <code>exclude</code>; list conflicts after generate
+            </td>
           </tr>
         </tbody>
       </table>
@@ -124,7 +157,10 @@ export function ExpertRulesGuideEn() {
           <code>force</code> — assign soldier (respects Force checkbox)
         </li>
         <li>
-          <code>not</code> — exclude soldiers from the pool
+          <code>not</code> — exclude soldiers from the pool (optional wildcards for day / slot / shift)
+        </li>
+        <li>
+          <code>exclude</code> — global away for this plan (<code>exclude:s34</code> = all days, slots, shifts)
         </li>
         <li>
           <code>pin</code> — full_day_team platoon override

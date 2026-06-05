@@ -72,6 +72,40 @@ func TestParseRules_RejectTypeRemapOnRotating(t *testing.T) {
 	}
 }
 
+func TestParseRules_WildcardNotAndExclude(t *testing.T) {
+	zonesRaw, err := os.ReadFile(filepath.Join("..", "zones-dv3.yaml"))
+	if err != nil {
+		t.Skip("zones-dv3.yaml not in repo root")
+	}
+	zc, err := LoadZoneConfigYAML(zonesRaw, 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"s1", "s2", "s3", "s34"}
+
+	cr, err := ParseRulesText("exclude:s34\nday:0 exclude:s3\nnot:s3,s1 shift:0", zc, keys, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr == nil || len(cr.Rules) != 3 {
+		t.Fatalf("got %d rules want 3", len(cr.Rules))
+	}
+	if !cr.Rules[0].AllSlots || !cr.Rules[0].AllDays || cr.Rules[0].Op != "not" {
+		t.Fatalf("exclude rule: %+v", cr.Rules[0])
+	}
+	if !cr.Rules[1].AllSlots || cr.Rules[1].AllDays || cr.Rules[1].Day != 0 {
+		t.Fatalf("day-scoped exclude: AllDays=%v Day=%d", cr.Rules[1].AllDays, cr.Rules[1].Day)
+	}
+	if !cr.Rules[2].AllSlots || cr.Rules[2].Shift != 0 || len(cr.Rules[2].SoldiersNot) != 2 {
+		t.Fatalf("shift-wide not: %+v", cr.Rules[2])
+	}
+
+	_, err = ParseRulesText("exclude:s1 shift:0", zc, keys, false)
+	if err == nil {
+		t.Fatal("expected error for exclude with shift")
+	}
+}
+
 func TestResolveSlotID_NameAnd1Based(t *testing.T) {
 	zonesRaw, err := os.ReadFile(filepath.Join("..", "zones-dv3.yaml"))
 	if err != nil {

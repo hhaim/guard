@@ -29,8 +29,9 @@ type RuleConflict struct {
 // CustomRule is one parsed expert rule.
 type CustomRule struct {
 	AllDays      bool
+	AllSlots     bool // not/exclude: omit slot → every slot
 	Day          int
-	SlotIdx      int // 0-based
+	SlotIdx      int // 0-based; ignored when AllSlots
 	Shift        int // -1 = all shifts / whole slot day
 	Op           string
 	SoldierIdx   int   // force
@@ -174,6 +175,14 @@ func parseCompactRuleLine(line string) (CustomRuleYAML, error) {
 				yr.Soldiers = append(yr.Soldiers, id)
 			}
 		}
+	case kv["exclude"] != "":
+		yr.Op = "exclude"
+		for _, id := range strings.Split(kv["exclude"], ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				yr.Soldiers = append(yr.Soldiers, id)
+			}
+		}
 	case kv["pin"] != "":
 		yr.Op = "pin"
 		yr.PlatoonID = kv["pin"]
@@ -247,24 +256,22 @@ func compileOneRule(yr CustomRuleYAML, zone *ZoneConfig, soldierIDs []string) (C
 	} else {
 		r.Day = *yr.Day
 	}
-	sidx, err := ResolveSlotID(zone, yr.SlotID)
-	if err != nil {
-		return r, err
-	}
-	r.SlotIdx = sidx
-	pat := zone.Slots[sidx].Pattern
 	if yr.ShiftID != nil {
 		r.Shift = *yr.ShiftID
 	} else {
 		r.Shift = -1
 	}
+
 	switch r.Op {
-	case "force":
-		r.SoldierIdx, err = soldierIndex(soldierIDs, yr.Soldier)
-		if err != nil {
-			return r, err
+	case "exclude":
+		if yr.SlotID != nil {
+			return r, fmt.Errorf("exclude does not allow slot; use not")
 		}
-	case "not":
+		if yr.ShiftID != nil {
+			return r, fmt.Errorf("exclude does not allow shift; use not with shift")
+		}
+		r.Op = "not"
+		r.AllSlots = true
 		for _, id := range yr.Soldiers {
 			idx, err := soldierIndex(soldierIDs, id)
 			if err != nil {
@@ -272,12 +279,57 @@ func compileOneRule(yr CustomRuleYAML, zone *ZoneConfig, soldierIDs []string) (C
 			}
 			r.SoldiersNot = append(r.SoldiersNot, idx)
 		}
+		if len(r.SoldiersNot) == 0 {
+			return r, fmt.Errorf("exclude requires at least one soldier")
+		}
+	case "not":
+		if yr.SlotID == nil {
+			r.AllSlots = true
+		} else {
+			sidx, err := ResolveSlotID(zone, yr.SlotID)
+			if err != nil {
+				return r, err
+			}
+			r.SlotIdx = sidx
+		}
+		for _, id := range yr.Soldiers {
+			idx, err := soldierIndex(soldierIDs, id)
+			if err != nil {
+				return r, err
+			}
+			r.SoldiersNot = append(r.SoldiersNot, idx)
+		}
+		if len(r.SoldiersNot) == 0 {
+			return r, fmt.Errorf("not requires at least one soldier")
+		}
+	case "force":
+		sidx, err := resolveRequiredSlot(zone, yr.SlotID)
+		if err != nil {
+			return r, err
+		}
+		r.SlotIdx = sidx
+		r.SoldierIdx, err = soldierIndex(soldierIDs, yr.Soldier)
+		if err != nil {
+			return r, err
+		}
 	case "pin":
+		sidx, err := resolveRequiredSlot(zone, yr.SlotID)
+		if err != nil {
+			return r, err
+		}
+		r.SlotIdx = sidx
+		pat := zone.Slots[sidx].Pattern
 		if pat != "full_day_team" {
 			return r, fmt.Errorf("pin only allowed on full_day_team (slot %d)", sidx+1)
 		}
 		r.PlatoonID = strings.TrimSpace(yr.PlatoonID)
 	case "force_type":
+		sidx, err := resolveRequiredSlot(zone, yr.SlotID)
+		if err != nil {
+			return r, err
+		}
+		r.SlotIdx = sidx
+		pat := zone.Slots[sidx].Pattern
 		if pat == "full_day_team" {
 			return r, fmt.Errorf("force_type not allowed on full_day_team slot %d; use type_remap", sidx+1)
 		}
@@ -286,6 +338,12 @@ func compileOneRule(yr CustomRuleYAML, zone *ZoneConfig, soldierIDs []string) (C
 			return r, fmt.Errorf("force_type requires type")
 		}
 	case "type_remap":
+		sidx, err := resolveRequiredSlot(zone, yr.SlotID)
+		if err != nil {
+			return r, err
+		}
+		r.SlotIdx = sidx
+		pat := zone.Slots[sidx].Pattern
 		if pat != "full_day_team" {
 			return r, fmt.Errorf("type_remap only allowed on full_day_team (slot %d)", sidx+1)
 		}
@@ -299,6 +357,13 @@ func compileOneRule(yr CustomRuleYAML, zone *ZoneConfig, soldierIDs []string) (C
 		return r, fmt.Errorf("unknown op %q", r.Op)
 	}
 	return r, nil
+}
+
+func resolveRequiredSlot(zone *ZoneConfig, slotID any) (int, error) {
+	if slotID == nil {
+		return 0, fmt.Errorf("slot is required")
+	}
+	return ResolveSlotID(zone, slotID)
 }
 
 // ResolveSlotID maps 1-based int or slot name to 0-based index.
@@ -359,7 +424,7 @@ func (cr *CustomRuleSet) rulesFor(day, sidx, shift int) []CustomRule {
 	}
 	var out []CustomRule
 	for _, r := range cr.Rules {
-		if r.SlotIdx != sidx {
+		if !r.AllSlots && r.SlotIdx != sidx {
 			continue
 		}
 		if !r.AllDays && r.Day != day {
@@ -371,6 +436,23 @@ func (cr *CustomRuleSet) rulesFor(day, sidx, shift int) []CustomRule {
 		out = append(out, r)
 	}
 	return out
+}
+
+func (cr *CustomRuleSet) soldierExcluded(day, sidx, shift, soldierIdx int) bool {
+	if cr == nil {
+		return false
+	}
+	for _, r := range cr.rulesFor(day, sidx, shift) {
+		if r.Op != "not" {
+			continue
+		}
+		for _, idx := range r.SoldiersNot {
+			if idx == soldierIdx {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (cr *CustomRuleSet) lastRule(day, sidx, shift int, op string) *CustomRule {
@@ -435,7 +517,6 @@ func (cr *CustomRuleSet) PickSoldier(
 	if fr == nil {
 		return pickNormal(pool)
 	}
-	cr.applied++
 	target := fr.SoldierIdx
 	var chosen *Soldier
 	for _, s := range all {
@@ -447,6 +528,17 @@ func (cr *CustomRuleSet) PickSoldier(
 	if chosen == nil {
 		return pickNormal(pool)
 	}
+	if cr.soldierExcluded(day, sidx, shift, target) {
+		if cr.ForceMode == ForceModeHard {
+			cr.Conflicts = append(cr.Conflicts, RuleConflict{
+				Day: day, Slot: sidx, Shift: shift,
+				Soldier: soldierIDAt(cr.SoldierIDs, target),
+				Reason:  "not_blocks_force",
+			})
+		}
+		return pickNormal(pool)
+	}
+	cr.applied++
 	in := inPool(chosen)
 	if in {
 		return chosen

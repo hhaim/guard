@@ -18,6 +18,10 @@ export function ExpertRulesGuideHe() {
           <code>shift</code> — בלוק מ-0 (שורה <code>05:00–09:00(0)</code>)
         </li>
         <li>השמיטו <code>shift</code> ל-full_day ו-full_day_team</li>
+        <li>
+          ב-<code>not</code> / <code>exclude</code> — השמיטו <code>day</code>, <code>slot</code> או <code>shift</code> כדי
+          ליישם על <strong>כל</strong> הימים / משבצות / משמרות
+        </li>
       </ul>
 
       <h3 className="help-subtitle">דוגמאות</h3>
@@ -30,6 +34,32 @@ export function ExpertRulesGuideHe() {
           </tr>
         </thead>
         <tbody>
+          <tr>
+            <td>
+              <code>exclude:s34</code>
+            </td>
+            <td>
+              סימון <code>s34</code> כלא זמין לתכנון זה — ללא שיבוץ ביום, משבצת או משמרת. רק ל-proposal; לא משנה סטטוס
+              בלשונית חיילים.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>exclude:s34 day:0</code>
+            </td>
+            <td>
+              כמו למעלה, רק ביום תכנון 0. בלי <code>day</code> — על כל ימי התכנון.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>not:s3,s1 shift:0</code>
+            </td>
+            <td>
+              הוצאת <code>s3</code> ו-<code>s1</code> ממשמרת 0 ב<strong>כל המשבצות</strong> (ללא <code>slot</code>).
+              משפיע על rotating לפי בלוק; full_day משתמש ב-shift -1 ולא נחסם אלא אם מדלגים גם על <code>shift</code>.
+            </td>
+          </tr>
           <tr>
             <td>
               <code>day:0 slot:1 shift:0 not:s1</code>
@@ -111,7 +141,9 @@ export function ExpertRulesGuideHe() {
           </tr>
           <tr>
             <td>מסומן (hard)</td>
-            <td>שיבוץ בכל מקרה; רשימת התנגשויות אחרי Generate</td>
+            <td>
+              שיבוץ בכל מקרה אלא אם נחסם ע&quot;י <code>not</code> / <code>exclude</code>; התנגשויות אחרי Generate
+            </td>
           </tr>
         </tbody>
       </table>
@@ -122,7 +154,10 @@ export function ExpertRulesGuideHe() {
           <code>force</code> — שיבוץ חייל (לפי תיבת Force)
         </li>
         <li>
-          <code>not</code> — הוצאה מהמאגר
+          <code>not</code> — הוצאה מהמאגר (wildcards אופציונליים ל-day / slot / shift)
+        </li>
+        <li>
+          <code>exclude</code> — לא זמין גלובלי לתכנון (<code>exclude:s34</code> = כל הימים, משבצות, משמרות)
         </li>
         <li>
           <code>pin</code> — נעילת פלוגה ב-full_day_team

@@ -103,6 +103,16 @@ func assertAssigned(t *testing.T, recs []*AssignmentRecord, day, slot1, shift in
 	t.Fatalf("want %s at day=%d slot=%d shift=%d", soldierID, day, slot1, shift)
 }
 
+func assertNeverAssigned(t *testing.T, recs []*AssignmentRecord, soldierID string, keys []string) {
+	t.Helper()
+	sidx := soldierIdx(keys, soldierID)
+	for _, a := range recs {
+		if a != nil && a.SoldierIdx == sidx {
+			t.Fatalf("%s assigned at day=%d slot=%d shift=%d kind=%s", soldierID, a.Day, a.Slot+1, a.CalendarBlock, a.Kind)
+		}
+	}
+}
+
 func assertNotAssigned(t *testing.T, recs []*AssignmentRecord, day, slot1, shift int, soldierID string, keys []string) {
 	t.Helper()
 	sidx := soldierIdx(keys, soldierID)
@@ -183,12 +193,21 @@ func TestDv3ExpertRules_ForcePrefer_S42Afternoon(t *testing.T) {
 
 func TestDv3ExpertRules_ForceHard_S43DespiteBusy(t *testing.T) {
 	fx := loadDv3Fixtures(t, "roster-dv3.yaml")
-	// not excludes s43 from pool; hard force still assigns s43 and records a conflict.
 	rules := "day:0 slot:1 shift:2 not:s43\nday:0 slot:1 shift:2 force:s43"
 	recs, cr := runDv3Sim(t, fx, 1, rules, true)
-	assertAssigned(t, recs, 0, 1, 2, "s43", fx.keys)
+	assertNotAssigned(t, recs, 0, 1, 2, "s43", fx.keys)
 	if cr == nil || len(cr.ConflictsSlice()) == 0 {
-		t.Fatal("expected rule_conflicts with hard force")
+		t.Fatal("expected rule_conflicts with not_blocks_force")
+	}
+	found := false
+	for _, c := range cr.ConflictsSlice() {
+		if c.Reason == "not_blocks_force" && c.Soldier == "s43" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("want not_blocks_force for s43, got %+v", cr.ConflictsSlice())
 	}
 }
 
@@ -288,4 +307,39 @@ func TestDv3ExpertRules_MultiDay_NotMorning(t *testing.T) {
 	for day := 0; day < 2; day++ {
 		assertNotAssigned(t, recs, day, 1, 0, "s1", fx.keys)
 	}
+}
+
+func TestDv3ExpertRules_Exclude_Global(t *testing.T) {
+	fx := loadDv3Fixtures(t, "roster-dv3.yaml")
+	recs, _ := runDv3Sim(t, fx, 1, "exclude:s1", false)
+	assertNeverAssigned(t, recs, "s1", fx.keys)
+}
+
+func TestDv3ExpertRules_Exclude_DayScoped(t *testing.T) {
+	fx := loadDv3Fixtures(t, "roster-dv3.yaml")
+	baseline, _ := runDv3Sim(t, fx, 2, "", false)
+	recs, _ := runDv3Sim(t, fx, 2, "exclude:s1 day:0", false)
+	assertNeverAssigned(t, filterRecsDay(recs, 0), "s1", fx.keys)
+	// day 1 should still assign someone at slot 1 shift 0 (may or may not be s1)
+	if len(filterRecsDay(baseline, 1)) == 0 || len(filterRecsDay(recs, 1)) == 0 {
+		t.Fatal("expected assignments on day 1")
+	}
+}
+
+func TestDv3ExpertRules_Not_ShiftAllSlots(t *testing.T) {
+	fx := loadDv3Fixtures(t, "roster-dv3.yaml")
+	recs, _ := runDv3Sim(t, fx, 1, "not:s1 shift:0", false)
+	for slot1 := 1; slot1 <= 5; slot1++ {
+		assertNotAssigned(t, recs, 0, slot1, 0, "s1", fx.keys)
+	}
+}
+
+func filterRecsDay(recs []*AssignmentRecord, day int) []*AssignmentRecord {
+	var out []*AssignmentRecord
+	for _, a := range recs {
+		if a != nil && a.Day == day {
+			out = append(out, a)
+		}
+	}
+	return out
 }
