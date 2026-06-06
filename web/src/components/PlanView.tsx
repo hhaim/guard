@@ -1,4 +1,4 @@
-import { Check, Copy, Download, FileText, HelpCircle, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Check, Copy, Download, HelpCircle, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError, apiGet, apiPut } from "../api";
@@ -20,7 +20,9 @@ import { planDocFromGenerate } from "../lib/planDoc";
 import { ALLOWED_SHIFT_HOURS, validateShiftHours } from "../lib/zones";
 import { downloadPlanMatrixXls, planMatrixXlsFilenameForProposal } from "../lib/planMatrixExport";
 import { downloadPlanReportPdf } from "../lib/planPdfExport";
-import { EXPERT_RULES_EXAMPLE_TEXT } from "../lib/expertRulesExamples";
+import type { ExpertSuggestions } from "../lib/expertRulesModel";
+import { DecimalNumInput, IntegerNumInput } from "./DecimalNumField";
+import { ExpertRulesEditor } from "./ExpertRulesEditor";
 import { useDevPanel } from "../context/AppStateContext";
 import { parseApiError, type ParsedApiError } from "../lib/apiError";
 import { DevPanelTrigger, DeveloperPanel } from "./DeveloperPanel";
@@ -182,8 +184,7 @@ export function PlanView({
     expertRulesHydratedRef.current = true;
     const v = expertRulesQ.data.value as ExpertRulesCfg | undefined;
     if (!v) return;
-    if (typeof v.rules_text === "string") setExpertRulesText(v.rules_text);
-    if (typeof v.force === "boolean") setExpertForce(v.force);
+    // Editor starts empty; saved groups are loaded only when the user picks one.
     if (v.groups && typeof v.groups === "object") setExpertGroups(v.groups);
     if (typeof expertRulesQ.data.version === "number") {
       setExpertRulesVersion(expertRulesQ.data.version);
@@ -204,6 +205,29 @@ export function PlanView({
     () => soldiersFromCfg(soldiersQ.data?.value),
     [soldiersQ.data]
   );
+
+  const expertSuggestions = useMemo((): ExpertSuggestions => {
+    const slotIds: string[] = [];
+    if (zonesDoc?.slots) {
+      zonesDoc.slots.forEach((s, i) => {
+        slotIds.push(String(i + 1));
+        if (s.name?.trim()) slotIds.push(s.name.trim());
+        if (s.full_name?.trim() && s.full_name !== s.name) slotIds.push(s.full_name.trim());
+      });
+    }
+    const typeCodes = [...new Set(soldiers.map((s) => s.type_code).filter(Boolean) as string[])].sort();
+    const platoonCodes = [
+      ...new Set(soldiers.map((s) => s.platoon_code).filter(Boolean) as string[]),
+    ].sort();
+    return {
+      soldierIds: soldierIds.length ? soldierIds : soldiers.map((s) => s.id),
+      slotIds: [...new Set(slotIds)],
+      typeCodes,
+      platoonCodes,
+      planDays: Math.max(1, days),
+      maxShift: 10,
+    };
+  }, [zonesDoc, soldiers, soldierIds, days]);
 
   const slotInfo = proposalsQ.data?.slots.find((s) => s.slot === selectedSlot);
   const slotFilled = Boolean(slotInfo?.exists);
@@ -348,11 +372,11 @@ export function PlanView({
     return body;
   };
 
-  const persistExpertRulesCfg = async (groups: Record<string, string>, rulesText: string) => {
+  const persistExpertRulesCfg = async (groups: Record<string, string>) => {
     const value: ExpertRulesCfg = {
       schema_version: 1,
       force: expertForce,
-      rules_text: rulesText,
+      rules_text: "",
       groups,
     };
     const res = (await apiPut("/api/cfg/expert_rules", {
@@ -384,7 +408,7 @@ export function PlanView({
     setAppendGroupSelect(name);
     setNewGroupName("");
     try {
-      await persistExpertRulesCfg(nextGroups, expertRulesText);
+      await persistExpertRulesCfg(nextGroups);
       setStatusMsg(`Saved rule group “${name}”.`);
     } catch (e) {
       setPlanFailure("save", e);
@@ -400,20 +424,11 @@ export function PlanView({
     setExpertGroups(nextGroups);
     setAppendGroupSelect("");
     try {
-      await persistExpertRulesCfg(nextGroups, expertRulesText);
+      await persistExpertRulesCfg(nextGroups);
       setStatusMsg(`Deleted group “${name}”.`);
     } catch (e) {
       setPlanFailure("save", e);
     }
-  };
-
-  const insertExpertExamples = () => {
-    const chunk = EXPERT_RULES_EXAMPLE_TEXT.trim();
-    setExpertRulesText((prev) => {
-      const p = prev.trim();
-      return p ? `${p}\n\n${chunk}` : chunk;
-    });
-    setExpertParseError(null);
   };
 
   const generateM = useMutation({
@@ -798,7 +813,7 @@ export function PlanView({
                         className="btn btn-tinted btn-compact"
                         disabled={!appendGroupSelect}
                         onClick={appendExpertGroup}
-                        title="Append selected group to editor"
+                        title="Append selected group rules to the editor"
                       >
                         <Plus size={16} aria-hidden />
                         <span className="sr-only">Append group</span>
@@ -816,27 +831,15 @@ export function PlanView({
                     </div>
                   ) : null}
                   <div className="plan-expert-editor-wrap">
-                    <div className="plan-expert-editor-toolbar">
-                      <button
-                        type="button"
-                        className="btn btn-tinted btn-compact"
-                        onClick={insertExpertExamples}
-                        title="Insert all help examples into editor (appended)"
-                      >
-                        <FileText size={16} aria-hidden />
-                        <span className="sr-only">Add examples</span>
-                      </button>
-                    </div>
-                    <textarea
-                      className="settings-input plan-expert-rules-text"
-                      dir="ltr"
+                    <ExpertRulesEditor
                       value={expertRulesText}
-                      onChange={(e) => {
-                        setExpertRulesText(e.target.value);
+                      onChange={(t) => {
+                        setExpertRulesText(t);
                         setExpertParseError(null);
                       }}
-                      placeholder={"day:0 slot:1 shift:0 not:s1\nslot:8 pin:3"}
-                      spellCheck={false}
+                      parseError={expertParseError}
+                      suggestions={expertSuggestions}
+                      onOpenHelp={onOpenHelp ? () => onOpenHelp("expert-rules") : undefined}
                     />
                   </div>
                   <div className="plan-expert-group-row">
@@ -883,27 +886,17 @@ export function PlanView({
           <div className="run-form-grid">
             {planCtx?.allow_debug_offset && (
               <Field label="Debug: days forward" hint="testing only">
-                <input
-                  className="settings-input"
-                  type="number"
-                  min={0}
-                  max={366}
+                <IntegerNumInput
                   value={debugDayOffset}
-                  onChange={(e) =>
-                    setDebugDayOffset(Math.max(0, Math.floor(Number(e.target.value) || 0)))
-                  }
+                  onChange={(n) => setDebugDayOffset(Math.max(0, Math.min(366, n)))}
                 />
               </Field>
             )}
 
             <Field label="Days" hint="planning horizon">
-              <input
-                className="settings-input"
-                type="number"
-                min={1}
-                max={90}
+              <IntegerNumInput
                 value={days}
-                onChange={(e) => setDays(Number(e.target.value))}
+                onChange={(n) => setDays(Math.max(1, Math.min(90, n)))}
               />
             </Field>
 
@@ -926,44 +919,21 @@ export function PlanView({
             </Field>
 
             <Field label="Min consecutive free hours">
-              <input
-                className="settings-input"
-                type="number"
-                min={0}
-                step={0.5}
-                value={minFreeHours}
-                onChange={(e) => setMinFreeHours(Number(e.target.value))}
-              />
+              <DecimalNumInput value={minFreeHours} onChange={setMinFreeHours} />
             </Field>
 
             <Field label="Min free shifts after duty">
-              <input
-                className="settings-input"
-                type="number"
-                min={0}
-                value={minFreeShifts}
-                onChange={(e) => setMinFreeShifts(Number(e.target.value))}
-              />
+              <IntegerNumInput value={minFreeShifts} onChange={setMinFreeShifts} />
             </Field>
 
             <Field label="Band relative">
-              <input
-                className="settings-input"
-                type="number"
-                min={0}
-                step={0.05}
-                value={bandRelative}
-                onChange={(e) => setBandRelative(Number(e.target.value))}
-              />
+              <DecimalNumInput value={bandRelative} onChange={setBandRelative} />
             </Field>
 
             <Field label="Sim trials">
-              <input
-                className="settings-input"
-                type="number"
-                min={1}
+              <IntegerNumInput
                 value={simTrials}
-                onChange={(e) => setSimTrials(Number(e.target.value))}
+                onChange={(n) => setSimTrials(Math.max(1, n))}
               />
             </Field>
 

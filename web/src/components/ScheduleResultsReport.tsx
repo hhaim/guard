@@ -29,6 +29,7 @@ import { formatWallClockHour, resolvePlanDayStartHour, resolvePlanDayStartString
 import { buildMatrixCellTooltip, buildSoldierProfileTooltip } from "../lib/soldierTooltip";
 import { useSoldierTypesDocument } from "../hooks/useSoldierTypesDocument";
 import { ScheduleStatsPanel } from "./ScheduleStatsPanel";
+import { SoldierChartLabel } from "./SoldierChartLabel";
 import { PlanSoldierAvailabilitySection } from "./PlanSoldierAvailabilitySection";
 import { SoldierHoverTooltip } from "./SoldierHoverTooltip";
 
@@ -432,24 +433,6 @@ function buildSoldierNameById(soldiers: Soldier[]): Map<string, string> {
   return out;
 }
 
-function timelineSoldierName(
-  lane: { label: string; soldierIdx: number },
-  nameById: Map<string, string>,
-  display: SoldierDisplay,
-  soldierIds: string[],
-): string | undefined {
-  const fromLabel = nameById.get(lane.label);
-  if (fromLabel) return fromLabel;
-  const rosterId = soldierIds[lane.soldierIdx]?.trim();
-  if (rosterId) {
-    const fromRosterId = nameById.get(rosterId);
-    if (fromRosterId) return fromRosterId;
-  }
-  const fromIdx = display.fullLabel(lane.soldierIdx);
-  if (fromIdx && fromIdx !== lane.label) return fromIdx;
-  return undefined;
-}
-
 function TimelineSoldierLabel({
   lane,
   display,
@@ -458,7 +441,6 @@ function TimelineSoldierLabel({
   soldiers,
   typesDoc,
   rawHoursBySlot,
-  dominantType,
 }: {
   lane: { label: string; soldierIdx: number };
   display: SoldierDisplay;
@@ -469,29 +451,17 @@ function TimelineSoldierLabel({
   rawHoursBySlot?: number[];
   dominantType?: string | null;
 }) {
-  const name = timelineSoldierName(lane, nameById, display, soldierIds);
-  const typeCode = soldierTypeCode(lane.soldierIdx, soldierIds, soldiers);
-  const tooltipLines =
-    rawHoursBySlot != null
-      ? buildSoldierProfileTooltip(lane.soldierIdx, rawHoursBySlot, soldierIds, soldiers, typesDoc)
-      : [];
-
-  const label = (
-    <span
-      className="sched-timeline-label sched-soldier-badge"
-      style={display.badgeStyle(lane.soldierIdx)}
-      aria-label={name ? `${lane.label}, ${name}` : lane.label}
-      tabIndex={tooltipLines.length > 0 ? 0 : undefined}
-    >
-      {typeCode ? <SoldierTypeChip code={typeCode} dominantType={dominantType} /> : null}
-      <span>{lane.label}</span>
-    </span>
+  return (
+    <SoldierChartLabel
+      soldierIdx={lane.soldierIdx}
+      display={display}
+      nameById={nameById}
+      soldierIds={soldierIds}
+      soldiers={soldiers}
+      typesDoc={typesDoc}
+      rawHoursBySlot={rawHoursBySlot}
+    />
   );
-
-  if (tooltipLines.length > 0) {
-    return <SoldierHoverTooltip lines={tooltipLines}>{label}</SoldierHoverTooltip>;
-  }
-  return label;
 }
 
 function SoldierTimelineChart({
@@ -943,6 +913,8 @@ export function ScheduleResultsReport({
           soldierIds={soldierIds}
           soldiers={soldiers}
           typesDoc={typesDoc}
+          display={display}
+          nameById={soldierNameById}
           statsPresentation={statsPresentation}
           planOverview={planOverview}
         />

@@ -463,7 +463,7 @@ export function StatsView({ isAdmin = false }: StatsViewProps) {
               platoonColors={platoonColors}
               sections={reportSections}
               soldiersByDay={showDayMatrix ? viewDayAvailQ.data : undefined}
-              statsPresentation="history"
+              statsPresentation="plan"
             />
           </div>
         )}

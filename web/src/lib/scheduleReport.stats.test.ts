@@ -98,7 +98,7 @@ describe("buildScheduleStats", () => {
       typesDoc: { types: [{ code: "A", label: "Alpha" }] },
     });
     const row = stats.summary[0];
-    expect(row.label).toBe("s0");
+    expect(row.label).toBe("S00");
     expect(row.typeCode).toBe("A");
     expect(row.rawHoursBySlotCompact).toBe("[3:4.0]");
     expect(row.timeBandHoursCompact).toBe("[1:4.0]");

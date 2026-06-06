@@ -1,6 +1,7 @@
 import { formatCompactHourVector } from "./formatCompactHourVector";
 import type { PlanDaySoldiersDoc, ScheduleAssignment } from "./planDoc";
 import type { Soldier } from "./soldiers";
+import { formatSoldierShortId } from "./soldiers";
 import { typeLabel, type SoldierTypesDoc } from "./soldierTypes";
 import {
   calendarDateForPlanDay,
@@ -337,10 +338,10 @@ export function soldierLabel(
   soldierIds?: string[],
 ): string {
   const sid = a.soldier_id?.trim();
-  if (sid) return sid;
+  if (sid) return formatSoldierShortId(sid, a.soldier_idx);
   const fromRoster = soldierIds?.[a.soldier_idx];
-  if (fromRoster) return fromRoster;
-  return `S${a.soldier_idx}`;
+  if (fromRoster) return formatSoldierShortId(fromRoster, a.soldier_idx);
+  return formatSoldierShortId("", a.soldier_idx);
 }
 
 export function buildZoneReportView(doc: ZonesDoc, slotsPerBlock?: number): ZoneReportView {
@@ -945,7 +946,7 @@ export function buildTimelineLanes(
         });
       }
     }
-    const label = soldierIds?.[s] ?? `S${s}`;
+    const label = formatSoldierShortId(soldierIds?.[s] ?? "", s);
     lanes.push({ soldierIdx: s, label, segments });
   }
   return lanes;
@@ -1530,12 +1531,16 @@ export function buildScheduleStats(
   const timeShort = zone.timeNames.map((n, i) => n || `T${i}`);
 
   const lineChartLoc = Array.from({ length: soldierCount }, (_, s) => {
-    const row: Record<string, string | number> = { soldier: `S${s}` };
+    const row: Record<string, string | number> = {
+      soldier: formatSoldierShortId(soldierIds[s] ?? "", s),
+    };
     for (let i = 0; i < nl; i++) row[locShort[i]] = Math.round(meanDailyRawLoc[s][i] * 100) / 100;
     return row;
   });
   const lineChartTime = Array.from({ length: soldierCount }, (_, s) => {
-    const row: Record<string, string | number> = { soldier: `S${s}` };
+    const row: Record<string, string | number> = {
+      soldier: formatSoldierShortId(soldierIds[s] ?? "", s),
+    };
     for (let j = 0; j < nt; j++) row[timeShort[j]] = Math.round(meanDailyRawTime[s][j] * 100) / 100;
     return row;
   });
@@ -1553,14 +1558,14 @@ export function buildScheduleStats(
       totT > 1e-12
         ? rawTime[s].map((h) => (100 * h) / totT)
         : rawTime[s].map(() => 0);
-    const rosterId = soldierIds[s]?.trim() || `S${s}`;
+    const rosterId = soldierIds[s]?.trim() || `s${s}`;
     const soldierRec = soldierById.get(rosterId);
     const typeCode = soldierRec?.type_code?.trim() ?? "";
     const typeName = typeCode && typesDoc ? typeLabel(typesDoc, typeCode) : "";
     const slotIds = [...slotIdsPerSoldier[s]].sort((a, b) => a - b);
     return {
       soldierIdx: s,
-      label: rosterId,
+      label: formatSoldierShortId(rosterId, s),
       soldierId: rosterId,
       typeCode,
       typeName,

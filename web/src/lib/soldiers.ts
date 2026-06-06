@@ -109,13 +109,20 @@ export function parseDocFromJson(raw: unknown): SoldiersDoc {
 
 /** Avatar label from soldier ID only (e.g. s12 → S12). */
 export function soldierInitials(s: Soldier): string {
-  const rawId = s.id.trim();
+  return formatSoldierShortId(s.id.trim());
+}
+
+/** Compact aligned roster label (s1 → S01, s45 → S45). */
+export function formatSoldierShortId(id: string, fallbackIdx?: number): string {
+  const rawId = id.trim();
   const numericId = /^s(\d+)$/i.exec(rawId);
   if (numericId) {
-    const n = Math.max(0, Math.min(99, Number.parseInt(numericId[1], 10)));
+    const n = Number.parseInt(numericId[1], 10);
     return `S${String(n).padStart(2, "0")}`;
   }
-  return (rawId || "?").slice(0, 3).toUpperCase();
+  if (rawId) return rawId.toUpperCase();
+  if (fallbackIdx != null) return `S${String(fallbackIdx).padStart(2, "0")}`;
+  return "?";
 }
 
 export function sortSoldiers(list: Soldier[]): Soldier[] {

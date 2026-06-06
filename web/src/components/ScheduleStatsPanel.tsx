@@ -12,11 +12,16 @@ import {
 import { compactVectorTotalHours } from "../lib/formatCompactHourVector";
 import type { PlanOverviewStats, ScheduleStatsBundle, SoldierSummaryRow } from "../lib/scheduleReport";
 import { loadFactorLevel } from "../lib/scheduleReport";
-import { buildSoldierProfileTooltip } from "../lib/soldierTooltip";
+import type { SoldierDisplay } from "../lib/soldierDisplay";
 import type { Soldier } from "../lib/soldiers";
 import type { SoldierTypesDoc } from "../lib/soldierTypes";
 import { ColumnSortButton, type SortDirection } from "./ColumnSortButton";
-import { SoldierHoverTooltip } from "./SoldierHoverTooltip";
+import { SoldierChartLabel } from "./SoldierChartLabel";
+import {
+  STACKED_BAR_EPS,
+  stackedBarScaleMax,
+  stackedBarSegmentPct,
+} from "../lib/stackedBarScale";
 
 const SERIES_COLORS = [
   "#1f77b4",
@@ -31,7 +36,7 @@ const SERIES_COLORS = [
   "#17becf",
 ];
 
-const DUTY_HOURS_EPS = 1e-9;
+const DUTY_HOURS_EPS = STACKED_BAR_EPS;
 
 type SummarySortKey =
   | "soldier"
@@ -53,6 +58,8 @@ type Props = {
   soldierIds?: string[];
   soldiers?: Soldier[];
   typesDoc?: SoldierTypesDoc;
+  display: SoldierDisplay;
+  nameById: Map<string, string>;
   statsPresentation?: "plan" | "history";
   planOverview?: PlanOverviewStats;
 };
@@ -160,17 +167,26 @@ function SoldierHoursStackedBars({
   segments,
   segmentLabels,
   title,
+  display,
+  nameById,
+  soldierIds,
+  soldiers,
+  typesDoc,
 }: {
   rows: SoldierSummaryRow[];
   segments: (row: SoldierSummaryRow) => number[];
   segmentLabels: string[];
   title: string;
+  display: SoldierDisplay;
+  nameById: Map<string, string>;
+  soldierIds: string[];
+  soldiers: Soldier[];
+  typesDoc?: SoldierTypesDoc;
 }) {
   if (rows.length === 0) return null;
 
-  const maxTotal = Math.max(
-    ...rows.map((row) => segments(row).reduce((a, b) => a + b, 0)),
-    DUTY_HOURS_EPS,
+  const scaleMax = stackedBarScaleMax(
+    rows.map((row) => segments(row).reduce((a, b) => a + b, 0)),
   );
 
   return (
@@ -196,14 +212,22 @@ function SoldierHoursStackedBars({
           const total = segs.reduce((a, b) => a + b, 0);
           return (
             <div key={row.soldierIdx} className="sched-soldier-hours-row">
-              <span className="sched-soldier-hours-label" title={row.label}>
-                <SoldierTypeChip code={row.typeCode} />
-                <span className="sched-soldier-hours-label-text">{row.label}</span>
-              </span>
-              <div className="sched-soldier-hours-track" aria-label={`${row.label}: ${total.toFixed(1)} h`}>
+              <SoldierChartLabel
+                soldierIdx={row.soldierIdx}
+                display={display}
+                nameById={nameById}
+                soldierIds={soldierIds}
+                soldiers={soldiers}
+                typesDoc={typesDoc}
+                rawHoursBySlot={row.rawHoursBySlot}
+              />
+              <div
+                className="sched-soldier-hours-track"
+                aria-label={`${display.shortLabel(row.soldierIdx)}: ${total.toFixed(1)} h`}
+              >
                 {segs.map((h, i) => {
                   if (h <= DUTY_HOURS_EPS) return null;
-                  const pct = (100 * h) / maxTotal;
+                  const pct = stackedBarSegmentPct(h, scaleMax);
                   const segLabel = segmentLabels[i] ?? `Segment ${i + 1}`;
                   return (
                     <span
@@ -299,22 +323,17 @@ function compareSummaryRows(
   return dir === "asc" ? cmp : -cmp;
 }
 
-function SoldierTypeChip({ code }: { code: string }) {
-  if (!code) return null;
-  return (
-    <span className="sched-type-chip" title={code}>
-      {code}
-    </span>
-  );
-}
-
 function FreeSoldiersFooter({
   freeSoldiers,
+  display,
+  nameById,
   soldierIds,
   soldiers,
   typesDoc,
 }: {
   freeSoldiers: SoldierSummaryRow[];
+  display: SoldierDisplay;
+  nameById: Map<string, string>;
   soldierIds: string[];
   soldiers: Soldier[];
   typesDoc?: SoldierTypesDoc;
@@ -325,26 +344,20 @@ function FreeSoldiersFooter({
       <strong>
         {freeSoldiers.length} soldier{freeSoldiers.length === 1 ? "" : "s"} free (0 guard hours):
       </strong>{" "}
-      {freeSoldiers.map((row, i) => {
-        const tooltipLines = buildSoldierProfileTooltip(
-          row.soldierIdx,
-          row.rawHoursBySlot,
-          soldierIds,
-          soldiers,
-          typesDoc,
-        );
-        return (
-          <span key={row.soldierIdx}>
-            {i > 0 ? ", " : ""}
-            <SoldierHoverTooltip lines={tooltipLines}>
-              <span className="sched-free-soldier-entry">
-                <SoldierTypeChip code={row.typeCode} />
-                {row.label}
-              </span>
-            </SoldierHoverTooltip>
-          </span>
-        );
-      })}
+      {freeSoldiers.map((row, i) => (
+        <span key={row.soldierIdx} className="sched-free-soldier-entry-wrap">
+          {i > 0 ? ", " : ""}
+          <SoldierChartLabel
+            soldierIdx={row.soldierIdx}
+            display={display}
+            nameById={nameById}
+            soldierIds={soldierIds}
+            soldiers={soldiers}
+            typesDoc={typesDoc}
+            rawHoursBySlot={row.rawHoursBySlot}
+          />
+        </span>
+      ))}
     </div>
   );
 }
@@ -357,6 +370,8 @@ export function ScheduleStatsPanel({
   soldierIds = [],
   soldiers = [],
   typesDoc,
+  display,
+  nameById,
   statsPresentation = "plan",
   planOverview,
 }: Props) {
@@ -453,12 +468,22 @@ export function ScheduleStatsPanel({
             rows={onDutyByHoursDesc}
             segments={(row) => row.rawHoursBySlotType}
             segmentLabels={stats.slotTypeLabels}
+            display={display}
+            nameById={nameById}
+            soldierIds={soldierIds}
+            soldiers={soldiers}
+            typesDoc={typesDoc}
           />
           <SoldierHoursStackedBars
             title={`Guard hours by time band — ${runTitle}`}
             rows={onDutyByHoursDesc}
             segments={(row) => row.rawHoursByTime}
             segmentLabels={stats.timeLabels}
+            display={display}
+            nameById={nameById}
+            soldierIds={soldierIds}
+            soldiers={soldiers}
+            typesDoc={typesDoc}
           />
         </>
       )}
@@ -488,43 +513,39 @@ export function ScheduleStatsPanel({
               </tr>
             </thead>
             <tbody>
-              {sortedSummary.map((row) => {
-                const tooltipLines = buildSoldierProfileTooltip(
-                  row.soldierIdx,
-                  row.rawHoursBySlot,
-                  soldierIds,
-                  soldiers,
-                  typesDoc,
-                );
-                return (
-                  <tr key={row.soldierIdx}>
-                    <th scope="row">
-                      <SoldierHoverTooltip lines={tooltipLines}>
-                        <span className="sched-summary-soldier-cell">
-                          <SoldierTypeChip code={row.typeCode} />
-                          <span>{row.label}</span>
-                        </span>
-                      </SoldierHoverTooltip>
-                    </th>
-                    <td>{row.typeCode || "—"}</td>
-                    <td>{row.totalRawHours.toFixed(2)}</td>
-                    <td>{row.globalScore.toFixed(4)}</td>
-                    <td className="sched-num-list sched-compact-vector">{row.rawHoursBySlotCompact}</td>
-                    <td className="sched-num-list sched-compact-vector">{row.timeBandHoursCompact}</td>
-                    <td className="sched-num-list">
-                      {row.slotIds.length > 0 ? row.slotIds.join(", ") : "—"}
-                    </td>
-                    <td>{row.minMaxFree.toFixed(2)}</td>
-                    <td>{row.meanMaxFree.toFixed(2)}</td>
-                    <td>{row.maxMaxFree.toFixed(2)}</td>
-                  </tr>
-                );
-              })}
+              {sortedSummary.map((row) => (
+                <tr key={row.soldierIdx}>
+                  <th scope="row" className="sched-summary-soldier-th">
+                    <SoldierChartLabel
+                      soldierIdx={row.soldierIdx}
+                      display={display}
+                      nameById={nameById}
+                      soldierIds={soldierIds}
+                      soldiers={soldiers}
+                      typesDoc={typesDoc}
+                      rawHoursBySlot={row.rawHoursBySlot}
+                    />
+                  </th>
+                  <td>{row.typeCode || "—"}</td>
+                  <td>{row.totalRawHours.toFixed(2)}</td>
+                  <td>{row.globalScore.toFixed(4)}</td>
+                  <td className="sched-num-list sched-compact-vector">{row.rawHoursBySlotCompact}</td>
+                  <td className="sched-num-list sched-compact-vector">{row.timeBandHoursCompact}</td>
+                  <td className="sched-num-list">
+                    {row.slotIds.length > 0 ? row.slotIds.join(", ") : "—"}
+                  </td>
+                  <td>{row.minMaxFree.toFixed(2)}</td>
+                  <td>{row.meanMaxFree.toFixed(2)}</td>
+                  <td>{row.maxMaxFree.toFixed(2)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
         <FreeSoldiersFooter
           freeSoldiers={freeSoldiers}
+          display={display}
+          nameById={nameById}
           soldierIds={soldierIds}
           soldiers={soldiers}
           typesDoc={typesDoc}
@@ -541,7 +562,17 @@ export function ScheduleStatsPanel({
                 <tr>
                   <th>Day</th>
                   {stats.summary.map((r) => (
-                    <th key={r.soldierIdx}>{r.label}</th>
+                    <th key={r.soldierIdx} className="sched-summary-soldier-th">
+                      <SoldierChartLabel
+                        soldierIdx={r.soldierIdx}
+                        display={display}
+                        nameById={nameById}
+                        soldierIds={soldierIds}
+                        soldiers={soldiers}
+                        typesDoc={typesDoc}
+                        rawHoursBySlot={r.rawHoursBySlot}
+                      />
+                    </th>
                   ))}
                 </tr>
               </thead>
