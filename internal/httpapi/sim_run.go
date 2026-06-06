@@ -340,11 +340,6 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 		return nil, rulesErr
 	}
 
-	availChecker, soldiersByDay, err := s.buildPlanAvailability(ctx, anchor, planDays, planDayStartHour, keys)
-	if err != nil {
-		return nil, internalFailure(err.Error(), req)
-	}
-
 	prefix, err := loadVerifiedHistoryPrefix(ctx, s.Pool, anchor, global.HistoryDays, keys, zc.ShiftHours)
 	if err != nil {
 		code, headline, hints, details := classifySimulationError(err)
@@ -358,6 +353,28 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 	proc["history_dates"] = prefix.Dates
 	proc["history_continuation_loaded"] = prefix.Continuation != nil && prefix.Continuation.RNGState != nil
 
+	expertRulesActive := customRules != nil && customRules.HasAny()
+	useWitnessExtend := prefix.Days > 0 && len(prefix.Records) > 0 &&
+		prefix.Continuation != nil && prefix.Continuation.RNGState != nil && !expertRulesActive
+	useBootstrapCold := prefix.Days > 0 && len(prefix.Records) > 0 && !useWitnessExtend
+	availHorizonDays := planDays
+	if useBootstrapCold {
+		availHorizonDays = prefix.Days + planDays
+	}
+	proc["avail_horizon_days"] = availHorizonDays
+	// #region agent log
+	debugAgentLog("sim_run.go:avail_horizon", "plan availability horizon", "H1", map[string]any{
+		"planDays": planDays, "availHorizonDays": availHorizonDays, "prefixDays": prefix.Days,
+		"useBootstrapCold": useBootstrapCold, "useWitnessExtend": useWitnessExtend, "expertRulesActive": expertRulesActive,
+		"historyRecords": len(prefix.Records), "continuationLoaded": prefix.Continuation != nil && prefix.Continuation.RNGState != nil,
+	})
+	// #endregion
+
+	availChecker, soldiersByDay, err := s.buildPlanAvailability(ctx, anchor, availHorizonDays, planDays, planDayStartHour, keys)
+	if err != nil {
+		return nil, internalFailure(err.Error(), req)
+	}
+
 	simMode := "cold"
 	var recs []*guardsched.AssignmentRecord
 	var stats *guardsched.SimulationStats
@@ -366,7 +383,6 @@ func (s *Server) runScheduleSimulation(ctx context.Context, body scheduleRunBody
 
 	if prefix.Days > 0 && len(prefix.Records) > 0 {
 		prefixDays := prefix.Days
-		expertRulesActive := customRules != nil && customRules.HasAny()
 		var witness *guardsched.ExtendWitness
 		if prefix.Continuation != nil && prefix.Continuation.RNGState != nil && !expertRulesActive {
 			witness, _, err = guardsched.ExtendWitnessFromContinuation(prefix.Continuation, prefix.Records, keys)

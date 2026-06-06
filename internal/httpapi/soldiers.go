@@ -279,7 +279,7 @@ func (s *Server) handlePlanPreviewAvailability(w http.ResponseWriter, r *http.Re
 			planDayStartHour = h
 		}
 	}
-	_, byDay, err := s.buildPlanAvailability(r.Context(), anchor, 1, planDayStartHour, soldierKeys)
+	_, byDay, err := s.buildPlanAvailability(r.Context(), anchor, 1, 1, planDayStartHour, soldierKeys)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
