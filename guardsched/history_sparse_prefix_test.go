@@ -24,7 +24,7 @@ func TestDV2SparseHistoryPrefixMissingFullDaySlots(t *testing.T) {
 	anchor := time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) // Thursday plan anchor
 
 	keys := SoldierKeys(nSoldiers)
-	rraw, err := os.ReadFile(filepath.Join(root, "roster-dv2.yaml"))
+	rraw, err := os.ReadFile(filepath.Join(root, "roster-dv2-example.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
