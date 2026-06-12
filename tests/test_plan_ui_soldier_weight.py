@@ -27,7 +27,9 @@ def guardsim_bin() -> Path:
     return GUARDSIM
 
 
-def test_plan_ui_soldier_span_weights_from_go_assignments(guardsim_bin: Path, tmp_path: Path) -> None:
+def test_plan_ui_soldier_span_weights_from_go_assignments(
+    guardsim_bin: Path, tmp_path: Path, web_node_modules: None
+) -> None:
     """
     PlanDocView / Stats history use ScheduleResultsReport → buildSoldierBlockRows (TS).
     Verify L span rows show duty+rest weights (not em dash) for Go-produced assignments.

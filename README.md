@@ -172,9 +172,11 @@ python3 guard_scheduler_sim.py -x 12 -y 4 -d 4 \
 ### Tests
 
 ```bash
-./b test
+./b test          # installs web/ npm deps automatically when needed
 cd web && npm test
 ```
+
+Plan UI parity pytest (`test_plan_ui_soldier_weight.py`) runs `npx tsx` against `web/src/lib/` and needs `cd web && npm ci` once if you run pytest directly without `./b test`.
 
 ### Admin CLI
 

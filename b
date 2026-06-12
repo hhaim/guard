@@ -149,6 +149,21 @@ cmd_py_test() {
   _pytest_run "${PY_SIM_TEST_FILES[@]}" "$@"
 }
 
+_ensure_web_test_deps() {
+  if [[ ! -d web/package.json ]] && [[ ! -f web/package.json ]]; then
+    return 0
+  fi
+  if [[ -d web/node_modules/yaml ]]; then
+    return 0
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "==> skip web npm ci (npm not found; plan UI pytest may fail)" >&2
+    return 0
+  fi
+  echo "==> npm ci (web/) for plan UI pytest"
+  (cd web && npm ci)
+}
+
 cmd_test() {
   # Avoid corrupt Cursor sandbox module cache when present.
   if [[ "${GOMODCACHE:-}" == *cursor-sandbox-cache* ]]; then
@@ -169,6 +184,7 @@ cmd_test() {
     echo "==> skip pytest (install: pip install -r requirements-test.txt)" >&2
     return 0
   fi
+  _ensure_web_test_deps
   echo "==> $py -m pytest tests/"
   "$py" -m pytest tests/
 }
