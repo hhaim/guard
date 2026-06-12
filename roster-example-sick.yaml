@@ -1,0 +1,385 @@
+schema_version: 2
+exported_at: 2026-06-02T18:28:49.087Z
+soldier_types:
+  types:
+    - code: A
+      label: Officer
+    - code: B
+      label: Sergeant
+    - code: C
+      label: Squad Leader 07
+    - code: E
+      label: Rifleman
+    - code: F
+      label: Marksman
+    - code: G
+      label: Medic
+    - code: H
+      label: Machine Gunner
+    - code: D
+      label: Squad Leader 08
+soldiers:
+  - id: s42
+    full_name: James Carter
+    type_code: D
+    platoon_code: "2"
+  - id: s1
+    full_name: John Smith
+    type_code: A
+    platoon_code: "3"
+  - id: s2
+    full_name: Michael Brown
+    type_code: E
+    platoon_code: "3"
+  - id: s3
+    full_name: David Wilson
+    type_code: F
+    platoon_code: "3"
+  - id: s4
+    full_name: Robert Taylor
+    type_code: H
+    platoon_code: "3"
+  - id: s6
+    full_name: Christopher Lee
+    type_code: E
+    platoon_code: "3"
+  - id: s43
+    full_name: Matthew Harris
+    type_code: H
+    platoon_code: "2"
+  - id: s44
+    full_name: Andrew Clark
+    type_code: F
+    platoon_code: "2"
+  - id: s45
+    full_name: Joshua Lewis
+    type_code: E
+    platoon_code: "2"
+  - id: s46
+    full_name: Daniel Walker
+    type_code: G
+    platoon_code: "2"
+  - id: s5
+    full_name: Knight
+    type_code: D
+    platoon_code: "3"
+  - id: s7
+    full_name: Ryan Hall
+    type_code: E
+    platoon_code: "3"
+  - id: s8
+    full_name: Kevin Young
+    type_code: E
+    platoon_code: "3"
+  - id: s9
+    full_name: Brian King
+    type_code: F
+    platoon_code: "3"
+  - id: s10
+    full_name: Jason Wright
+    type_code: E
+    platoon_code: "3"
+  - id: s11
+    full_name: Nathan Scott
+    type_code: D
+    platoon_code: "3"
+  - id: s12
+    full_name: Eric Green
+    type_code: E
+    platoon_code: "3"
+  - id: s13
+    full_name: Steven Baker
+    type_code: H
+    platoon_code: "3"
+  - id: s14
+    full_name: Timothy Adams
+    type_code: F
+    platoon_code: "3"
+  - id: s15
+    full_name: Patrick Nelson
+    type_code: E
+    platoon_code: "3"
+  - id: s16
+    full_name: Gregory Hill
+    type_code: E
+    platoon_code: "3"
+  - id: s17
+    full_name: Kenneth Moore
+    type_code: E
+    platoon_code: "3"
+  - id: s18
+    full_name: Paul Turner
+    type_code: F
+    platoon_code: "3"
+  - id: s19
+    full_name: Mark Phillips
+    type_code: E
+    platoon_code: "3"
+  - id: s20
+    full_name: Donald Campbell
+    type_code: E
+    platoon_code: "3"
+  - id: s21
+    full_name: George Mitchell
+    type_code: D
+    platoon_code: "3"
+  - id: s22
+    full_name: Edward Roberts
+    type_code: C
+    platoon_code: "3"
+  - id: s23
+    full_name: Ronald Evans
+    type_code: E
+    platoon_code: "3"
+  - id: s24
+    full_name: Anthony Collins
+    type_code: H
+    platoon_code: "3"
+  - id: s25
+    full_name: Charles Stewart
+    type_code: F
+    platoon_code: "3"
+  - id: s26
+    full_name: Thomas Sanchez
+    type_code: E
+    platoon_code: "3"
+  - id: s27
+    full_name: Joseph Morris
+    type_code: F
+    platoon_code: "3"
+  - id: s28
+    full_name: Samuel Rogers
+    type_code: G
+    platoon_code: "3"
+  - id: s29
+    full_name: Benjamin Reed
+    type_code: F
+    platoon_code: "3"
+  - id: s30
+    full_name: Jacob Cook
+    type_code: G
+    platoon_code: "3"
+  - id: s31
+    full_name: Nicholas Morgan
+    type_code: D
+    platoon_code: "3"
+  - id: s32
+    full_name: Alexander Bell
+    type_code: A
+    platoon_code: "2"
+  - id: s33
+    full_name: Peter Murphy
+    type_code: E
+    platoon_code: "2"
+  - id: s34
+    full_name: Henry Bailey
+    type_code: B
+    platoon_code: "2"
+  - id: s35
+    full_name: Walter Rivera
+    type_code: F
+    platoon_code: "2"
+  - id: s36
+    full_name: Arthur Cooper
+    type_code: H
+    platoon_code: "2"
+  - id: s37
+    full_name: Lawrence Richardson
+    type_code: E
+    platoon_code: "2"
+  - id: s38
+    full_name: Sean Cox
+    type_code: E
+    platoon_code: "2"
+  - id: s39
+    full_name: Carl Howard
+    type_code: F
+    platoon_code: "2"
+  - id: s40
+    full_name: Arthur Ward
+    type_code: E
+    platoon_code: "2"
+  - id: s41
+    full_name: Albert Torres
+    type_code: E
+    platoon_code: "2"
+  - id: s47
+    full_name: Gerald Peterson
+    type_code: E
+    platoon_code: "2"
+  - id: s48
+    full_name: Raymond Gray
+    type_code: G
+    platoon_code: "2"
+  - id: s49
+    full_name: Dennis Ramirez
+    type_code: E
+    platoon_code: "2"
+  - id: s50
+    full_name: Frank James
+    type_code: C
+    platoon_code: "2"
+  - id: s51
+    full_name: Gary Watson
+    type_code: E
+    platoon_code: "2"
+  - id: s52
+    full_name: Larry Brooks
+    type_code: F
+    platoon_code: "2"
+  - id: s53
+    full_name: Jerry Kelly
+    type_code: F
+    platoon_code: "2"
+  - id: s54
+    full_name: Walter Sanders
+    type_code: E
+    platoon_code: "2"
+  - id: s55
+    full_name: Ralph Price
+    type_code: E
+    platoon_code: "2"
+  - id: s56
+    full_name: William Foster
+    type_code: A
+    platoon_code: "1"
+  - id: s57
+    full_name: Eugene Bennett
+    type_code: E
+    platoon_code: "1"
+  - id: s58
+    full_name: Wayne Wood
+    type_code: F
+    platoon_code: "1"
+  - id: s59
+    full_name: Roy Barnes
+    type_code: D
+    platoon_code: "1"
+  - id: s60
+    full_name: Louis Ross
+    type_code: E
+    platoon_code: "1"
+  - id: s61
+    full_name: Philip Henderson
+    type_code: G
+    platoon_code: "1"
+  - id: s62
+    full_name: Johnny Coleman
+    type_code: E
+    platoon_code: "1"
+  - id: s63
+    full_name: Billy Jenkins
+    type_code: H
+    platoon_code: "1"
+  - id: s64
+    full_name: Bobby Perry
+    type_code: E
+    platoon_code: "1"
+  - id: s65
+    full_name: Johnny Powell
+    type_code: E
+    platoon_code: "1"
+  - id: s66
+    full_name: Earl Long
+    type_code: D
+    platoon_code: "1"
+  - id: s67
+    full_name: Jimmy Patterson
+    type_code: F
+    platoon_code: "1"
+  - id: s68
+    full_name: Danny Hughes
+    type_code: E
+    platoon_code: "1"
+  - id: s69
+    full_name: Floyd Flores
+    type_code: F
+    platoon_code: "1"
+  - id: s70
+    full_name: Allan Butler
+    type_code: E
+    platoon_code: "1"
+  - id: s71
+    full_name: Russell Simmons
+    type_code: G
+    platoon_code: "1"
+  - id: s72
+    full_name: Leonard Graham
+    type_code: C
+    platoon_code: "1"
+  - id: s73
+    full_name: Glen Alexander
+    type_code: F
+    platoon_code: "1"
+  - id: s74
+    full_name: Reed
+    type_code: E
+    platoon_code: "1"
+  - id: s75
+    full_name: Victor Russell
+    type_code: H
+    platoon_code: "1"
+  - id: s76
+    full_name: Marvin Griffin
+    type_code: E
+    platoon_code: "1"
+  - id: s77
+    full_name: Elmer Diaz
+    type_code: E
+    platoon_code: "1"
+  - id: s79
+    full_name: Harold Hayes
+    type_code: H
+    platoon_code: "1"
+  - id: s80
+    full_name: Daniel Reed
+    type_code: E
+    platoon_code: "1"
+soldier_platoons:
+  platoons:
+    - code: "1"
+      label: Alpha
+    - code: "2"
+      label: Bravo
+    - code: "3"
+      label: Charlie
+soldier_status:
+  range:
+    from: 2026-06-04T05:00:00.000Z
+    to: 2027-06-04T05:00:00.000Z
+  entries:
+    - soldier_id: s4
+      start_at: 2026-06-04T05:00:00.000Z
+      end_at: 2026-06-08T05:00:00.000Z
+      status: sick
+      note: "scenario: only s43 H available"
+    - soldier_id: s13
+      start_at: 2026-06-04T05:00:00.000Z
+      end_at: 2026-06-08T05:00:00.000Z
+      status: sick
+      note: "scenario: only s43 H available"
+    - soldier_id: s24
+      start_at: 2026-06-04T05:00:00.000Z
+      end_at: 2026-06-08T05:00:00.000Z
+      status: sick
+      note: "scenario: only s43 H available"
+    - soldier_id: s36
+      start_at: 2026-06-04T05:00:00.000Z
+      end_at: 2026-06-08T05:00:00.000Z
+      status: sick
+      note: "scenario: only s43 H available"
+    - soldier_id: s63
+      start_at: 2026-06-04T05:00:00.000Z
+      end_at: 2026-06-08T05:00:00.000Z
+      status: sick
+      note: "scenario: only s43 H available"
+    - soldier_id: s75
+      start_at: 2026-06-04T05:00:00.000Z
+      end_at: 2026-06-08T05:00:00.000Z
+      status: sick
+      note: "scenario: only s43 H available"
+    - soldier_id: s79
+      start_at: 2026-06-04T05:00:00.000Z
+      end_at: 2026-06-08T05:00:00.000Z
+      status: sick
+      note: "scenario: only s43 H available"

@@ -1,0 +1,43 @@
+# Local Python environments (never commit)
+.venv-test/
+.venv-verify/
+
+# Local build/cache/debug (never commit)
+.gomodcache/
+.cursor/
+bin/
+.agents/
+
+# Sim artifacts and local data exports
+checkpoint*.json
+checkpoint*.json.gz
+guard_sim_heatmap*.png
+guard_sim_report.html
+invites.csv
+users.csv
+
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Frontend build + deps
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
+
+# Neon CLI local project link (Fly deploy uses fly secrets, not this)
+.neon/
+
+# Local secrets (Clerk, DB, etc.)
+.env
+web/.env.local
+.git-filter-replace.txt
+
+# Private fixtures with real names (keep archived outside repo)
+zones-dv3.yaml
+roster-dv3.yaml
+roster-dv3-h-sick.yaml
+roster-dv2.yaml
+readme.txt
+testdata/expert_rules/dv3_baseline_seed42.json

@@ -1,0 +1,138 @@
+schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: rotating_slot
+    name: Guard
+    pattern: rotating
+    exclude: [A, B,C]
+  
+  - id: kitchen
+    name: Kitchen
+    pattern: full_day
+    config:
+      start: "06:00"
+      end: "22:00"
+      rest_after_hours: 6
+      weight_multiplier: 0.5
+      headcount: 2
+      exclude: [C,D,F,G,H]  
+      
+  - id: carmel
+    name: North Ridge
+    pattern: full_day_team
+    # optional: skip this slot type on these weekdays
+    disabled_weekdays: []
+    config:
+      start: "09:00"
+      end: "09:00"
+      rest_after_hours: 0
+      weight_multiplier: 1.0
+      hours_factor: 0.33
+      headcount: 10
+      type_quotas:
+        A: 1
+        B: 2
+        C: 1
+      exclude: [A, B]   
+
+  - id: rasar
+    name: Reserve
+    pattern: full_day
+    disabled_weekdays:
+      - friday
+      - saturday
+    config:
+      start: 06:00
+      end: 22:00
+      rest_after_hours: 6
+      weight_multiplier: 0.4
+      headcount: 1
+      exclude: [A, B,C,D,F,G,H]  
+  
+  - id: valero
+    name: West House
+    pattern: rotating
+    exclude: [A, B,C,D,F,G,H]  
+
+slots:
+  - location_id: loc_gate
+    name: gate_north_9
+
+  - location_id: loc_gate
+    name: gate_north_3
+
+  - location_id: loc_gate
+    name: roman_post_12
+
+  - location_id: loc_gate
+    name: grove_lane
+
+  - location_id: loc_gate
+    name: oak_post_10
+
+  - location_id: loc_gate
+    name: plaza_post_10
+
+
+  - location_id: loc_v
+    name: west_1
+
+  - location_id: loc_v
+    name: west_2
+
+  - location_id: loc_carmel
+    name: north_1
+
+  - location_id: loc_rasar
+    name: reserve_1
+
+  - location_id: loc_k
+    name: kitchen_1
+
+zone_loc:
+  - id: loc_gate
+    type: rotating_slot
+    name: G
+    weight: 1
+    full_name: Gate Post
+
+  - id: loc_v
+    type: valero
+    name: V
+    weight: 1
+    full_name: West Gate
+
+  - id: loc_k
+    type: kitchen
+    name: K
+    weight: 1
+    full_name: Kitchen
+
+  - id: loc_carmel
+    type: carmel
+    name: C
+    weight: 1
+    full_name: North Ridge
+  
+  - id: loc_rasar
+    type: rasar
+    name: R
+    weight: 1
+    full_name: Reserve
+
+time_zones:
+  - id: zt_night
+    name: Night
+    weight: 1.5
+    from_hour: 0
+    to_hour: "06:00"
+  - id: zt_morning
+    name: Morning
+    weight: 0.9
+    from_hour: "06:00"
+    to_hour: "12:00"
+  - id: zt_day
+    name: Day
+    weight: 1
+    from_hour: "12:00"
+    to_hour: "24:00"

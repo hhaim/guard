@@ -1,0 +1,366 @@
+[
+  {
+    "day": 0,
+    "slot": 0,
+    "shift": 0,
+    "soldier": 67,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 0,
+    "shift": 1,
+    "soldier": 57,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 0,
+    "shift": 2,
+    "soldier": 56,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 0,
+    "shift": 3,
+    "soldier": 22,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 0,
+    "shift": 4,
+    "soldier": 16,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 0,
+    "shift": 5,
+    "soldier": 73,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 1,
+    "shift": 0,
+    "soldier": 8,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 1,
+    "shift": 1,
+    "soldier": 3,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 1,
+    "shift": 2,
+    "soldier": 45,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 1,
+    "shift": 3,
+    "soldier": 53,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 1,
+    "shift": 4,
+    "soldier": 14,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 1,
+    "shift": 5,
+    "soldier": 9,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 2,
+    "shift": 0,
+    "soldier": 7,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 2,
+    "shift": 1,
+    "soldier": 54,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 2,
+    "shift": 2,
+    "soldier": 29,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 2,
+    "shift": 3,
+    "soldier": 44,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 2,
+    "shift": 4,
+    "soldier": 62,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 2,
+    "shift": 5,
+    "soldier": 72,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 3,
+    "shift": 0,
+    "soldier": 11,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 3,
+    "shift": 1,
+    "soldier": 25,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 3,
+    "shift": 2,
+    "soldier": 50,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 3,
+    "shift": 3,
+    "soldier": 40,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 3,
+    "shift": 4,
+    "soldier": 18,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 3,
+    "shift": 5,
+    "soldier": 46,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 4,
+    "shift": 0,
+    "soldier": 23,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 4,
+    "shift": 1,
+    "soldier": 69,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 4,
+    "shift": 2,
+    "soldier": 65,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 4,
+    "shift": 3,
+    "soldier": 21,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 4,
+    "shift": 4,
+    "soldier": 61,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 4,
+    "shift": 5,
+    "soldier": 59,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 5,
+    "shift": 0,
+    "soldier": 26,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 5,
+    "shift": 1,
+    "soldier": 64,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 5,
+    "shift": 2,
+    "soldier": 35,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 5,
+    "shift": 3,
+    "soldier": 34,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 5,
+    "shift": 4,
+    "soldier": 63,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 5,
+    "shift": 5,
+    "soldier": 13,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 6,
+    "shift": 0,
+    "soldier": 49,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 6,
+    "shift": 1,
+    "soldier": 70,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 6,
+    "shift": 2,
+    "soldier": 0,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 6,
+    "shift": 3,
+    "soldier": 51,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 6,
+    "shift": 4,
+    "soldier": 47,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 6,
+    "shift": 5,
+    "soldier": 43,
+    "kind": "rotating"
+  },
+  {
+    "day": 0,
+    "slot": 7,
+    "shift": 1,
+    "soldier": 1,
+    "kind": "full_day_team"
+  },
+  {
+    "day": 0,
+    "slot": 7,
+    "shift": 1,
+    "soldier": 2,
+    "kind": "full_day_team"
+  },
+  {
+    "day": 0,
+    "slot": 7,
+    "shift": 1,
+    "soldier": 4,
+    "kind": "full_day_team"
+  },
+  {
+    "day": 0,
+    "slot": 7,
+    "shift": 1,
+    "soldier": 5,
+    "kind": "full_day_team"
+  },
+  {
+    "day": 0,
+    "slot": 7,
+    "shift": 1,
+    "soldier": 15,
+    "kind": "full_day_team"
+  },
+  {
+    "day": 0,
+    "slot": 7,
+    "shift": 1,
+    "soldier": 24,
+    "kind": "full_day_team"
+  },
+  {
+    "day": 0,
+    "slot": 7,
+    "shift": 1,
+    "soldier": 31,
+    "kind": "full_day_team"
+  },
+  {
+    "day": 0,
+    "slot": 7,
+    "shift": 1,
+    "soldier": 32,
+    "kind": "full_day_team"
+  },
+  {
+    "day": 0,
+    "slot": 9,
+    "shift": 0,
+    "soldier": 19,
+    "kind": "full_day"
+  },
+  {
+    "day": 0,
+    "slot": 9,
+    "shift": 0,
+    "soldier": 20,
+    "kind": "full_day"
+  }
+]

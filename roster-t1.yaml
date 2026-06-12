@@ -1,0 +1,162 @@
+schema_version: 2
+exported_at: 2026-06-01T16:49:03.282Z
+soldier_types:
+  types:
+    - code: A
+      label: Officer
+    - code: B
+      label: Sergeant
+    - code: C
+      label: Squad Leader 08-07
+    - code: E
+      label: Rifleman
+    - code: F
+      label: Marksman
+    - code: G
+      label: Medic
+    - code: H
+      label: Machine Gunner
+soldiers:
+  - id: s0
+    full_name: s0
+    type_code: E
+  - id: s1
+    full_name: s1
+    type_code: A
+  - id: s2
+    full_name: s2
+    type_code: E
+  - id: s3
+    full_name: s4
+    type_code: E
+  - id: s4
+    full_name: s4
+    type_code: C
+  - id: s5
+    full_name: s5
+    type_code: F
+  - id: s6
+    full_name: s6
+    type_code: H
+  - id: s7
+    full_name: s7
+    type_code: E
+  - id: s8
+    full_name: s8
+    type_code: F
+  - id: s9
+    full_name: s9
+    type_code: H
+  - id: s10
+    full_name: s10
+    type_code: E
+  - id: s11
+    full_name: s11
+    type_code: E
+  - id: s12
+    full_name: s12
+    type_code: E
+  - id: s13
+    full_name: s13
+    type_code: E
+  - id: s14
+    full_name: s14
+    type_code: E
+  - id: s15
+    full_name: s15
+    type_code: E
+  - id: s16
+    full_name: s16
+    type_code: E
+  - id: s17
+    full_name: s17
+    type_code: E
+  - id: s18
+    full_name: s18
+    type_code: E
+  - id: s19
+    full_name: s19
+    type_code: E
+  - id: s20
+    full_name: s20
+    type_code: E
+  - id: s21
+    full_name: s21
+    type_code: E
+  - id: s22
+    full_name: s22
+    type_code: B
+  - id: s23
+    full_name: s23
+    type_code: B
+  - id: s24
+    full_name: s24
+    type_code: B
+  - id: s25
+    full_name: s25
+    type_code: B
+  - id: s26
+    full_name: s26
+    type_code: B
+  - id: s27
+    full_name: s27
+    type_code: B
+  - id: s28
+    full_name: s28
+    type_code: B
+  - id: s29
+    full_name: s29
+    type_code: B
+  - id: s30
+    full_name: s30
+    type_code: B
+  - id: s31
+    full_name: s31
+    type_code: B
+  - id: s32
+    full_name: s32
+    type_code: B
+  - id: s33
+    full_name: s33
+    type_code: B
+  - id: s34
+    full_name: s34
+    type_code: B
+  - id: s35
+    full_name: s35
+    type_code: B
+  - id: s36
+    full_name: s36
+    type_code: B
+  - id: s37
+    full_name: s37
+    type_code: B
+  - id: s38
+    full_name: s38
+    type_code: B
+  - id: s39
+    full_name: s39
+    type_code: B
+  - id: s40
+    full_name: s40
+    type_code: B
+  - id: s41
+    full_name: s41
+    type_code: B
+  - id: s42
+    full_name: s42
+    type_code: B
+  - id: s43
+    full_name: s43
+    type_code: B
+  - id: s44
+    full_name: s44
+    type_code: B
+  - id: s45
+    full_name: s45
+    type_code: B
+soldier_status:
+  range:
+    from: 2026-05-03T05:00:00.000Z
+    to: 2027-06-03T05:00:00.000Z
+  entries: []

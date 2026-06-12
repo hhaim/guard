@@ -1,0 +1,933 @@
+import { useMemo, useState } from "react";
+import { countEnabledSlots, type ZonesDoc } from "../lib/zones";
+import type { PlatoonColorEntry } from "../lib/platoonColors";
+import { buildSoldierDisplay, type SoldierDisplay } from "../lib/soldierDisplay";
+import { dominantSoldierTypeCode, docFromServer, type Soldier } from "../lib/soldiers";
+import type { SoldierTypesDoc } from "../lib/soldierTypes";
+import {
+  buildBusyTensor,
+  buildScheduleMatrices,
+  buildSoldierBlockRows,
+  buildScheduleStats,
+  buildTimelineLanes,
+  buildZoneReportView,
+  computePlanOverviewStats,
+  type PlanOverviewStats,
+  formatTimelineSegmentRange,
+  filterOnDutyTimelineLanes,
+  inferSoldierCount,
+  MATRIX_CELL_MAX_SOLDIERS,
+  formatMatrixCellLabels,
+  matrixCellAssignmentsForSoldier,
+  reportFutureExtensionBlocks,
+  timelineSegmentClassName,
+  timelineSegmentTitle,
+  type MatrixRow,
+} from "../lib/scheduleReport";
+import { normalizePlanDoc, type PlanDaySoldiersDoc, type PlanDoc, type ScheduleAssignment } from "../lib/planDoc";
+import { formatWallClockHour, resolvePlanDayStartHour, resolvePlanDayStartString, timelineChartLayout } from "../lib/planDay";
+import { buildMatrixCellTooltip, buildSoldierProfileTooltip } from "../lib/soldierTooltip";
+import { useSoldierTypesDocument } from "../hooks/useSoldierTypesDocument";
+import { ScheduleStatsPanel } from "./ScheduleStatsPanel";
+import { SoldierChartLabel } from "./SoldierChartLabel";
+import { PlanSoldierAvailabilitySection } from "./PlanSoldierAvailabilitySection";
+import { SoldierHoverTooltip } from "./SoldierHoverTooltip";
+
+export type ScheduleReportSections = {
+  matrixShort?: boolean;
+  matrixFull?: boolean;
+  bySoldier?: boolean;
+  timeline?: boolean;
+  statsPanel?: boolean;
+  availability?: boolean;
+};
+
+const DEFAULT_SECTIONS: Required<ScheduleReportSections> = {
+  matrixShort: true,
+  matrixFull: true,
+  bySoldier: true,
+  timeline: true,
+  statsPanel: true,
+  availability: true,
+};
+
+type Props = {
+  plan: PlanDoc;
+  zones: ZonesDoc;
+  soldierIds?: string[];
+  soldiers?: Soldier[];
+  platoonColors?: PlatoonColorEntry[];
+  sections?: ScheduleReportSections;
+  /** Per-day soldier availability; merged over plan.soldiers for timeline yellow segments. */
+  soldiersByDay?: Record<string, PlanDaySoldiersDoc>;
+  /** Plan tab: stacked hour bars + overview metrics; Stats tab: line charts + Z-score fairness. */
+  statsPresentation?: "plan" | "history";
+};
+
+function soldierTypeCode(soldierIdx: number, soldierIds: string[], soldiers: Soldier[]): string {
+  const id = soldierIds[soldierIdx]?.trim();
+  if (!id) return "";
+  const s = soldiers.find((x) => x.id === id);
+  return s?.type_code?.trim() ?? "";
+}
+
+function SoldierTypeChip({
+  code,
+  dominantType,
+}: {
+  code: string;
+  dominantType?: string | null;
+}) {
+  if (!code || (dominantType && code === dominantType)) return null;
+  return (
+    <span className="sched-type-chip sched-type-chip--rare" aria-hidden>
+      {code}
+    </span>
+  );
+}
+
+function SoldierLink({
+  soldierIdx,
+  label,
+  selected,
+  onSelect,
+  display,
+  tooltipLines,
+  typeCode,
+  dominantType,
+  matrixCell = false,
+}: {
+  soldierIdx: number;
+  label: string;
+  selected: boolean;
+  onSelect: (idx: number) => void;
+  display: SoldierDisplay;
+  tooltipLines?: string[];
+  typeCode?: string;
+  dominantType?: string | null;
+  matrixCell?: boolean;
+}) {
+  const style = matrixCell ? display.matrixBadgeStyle(soldierIdx) : display.badgeStyle(soldierIdx);
+  const btn = (
+    <button
+      type="button"
+      className={`sched-soldier-link sched-soldier-badge${selected ? " is-selected" : ""}`}
+      style={style}
+      onClick={() => onSelect(soldierIdx)}
+    >
+      {typeCode ? <SoldierTypeChip code={typeCode} dominantType={dominantType} /> : null}
+      <span>{label}</span>
+    </button>
+  );
+  if (tooltipLines && tooltipLines.length > 0) {
+    return (
+      <SoldierHoverTooltip lines={tooltipLines} placement={matrixCell ? "left" : "right"}>
+        {btn}
+      </SoldierHoverTooltip>
+    );
+  }
+  return btn;
+}
+
+function MatrixCellContent({
+  cell,
+  row,
+  slotIndex,
+  labelForIdx,
+  selectedSoldier,
+  onSelectSoldier,
+  display,
+  useFullNames,
+  matrixCell = false,
+  assignments,
+  simDays,
+  blocksPd,
+  slotsPerBlock,
+  soldierIds,
+  soldiers,
+  typesDoc,
+  dominantType,
+}: {
+  cell: import("../lib/scheduleReport").MatrixCell;
+  row: MatrixRow;
+  slotIndex: number;
+  labelForIdx: (idx: number) => string;
+  selectedSoldier: number | null;
+  onSelectSoldier: (idx: number) => void;
+  display: SoldierDisplay;
+  useFullNames?: boolean;
+  matrixCell?: boolean;
+  assignments: ScheduleAssignment[];
+  simDays: number;
+  blocksPd: number;
+  slotsPerBlock: number;
+  soldierIds: string[];
+  soldiers: Soldier[];
+  typesDoc?: SoldierTypesDoc;
+  dominantType?: string | null;
+}) {
+  const tooltipFor = (idx: number) => {
+    const shiftAsn = matrixCellAssignmentsForSoldier(
+      idx,
+      row.srcDay,
+      row.srcBlock,
+      slotIndex,
+      simDays,
+      blocksPd,
+      assignments,
+    );
+    return buildMatrixCellTooltip(
+      idx,
+      shiftAsn,
+      slotsPerBlock,
+      soldierIds,
+      soldiers,
+      typesDoc,
+      { day: row.planDay, slot: slotIndex + 1, shift: row.srcBlock },
+    );
+  };
+  if (cell.disabled) {
+    return <span className="sched-matrix-disabled">—</span>;
+  }
+  const indices =
+    cell.soldierIndices ?? (cell.soldierIdx != null && cell.soldierIdx >= 0 ? [cell.soldierIdx] : []);
+  if (indices.length === 0) {
+    return <>{cell.label}</>;
+  }
+  const labels = useFullNames
+    ? indices.map((idx) => display.fullLabel(idx))
+    : (cell.labels ?? indices.map((idx) => labelForIdx(idx)));
+  if (indices.length > 1) {
+    const show = indices.slice(0, MATRIX_CELL_MAX_SOLDIERS);
+    const showLabels = labels.slice(0, MATRIX_CELL_MAX_SOLDIERS);
+    const extra = indices.length - show.length;
+    return (
+      <div className="sched-matrix-cell-team" title={formatMatrixCellLabels(indices, labels)}>
+        {show.map((idx, i) => (
+          <SoldierLink
+            key={idx}
+            soldierIdx={idx}
+            label={showLabels[i] ?? labelForIdx(idx)}
+            tooltipLines={tooltipFor(idx)}
+            typeCode={soldierTypeCode(idx, soldierIds, soldiers)}
+            dominantType={dominantType}
+            selected={selectedSoldier === idx}
+            onSelect={onSelectSoldier}
+            display={display}
+            matrixCell={matrixCell}
+          />
+        ))}
+        {extra > 0 ? <span className="sched-matrix-cell-more"> (+{extra} more)</span> : null}
+      </div>
+    );
+  }
+  const idx = indices[0];
+  return (
+    <SoldierLink
+      soldierIdx={idx}
+      label={labels[0] ?? labelForIdx(idx)}
+      tooltipLines={tooltipFor(idx)}
+      typeCode={soldierTypeCode(idx, soldierIds, soldiers)}
+      dominantType={dominantType}
+      selected={selectedSoldier === idx}
+      onSelect={onSelectSoldier}
+      display={display}
+      matrixCell={matrixCell}
+    />
+  );
+}
+
+function matrixCellSoldierIndices(cell: import("../lib/scheduleReport").MatrixCell): number[] {
+  return cell.soldierIndices ?? (cell.soldierIdx != null && cell.soldierIdx >= 0 ? [cell.soldierIdx] : []);
+}
+
+function matrixCellBackgroundStyle(
+  cell: import("../lib/scheduleReport").MatrixCell,
+  display: SoldierDisplay
+): { backgroundColor: string } | undefined {
+  const indices = matrixCellSoldierIndices(cell);
+  if (indices.length === 0) return undefined;
+  return display.matrixCellStyle(indices[0]);
+}
+
+function ScheduleMatrixTable({
+  matrix,
+  selectedSoldier,
+  onSelectSoldier,
+  display,
+  labelForIdx,
+  useFullNames,
+  assignments,
+  simDays,
+  blocksPd,
+  slotsPerBlock,
+  soldierIds,
+  soldiers,
+  typesDoc,
+  dominantType,
+}: {
+  matrix: ReturnType<typeof buildScheduleMatrices>[number];
+  selectedSoldier: number | null;
+  onSelectSoldier: (idx: number) => void;
+  display: SoldierDisplay;
+  labelForIdx: (idx: number) => string;
+  useFullNames?: boolean;
+  assignments: ScheduleAssignment[];
+  simDays: number;
+  blocksPd: number;
+  slotsPerBlock: number;
+  soldierIds: string[];
+  soldiers: Soldier[];
+  typesDoc?: SoldierTypesDoc;
+  dominantType?: string | null;
+}) {
+  return (
+    <div className="sched-matrix-block">
+      <h4 className="sched-subtitle">{matrix.title}</h4>
+      <div className="sched-table-scroll">
+        <table className="sched-table sched-matrix-table">
+          <thead>
+            <tr>
+              <th>Time shift</th>
+              {matrix.headers.map((h) => (
+                <th key={h.slot}>
+                  Slot {h.slot}
+                  <span className="sched-th-sub">
+                    {h.label} ({h.locId})
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {matrix.rows.map((row) => (
+              <tr key={`${row.srcDay}-${row.srcBlock}-${row.window}`}>
+                <th scope="row">{row.window}</th>
+                {row.cells.map((cell, j) => {
+                  if (cell.skip) return null;
+                  const teamClass =
+                    (cell.soldierIndices?.length ?? 0) > 1 ? " sched-matrix-td-team" : "";
+                  const inner = (
+                    <MatrixCellContent
+                      cell={cell}
+                      row={row}
+                      slotIndex={j}
+                      labelForIdx={labelForIdx}
+                      selectedSoldier={selectedSoldier}
+                      onSelectSoldier={onSelectSoldier}
+                      display={display}
+                      useFullNames={useFullNames}
+                      matrixCell
+                      assignments={assignments}
+                      simDays={simDays}
+                      blocksPd={blocksPd}
+                      slotsPerBlock={slotsPerBlock}
+                      soldierIds={soldierIds}
+                      soldiers={soldiers}
+                      typesDoc={typesDoc}
+                      dominantType={dominantType}
+                    />
+                  );
+                  const cellBg = matrixCellBackgroundStyle(cell, display);
+                  if (cell.rowspan && cell.rowspan > 1) {
+                    return (
+                      <td
+                        key={`${row.window}-${j}`}
+                        rowSpan={cell.rowspan}
+                        className={teamClass.trim()}
+                        style={cellBg}
+                      >
+                        {inner}
+                      </td>
+                    );
+                  }
+                  return (
+                    <td key={`${row.window}-${j}`} className={teamClass.trim()} style={cellBg}>
+                      {inner}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function SoldierDetailTable({
+  soldierIdx,
+  rows,
+  display,
+}: {
+  soldierIdx: number;
+  rows: ReturnType<typeof buildSoldierBlockRows>;
+  display: SoldierDisplay;
+}) {
+  const title = display.fullLabel(soldierIdx);
+  return (
+    <div className="sched-soldier-detail" id={`soldier-${soldierIdx}`}>
+      <h4 className="sched-subtitle">
+        <span
+          className="sched-soldier-badge sched-soldier-title-badge"
+          style={display.badgeStyle(soldierIdx)}
+        >
+          {title}
+        </span>
+      </h4>
+      <div className="sched-table-scroll">
+        <table className="sched-table">
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Block #</th>
+              <th>Local window</th>
+              <th>Time category</th>
+              <th>Location</th>
+              <th>Slot</th>
+              <th>Hours</th>
+              <th>Weight</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr
+                key={`${r.day}-${r.block}`}
+                className={
+                  r.free ? "sched-row-free" : r.rest ? "sched-row-rest" : undefined
+                }
+              >
+                <td>{r.day}</td>
+                <td>{r.block}</td>
+                <td>{r.window}</td>
+                <td>{r.timeCategory}</td>
+                <td
+                  className={
+                    r.free ? "sched-free-cell" : r.rest ? "sched-rest-cell" : undefined
+                  }
+                >
+                  {r.location}
+                </td>
+                <td>{r.slot}</td>
+                <td>{r.hours}</td>
+                <td>{r.weight}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function buildSoldierNameById(soldiers: Soldier[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const s of soldiers) {
+    const name = s.full_name?.trim();
+    if (!name) continue;
+    out.set(s.id, name);
+    const key = s.key?.trim();
+    if (key) out.set(key, name);
+  }
+  return out;
+}
+
+function TimelineSoldierLabel({
+  lane,
+  display,
+  nameById,
+  soldierIds,
+  soldiers,
+  typesDoc,
+  rawHoursBySlot,
+}: {
+  lane: { label: string; soldierIdx: number };
+  display: SoldierDisplay;
+  nameById: Map<string, string>;
+  soldierIds: string[];
+  soldiers: Soldier[];
+  typesDoc?: SoldierTypesDoc;
+  rawHoursBySlot?: number[];
+  dominantType?: string | null;
+}) {
+  return (
+    <SoldierChartLabel
+      soldierIdx={lane.soldierIdx}
+      display={display}
+      nameById={nameById}
+      soldierIds={soldierIds}
+      soldiers={soldiers}
+      typesDoc={typesDoc}
+      rawHoursBySlot={rawHoursBySlot}
+    />
+  );
+}
+
+function SoldierTimelineChart({
+  lanes,
+  days,
+  blockHours,
+  slotsPerBlock,
+  planDayStartHour,
+  planDayStartLabel,
+  totalHours,
+  rosterCount,
+  display,
+  nameById,
+  soldierIds,
+  soldiers,
+  typesDoc,
+  summaryByIdx,
+  dominantType,
+}: {
+  lanes: ReturnType<typeof buildTimelineLanes>;
+  days: number;
+  blockHours: number;
+  slotsPerBlock: number;
+  planDayStartHour: number;
+  planDayStartLabel: string;
+  totalHours: number;
+  rosterCount: number;
+  display: SoldierDisplay;
+  nameById: Map<string, string>;
+  soldierIds: string[];
+  soldiers: Soldier[];
+  typesDoc?: SoldierTypesDoc;
+  summaryByIdx?: Map<number, number[]>;
+  dominantType?: string | null;
+}) {
+  const layout = useMemo(
+    () => timelineChartLayout(days, planDayStartHour, totalHours),
+    [days, planDayStartHour, totalHours],
+  );
+  const extBlocks = reportFutureExtensionBlocks(blockHours);
+
+  const ticks = useMemo(() => {
+    const out: { label: string; left: number }[] = [];
+    const step = layout.spanHours <= 24 ? 4 : 6;
+    for (let off = 0; off <= layout.spanHours; off += step) {
+      out.push({ label: layout.tickWallClock(off), left: layout.tickLeftPct(off) });
+    }
+    return out;
+  }, [layout]);
+
+  const onDutyCount = lanes.length;
+  const caption =
+    onDutyCount < rosterCount
+      ? `Showing ${onDutyCount} soldiers on duty (${rosterCount} roster)`
+      : `${onDutyCount} soldiers, ${slotsPerBlock} slots/block, shift_hours=${blockHours}h`;
+
+  return (
+    <div className="sched-timeline-wrap">
+      <h4 className="sched-subtitle">Soldier timelines (full simulation)</h4>
+      <p className="sched-hint">
+        Green = off post and assignable, yellow = away/sick/training, red = rotating/windowed duty
+        + rest, orange = full day / team duty + rest (matches soldier tables). X-axis is plan-day
+        time from plan day start ({formatWallClockHour(planDayStartHour)}); dashed lines mark the
+        next plan day.
+      </p>
+      {onDutyCount === 0 ? (
+        <p className="contacts-empty">No soldiers on duty in this span.</p>
+      ) : (
+        <>
+          <p className="sched-hint sched-timeline-caption">
+            {days}d — {caption}
+          </p>
+          <div className="sched-timeline-chart">
+            <div className="sched-timeline-legend" aria-hidden>
+              <span>
+                <i className="sched-swatch sched-swatch-off" /> Off post
+              </span>
+              <span>
+                <i className="sched-swatch sched-swatch-unavail" /> Away / sick
+              </span>
+              <span>
+                <i className="sched-swatch sched-swatch-on" /> Rotating / windowed
+              </span>
+              <span>
+                <i className="sched-swatch sched-swatch-full-day" /> Full day / team
+              </span>
+            </div>
+            <div className="sched-timeline-axis">
+              {ticks.map((t) => (
+                <span key={t.label} className="sched-timeline-tick" style={{ left: `${t.left}%` }}>
+                  {t.label}
+                </span>
+              ))}
+            </div>
+            <div className="sched-timeline-grid">
+              {days > 1 &&
+                Array.from({ length: days - 1 }, (_, i) => (
+                  <div
+                    key={i}
+                    className="sched-timeline-midnight"
+                    style={{ left: `${layout.dayBoundaryLeftPct(i)}%` }}
+                  />
+                ))}
+              {extBlocks > 0 && days >= 1 ? (
+                <div
+                  className="sched-timeline-extension"
+                  style={{ left: `${layout.dayBoundaryLeftPct(days - 1)}%` }}
+                />
+              ) : null}
+              {lanes.map((lane) => (
+                <div key={lane.soldierIdx} className="sched-timeline-lane">
+                  <TimelineSoldierLabel
+                    lane={lane}
+                    display={display}
+                    nameById={nameById}
+                    soldierIds={soldierIds}
+                    soldiers={soldiers}
+                    typesDoc={typesDoc}
+                    rawHoursBySlot={summaryByIdx?.get(lane.soldierIdx)}
+                    dominantType={dominantType}
+                  />
+                  <div className="sched-timeline-bar">
+                    {lane.segments.map((seg, i) => (
+                      <span
+                        key={i}
+                        className={timelineSegmentClassName(seg)}
+                        style={{
+                          left: `${layout.segmentLeftPct(seg.startHour)}%`,
+                          width: `${layout.segmentWidthPct(seg.duration)}%`,
+                        }}
+                        title={`${lane.label}: ${timelineSegmentTitle(seg)} ${formatTimelineSegmentRange(seg, planDayStartHour)}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="sched-timeline-xlabel">
+              Plan-day timeline (h=0 at {planDayStartLabel})
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Schedule matrix, per-soldier drill-down, and timeline (Python HTML report parity). */
+export function ScheduleResultsReport({
+  plan: planProp,
+  zones,
+  soldierIds = [],
+  soldiers = [],
+  platoonColors = [],
+  sections: sectionsProp,
+  soldiersByDay: soldiersByDayProp,
+  statsPresentation = "plan",
+}: Props) {
+  const plan = useMemo(() => normalizePlanDoc(planProp), [planProp]);
+  const { assignments, days, shift_hours: shiftHours, meta, anchor_date: anchorDate } = plan;
+  const planDayStartHour = resolvePlanDayStartHour(meta);
+  const planDayStartLabel = resolvePlanDayStartString(meta);
+  const verifiedDates = useMemo(() => {
+    const raw = meta?.verified_dates;
+    if (Array.isArray(raw)) {
+      return raw.filter((d): d is string => typeof d === "string" && d.length >= 10);
+    }
+    return undefined;
+  }, [meta]);
+
+  const typesCfg = useSoldierTypesDocument();
+  const typesDoc = typesCfg.doc;
+
+  const sections = { ...DEFAULT_SECTIONS, ...sectionsProp };
+  const [selectedSoldier, setSelectedSoldier] = useState<number | null>(null);
+  const [showJson, setShowJson] = useState(false);
+
+  const timelineSoldiersByDay = useMemo(() => {
+    if (!soldiersByDayProp && !plan.soldiers) return undefined;
+    return { ...plan.soldiers, ...soldiersByDayProp };
+  }, [plan.soldiers, soldiersByDayProp]);
+
+  const zoneBundle = useMemo(() => {
+    const slotsPerBlock = countEnabledSlots(zones);
+    const zone = buildZoneReportView(zones, slotsPerBlock);
+    if (shiftHours > 0) {
+      zone.shiftHours = shiftHours;
+      zone.blocksPerDay = Math.round(24 / shiftHours);
+    }
+    const soldierCount = inferSoldierCount(assignments);
+    return { zone, soldierCount };
+  }, [assignments, shiftHours, zones]);
+
+  const report = useMemo(() => {
+    const { zone, soldierCount } = zoneBundle;
+    const needMatrix = sections.matrixShort || sections.matrixFull;
+    const needTimeline = sections.timeline;
+    const needStats = sections.statsPanel;
+
+    const matrices = needMatrix
+      ? buildScheduleMatrices(assignments, days, zone, {
+          planDayStartHour,
+          anchorDate,
+          verifiedDates,
+          soldierIds,
+        })
+      : [];
+    const busy = needTimeline
+      ? buildBusyTensor(assignments, days, soldierCount, zone.blocksPerDay, true)
+      : null;
+    const lanes =
+      needTimeline && busy
+        ? filterOnDutyTimelineLanes(
+            buildTimelineLanes(busy, zone.shiftHours, soldierCount, planDayStartHour, {
+              soldierIds,
+              anchorDate,
+              verifiedDates,
+              shiftHours: zone.shiftHours,
+              soldiersByDay: timelineSoldiersByDay,
+              assignments,
+            }),
+          )
+        : [];
+    const stats = needStats
+      ? buildScheduleStats(assignments, days, zone, soldierCount, {
+          soldierIds,
+          soldiers,
+          typesDoc,
+        })
+      : null;
+    return {
+      zone,
+      soldierCount,
+      matrices,
+      busy,
+      lanes,
+      totalHours: days * 24 + reportFutureExtensionBlocks(zone.shiftHours) * zone.shiftHours,
+      stats,
+    };
+  }, [
+    zoneBundle,
+    assignments,
+    days,
+    planDayStartHour,
+    anchorDate,
+    verifiedDates,
+    soldierIds,
+    timelineSoldiersByDay,
+    sections.matrixShort,
+    sections.matrixFull,
+    sections.timeline,
+    sections.statsPanel,
+    soldiers,
+    typesDoc,
+  ]);
+
+  const display = useMemo(
+    () => buildSoldierDisplay(soldierIds, soldiers, report.soldierCount, platoonColors),
+    [soldierIds, soldiers, report.soldierCount, platoonColors]
+  );
+
+  const soldierNameById = useMemo(() => buildSoldierNameById(soldiers), [soldiers]);
+
+  const dominantType = useMemo(() => dominantSoldierTypeCode(soldiers), [soldiers]);
+
+  const summarySlotByIdx = useMemo(() => {
+    const m = new Map<number, number[]>();
+    if (!report.stats) return m;
+    for (const row of report.stats.summary) {
+      m.set(row.soldierIdx, row.rawHoursBySlot);
+    }
+    return m;
+  }, [report.stats]);
+
+  const planOverview = useMemo((): PlanOverviewStats | undefined => {
+    if (statsPresentation !== "plan" || !report.stats) return undefined;
+    const roster =
+      soldierIds.length > 0
+        ? soldierIds
+        : Array.from({ length: report.soldierCount }, (_, i) => `S${i}`);
+    return computePlanOverviewStats(
+      assignments,
+      days,
+      report.soldierCount,
+      report.stats.summary,
+      {
+        soldierIds: roster,
+        anchorDate,
+        planDayStartHour,
+        shiftHours: report.zone.shiftHours,
+        soldiersByDay: timelineSoldiersByDay,
+      },
+    );
+  }, [
+    statsPresentation,
+    report.stats,
+    report.soldierCount,
+    report.zone.shiftHours,
+    assignments,
+    days,
+    soldierIds,
+    anchorDate,
+    planDayStartHour,
+    timelineSoldiersByDay,
+  ]);
+
+  const soldierRows = useMemo(() => {
+    if (selectedSoldier == null) return null;
+    return buildSoldierBlockRows(
+      selectedSoldier,
+      assignments,
+      days,
+      report.zone,
+      planDayStartHour,
+    );
+  }, [selectedSoldier, assignments, days, report.zone, planDayStartHour]);
+
+  const trialSeed =
+    meta?.trial != null && typeof meta.trial === "object" && meta.trial !== null
+      ? (meta.trial as Record<string, unknown>).trial_seed
+      : undefined;
+
+  const selectSoldier = (idx: number) => {
+    setSelectedSoldier(idx);
+    requestAnimationFrame(() => {
+      document.getElementById(`soldier-${idx}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  };
+
+  const showMatrix =
+    (sections.matrixShort || sections.matrixFull) && report.matrices.length > 0;
+
+  return (
+    <div className="sched-report">
+      <div className="sched-report-toolbar">
+        <p className="sched-hint">
+          {assignments.length} assignments · {report.zone.blocksPerDay} blocks/day · {report.zone.shiftHours}h shifts
+          {trialSeed != null ? ` · seed ${String(trialSeed)}` : ""}
+          {` · plan day starts ${String(meta?.plan_day_start ?? "05:00")}`}
+        </p>
+        <button type="button" className="btn btn-tinted sched-json-toggle" onClick={() => setShowJson((v) => !v)}>
+          {showJson ? "Hide JSON" : "Show JSON"}
+        </button>
+      </div>
+
+      {showJson && (
+        <pre className="raw-response run-results-json">{JSON.stringify(plan, null, 2)}</pre>
+      )}
+
+      {showMatrix && sections.matrixShort && (
+        <section className="sched-section">
+          <h3 className="sched-section-title">Schedule by day</h3>
+          {report.matrices.map((m) => (
+            <ScheduleMatrixTable
+              key={`short-${m.day}`}
+              matrix={m}
+              selectedSoldier={selectedSoldier}
+              onSelectSoldier={selectSoldier}
+              display={display}
+              labelForIdx={display.shortLabel}
+              assignments={assignments}
+              simDays={days}
+              blocksPd={report.zone.blocksPerDay}
+              slotsPerBlock={report.zone.slotsPerBlock}
+              soldierIds={soldierIds}
+              soldiers={soldiers}
+              typesDoc={typesDoc}
+              dominantType={dominantType}
+            />
+          ))}
+        </section>
+      )}
+
+      {showMatrix && sections.matrixFull && (
+        <section className="sched-section">
+          <h3 className="sched-section-title">Schedule by day (full name)</h3>
+          {report.matrices.map((m) => (
+            <ScheduleMatrixTable
+              key={`full-${m.day}`}
+              matrix={m}
+              selectedSoldier={selectedSoldier}
+              onSelectSoldier={selectSoldier}
+              display={display}
+              labelForIdx={display.fullLabel}
+              useFullNames
+              assignments={assignments}
+              simDays={days}
+              blocksPd={report.zone.blocksPerDay}
+              slotsPerBlock={report.zone.slotsPerBlock}
+              soldierIds={soldierIds}
+              soldiers={soldiers}
+              typesDoc={typesDoc}
+              dominantType={dominantType}
+            />
+          ))}
+        </section>
+      )}
+
+      {sections.bySoldier && (
+        <section className="sched-section">
+          <h3 className="sched-section-title">Schedule by soldier</h3>
+          <p className="sched-hint">Click a soldier in the matrix above, or pick one below.</p>
+          <div className="sched-soldier-jump">
+            {Array.from({ length: report.soldierCount }, (_, s) => (
+              <SoldierLink
+                key={s}
+                soldierIdx={s}
+                label={display.shortLabel(s)}
+                selected={selectedSoldier === s}
+                onSelect={selectSoldier}
+                display={display}
+              />
+            ))}
+          </div>
+          {selectedSoldier != null && soldierRows ? (
+            <SoldierDetailTable soldierIdx={selectedSoldier} rows={soldierRows} display={display} />
+          ) : (
+            <p className="contacts-empty">Select a soldier to see their block-by-block schedule.</p>
+          )}
+        </section>
+      )}
+
+      {sections.timeline && (
+        <SoldierTimelineChart
+          lanes={report.lanes}
+          days={days}
+          blockHours={report.zone.shiftHours}
+          slotsPerBlock={report.zone.slotsPerBlock}
+          planDayStartHour={planDayStartHour}
+          planDayStartLabel={planDayStartLabel}
+          totalHours={report.totalHours}
+          rosterCount={report.soldierCount}
+          display={display}
+          nameById={soldierNameById}
+          soldierIds={soldierIds}
+          soldiers={soldiers}
+          typesDoc={typesDoc}
+          summaryByIdx={summarySlotByIdx}
+          dominantType={dominantType}
+        />
+      )}
+
+      {sections.statsPanel && report.stats && (
+        <ScheduleStatsPanel
+          stats={report.stats}
+          days={days}
+          shiftHours={report.zone.shiftHours}
+          slotsPerBlock={report.zone.slotsPerBlock}
+          soldierIds={soldierIds}
+          soldiers={soldiers}
+          typesDoc={typesDoc}
+          display={display}
+          nameById={soldierNameById}
+          statsPresentation={statsPresentation}
+          planOverview={planOverview}
+        />
+      )}
+
+      {sections.availability && (
+        <PlanSoldierAvailabilitySection plan={plan} soldiers={soldiers} />
+      )}
+    </div>
+  );
+}
+
+/** Resolve soldiers from API cfg payload. */
+export function soldiersFromCfg(value: unknown): Soldier[] {
+  return docFromServer(value).soldiers;
+}

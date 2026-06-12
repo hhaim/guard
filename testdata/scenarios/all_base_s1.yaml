@@ -1,0 +1,14 @@
+schema_version: 1
+name: all_base
+sim:
+  days: 1
+  seed: 1
+  plan_day_start: "05:00"
+  start_working_day: 0
+zones:
+  file: ../../zones_s1.yaml
+  slots_per_block: 4
+expect:
+  availability:
+    - plan_day: 0
+      summary: { full: 12, absent_full: 0, absent_partial: 0 }

@@ -1,0 +1,112 @@
+schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: rotating_slot
+    name: Guard
+    pattern: rotating
+  - id: kitchen
+    name: Kitchen
+    pattern: full_day
+    config:
+      start: "06:00"
+      end: "22:00"
+      rest_after_hours: 6
+      weight_multiplier: 0.5
+      headcount: 2
+  - id: carmel
+    name: North Ridge
+    pattern: full_day_team
+    config:
+      start: "09:00"
+      end: "09:00"
+      rest_after_hours: 0
+      weight_multiplier: 1
+      headcount: 8
+      hours_factor: 0.33
+      type_quotas:
+        B: 1
+  - id: rasar
+    name: Reserve
+    pattern: full_day
+    disabled_weekdays:
+      - friday
+      - saturday
+    config:
+      start: "06:00"
+      end: "22:00"
+      rest_after_hours: 6
+      weight_multiplier: 0.4
+      headcount: 1
+  - id: valero
+    name: West House
+    pattern: rotating
+slots:
+  - location_id: loc_gate
+    name: gate_north_9
+  - location_id: loc_gate
+    name: gate_north_3
+  - location_id: loc_gate
+    name: roman_post_12
+  - location_id: loc_gate
+    name: grove_lane
+  - location_id: loc_gate
+    name: oak_post_10
+  - location_id: loc_gate
+    name: plaza_post_10
+zone_loc:
+  - id: loc_gate
+    type: rotating_slot
+    name: G
+    weight: 1
+    full_name: Gate Post
+  - id: loc_v
+    type: valero
+    name: V
+    weight: 1
+    full_name: West Gate
+  - id: loc_k
+    type: kitchen
+    name: K
+    weight: 1
+    full_name: Kitchen
+  - id: loc_carmel
+    type: carmel
+    name: C
+    weight: 1
+    full_name: North Ridge
+  - id: loc_rasar
+    type: rasar
+    name: R
+    weight: 1
+    full_name: Reserve
+time_zones:
+  - id: zt_night
+    name: Night
+    weight: 1.5
+    from_hour: 1
+    to_hour: 5
+  - id: zt_morning
+    name: Morning
+    weight: 0.9
+    from_hour: 5
+    to_hour: 9
+  - id: zt_day
+    name: Day
+    weight: 1
+    from_hour: 17
+    to_hour: 21
+  - id: zt_3
+    name: New band
+    weight: 1
+    from_hour: 9
+    to_hour: 13
+  - id: zt_4
+    name: New band
+    weight: 1
+    from_hour: 13
+    to_hour: 17
+  - id: zt_5
+    name: New band
+    weight: 1
+    from_hour: 21
+    to_hour: 1

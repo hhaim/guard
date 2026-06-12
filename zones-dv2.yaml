@@ -1,0 +1,124 @@
+schema_version: 2
+shift_hours: 4
+slots_types:
+  - id: rotating_slot
+    name: Guard
+    pattern: rotating
+  - id: kitchen
+    name: Kitchen
+    pattern: full_day
+    config:
+      start: "06:00"
+      end: "22:00"
+      rest_after_hours: 6
+      weight_multiplier: 0.5
+      headcount: 2
+  - id: carmel
+    name: North Ridge
+    pattern: full_day_team
+    config:
+      start: "09:00"
+      end: "09:00"
+      rest_after_hours: 0
+      weight_multiplier: 1
+      headcount: 8
+      hours_factor: 0.33
+      type_quotas:
+        A: 1
+        D: 1
+        E: 3
+        F: 1
+        G: 1
+        H: 1
+
+  - id: rasar
+    name: Reserve
+    pattern: full_day
+    disabled_weekdays:
+      - friday
+      - saturday
+    config:
+      start: "06:00"
+      end: "22:00"
+      rest_after_hours: 6
+      weight_multiplier: 0.4
+      headcount: 1
+  - id: valero
+    name: West House
+    pattern: rotating
+slots:
+  - location_id: loc_gate
+    name: gate_north_9
+  - location_id: loc_gate
+    name: gate_north_3
+  - location_id: loc_gate
+    name: roman_post_12
+  - location_id: loc_gate
+    name: grove_lane
+  - location_id: loc_gate
+    name: oak_post_10
+  - location_id: loc_gate
+    name: plaza_post_10
+  - location_id: loc_v
+    name: west_1
+  - location_id: loc_v
+    name: west_2
+  - location_id: loc_carmel
+    name: c1
+  - location_id: loc_rasar
+    name: r1
+  - location_id: loc_k
+    name: k1
+zone_loc:
+  - id: loc_gate
+    type: rotating_slot
+    name: G
+    weight: 1
+    full_name: Gate Post
+  - id: loc_v
+    type: valero
+    name: V
+    weight: 1
+    full_name: West Gate
+  - id: loc_k
+    type: kitchen
+    name: K
+    weight: 1
+    full_name: Kitchen
+  - id: loc_carmel
+    type: carmel
+    name: C
+    weight: 1
+    full_name: North Ridge
+  - id: loc_rasar
+    type: rasar
+    name: R
+    weight: 1
+    full_name: Reserve
+# Half-open [from_hour, to_hour); wrap when from >= to (e.g. 21:00 → 01:00).
+time_zones:
+  - id: zone01
+    name: overnight
+    weight: 1.8
+    from_hour: 1
+    to_hour: 5
+  - id: zone02
+    name: morning
+    weight: 1.4
+    from_hour: 5
+    to_hour: 9
+  - id: zone03
+    name: day
+    weight: 0.8
+    from_hour: 9
+    to_hour: 17
+  - id: zone04
+    name: evening
+    weight: 1.3
+    from_hour: 17
+    to_hour: 21
+  - id: zone05
+    name: night
+    weight: 1
+    from_hour: 21
+    to_hour: 1

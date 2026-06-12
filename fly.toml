@@ -1,0 +1,29 @@
+# Fly.io scale-to-zero: set min_machines_running = 0 and enable auto start/stop.
+app = "guard-scheduler"
+# Closest Fly region to Israel (no TLV/Middle East DC on Fly).
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+  # Set publishable key at deploy time, e.g. fly deploy --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_live_...
+  # [build.args]
+  #   VITE_CLERK_PUBLISHABLE_KEY = "pk_live_..."
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  max_machines_running = 2
+  processes = ["app"]
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  path = "/health"
+  timeout = "5s"
+
+[env]
+  HTTP_ADDR = "0.0.0.0:8080"

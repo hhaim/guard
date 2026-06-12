@@ -1,0 +1,50 @@
+# Zone definitions (schema v2 — rotating-only “classic” three posts, 8 h shift grid).
+#
+# - shift_hours: 2, 3, or 4 — or override per run with CLI --shift-hours (must tile 24 h).
+# - slots_types: pattern per location type (here: all rotating).
+# - slots: one row per concurrent slot (-y), in order; location_id matches locations[].id.
+# - time_zones: categories for fairness; each block’s start hour maps to one band.
+
+schema_version: 2
+shift_hours: 4
+
+slots_types:
+  - id: t_rot
+    name: Rotating
+    pattern: rotating
+
+slots:
+  - location_id: loc_gate
+  - location_id: loc_tower
+  - location_id: loc_yard
+
+zone_loc:
+  - id: loc_gate
+    type: t_rot
+    name: Main gate
+    weight: 1.5
+  - id: loc_tower
+    type: t_rot
+    name: Watchtower
+    weight: 0.9
+  - id: loc_yard
+    type: t_rot
+    name: Yard / perimeter
+    weight: 1.0
+
+time_zones:
+  - id: zt_night
+    name: Night
+    weight: 1.5
+    from_hour: 0
+    to_hour: "06:00"
+  - id: zt_morning
+    name: Morning
+    weight: 0.9
+    from_hour: "06:00"
+    to_hour: "12:00"
+  - id: zt_day
+    name: Day
+    weight: 1.0
+    from_hour: "12:00"
+    to_hour: "24:00"

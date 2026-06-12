@@ -1,0 +1,31 @@
+# 24h full_day post 09:00–09:00 (same clock next day) + 4h rest → rotating from 13:00.
+# Plan day 05:00–05:00; shift_hours 4 → blocks: 05–09, 09–13, 13–17, …
+
+schema_version: 2
+shift_hours: 4
+
+slots_types:
+  - id: rotating_gate
+    name: Rotating
+    pattern: rotating
+  - id: full_day_post
+    name: Full day aligned
+    pattern: full_day
+    config:
+      start: "09:00"
+      end: "09:00"
+      rest_after_hours: 4
+      headcount: 1
+
+zone_loc:
+  - { id: loc_gate, type: rotating_gate, name: Gate, weight: 1.0 }
+  - { id: loc_post, type: full_day_post, name: Post, weight: 1.0 }
+
+slots:
+  - { location_id: loc_gate, name: g1 }
+  - { location_id: loc_gate, name: g2 }
+  - { location_id: loc_gate, name: g3 }
+  - { location_id: loc_post, name: post }
+
+time_zones:
+  - { id: all, name: All, weight: 1.0, from_hour: 0, to_hour: "24:00" }
